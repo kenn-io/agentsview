@@ -283,20 +283,19 @@ func TestCommitLinksCodeModeFixedCommand(t *testing.T) {
 
 func TestShellCalls(t *testing.T) {
 	for _, tc := range []struct {
-		name, input, command         string
-		count                        int
-		unknown, unknownDir          bool
-		secondCommand, secondWorkdir string
+		name, input, command string
+		count                int
+		unknown, unknownDir  bool
 	}{
-		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false, "", ""},
-		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false, "", ""},
-		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false, "", ""},
-		{"interpolated", "text(await tools.exec_command({cmd:`codex exec ${message}`}))", "", 1, true, false, "", ""},
-		{"dynamic tool", `await tools[name]({cmd:"codex exec hi"})`, "", 1, true, false, "", ""},
-		{"alias", `const run = tools.exec_command; await run({cmd:"codex exec hi"})`, "", 1, true, false, "", ""},
-		{"other tool", `await tools["clock__curr_time"]({})`, "", 0, false, false, "", ""},
-		{"batch", `Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, "", 1, true, false, "", ""},
-		{"unknown workdir", `text(await tools.exec_command({cmd:"codex exec hi",workdir:dir}))`, `codex exec hi`, 1, false, true, "", ""},
+		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false},
+		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false},
+		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false},
+		{"interpolated", "text(await tools.exec_command({cmd:`codex exec ${message}`}))", "", 1, true, false},
+		{"dynamic tool", `await tools[name]({cmd:"codex exec hi"})`, "", 1, true, false},
+		{"alias", `const run = tools.exec_command; await run({cmd:"codex exec hi"})`, "", 1, true, false},
+		{"other tool", `await tools["clock__curr_time"]({})`, "", 0, false, false},
+		{"batch", `Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, "", 1, true, false},
+		{"unknown workdir", `text(await tools.exec_command({cmd:"codex exec hi",workdir:dir}))`, `codex exec hi`, 1, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls, undecodable := shellCalls(tc.input)
@@ -310,10 +309,6 @@ func TestShellCalls(t *testing.T) {
 			}
 			assert.Equal(t, tc.unknown, calls[0].unknown)
 			assert.Equal(t, tc.unknownDir, calls[0].unknownWorkdir)
-			if tc.secondCommand != "" {
-				assert.Equal(t, tc.secondCommand, calls[1].command)
-				assert.Equal(t, tc.secondWorkdir, calls[1].workdir)
-			}
 		})
 	}
 }

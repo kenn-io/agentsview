@@ -26,14 +26,9 @@ func TestBatchSpawnEvidenceAvoidsMutualParents(t *testing.T) {
 	require.NoError(t, err)
 	b, err := d.GetSession(t.Context(), "B")
 	require.NoError(t, err)
-	pa, pb := "", ""
-	if a.ParentSessionID != nil {
-		pa = *a.ParentSessionID
-	}
-	if b.ParentSessionID != nil {
-		pb = *b.ParentSessionID
-	}
-	assert.False(t, pa == "B" && pb == "A", "A and B are each other's parent")
+	assert.Nil(t, a.ParentSessionID)
+	require.NotNil(t, b.ParentSessionID)
+	assert.Equal(t, "A", *b.ParentSessionID)
 }
 
 func repairTestLauncher(t *testing.T, d *DB) {

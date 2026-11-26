@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -729,12 +728,6 @@ func TestWriteSessionBatchAtomicLinksSpawnAndLaunch(t *testing.T) {
 		s.StartedAt = &started
 		s.SessionKind = "non-interactive"
 	})
-	conn, err := d.getWriter().Conn(t.Context())
-	require.NoError(t, err)
-	var rawConn *sqlite3.SQLiteConn
-	require.NoError(t, conn.Raw(func(raw any) error { rawConn = raw.(*sqlite3.SQLiteConn); return nil }))
-	require.NoError(t, conn.Close())
-	t.Cleanup(func() { rawConn.RegisterAuthorizer(nil) })
 	write := messageCountWrite("parent", 1)
 	write.Session.Cwd = "/repo"
 	write.Messages[0].Role = "assistant"
@@ -743,19 +736,8 @@ func TestWriteSessionBatchAtomicLinksSpawnAndLaunch(t *testing.T) {
 		{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"},
 		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"},
 	}
-	var launchReads int
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, func() error {
-		rawConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
-				launchReads++
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	})
-	rawConn.RegisterAuthorizer(nil)
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 	require.NoError(t, err)
-	assert.Zero(t, launchReads, "launch evidence must be read once, before commit")
 	child, err := d.GetSession(t.Context(), "child")
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)

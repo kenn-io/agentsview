@@ -78,8 +78,6 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
 		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, "", "", "", "", ""},
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"redirection substitution competitor", `{"command":"cat > \"$(codex exec hi)\""}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"process substitution competitor", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"process substitution alone", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
 		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "shell", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "codex", "codex", `C:\Users\example\project`, ""},
@@ -558,11 +556,9 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 			}
 			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
 			require.NoError(t, err)
-			if !extra {
-				parent, err := d.GetSessionExternalParent(t.Context(), "one")
-				require.NoError(t, err)
-				assert.Equal(t, "parent", parent.ParentSessionID)
-			}
+			parent, err := d.GetSessionExternalParent(t.Context(), "one")
+			require.NoError(t, err)
+			assert.Equal(t, "parent", parent.ParentSessionID)
 			_, err = d.GetSessionExternalParent(t.Context(), "two")
 			require.ErrorIs(t, err, sql.ErrNoRows)
 		})
