@@ -2353,7 +2353,18 @@ func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []st
 }
 
 func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) (int, error) {
-	updated := 0
+	seeds, err := linkParserSubagentSessionsTx(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
+	linked, err := linkLaunchParentsChangedTx(ctx, tx, seeds, changes)
+	if err != nil {
+		return 0, err
+	}
+	return len(seeds) - len(ids) + linked, nil
+}
+
+func linkParserSubagentSessionsTx(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error) {
 	seeds := append([]string{}, ids...)
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
@@ -2377,18 +2388,13 @@ func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string
 				return fmt.Errorf("reading scoped subagent link: %w", err)
 			}
 			seeds = append(seeds, id)
-			updated++
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	linked, err := linkLaunchParentsChangedTx(ctx, tx, seeds, changes)
-	if err != nil {
-		return 0, err
-	}
-	return updated + linked, nil
+	return seeds, nil
 }
 
 func linkLaunchParentsChangedTx(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) (int, error) {

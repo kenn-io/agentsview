@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -751,4 +752,48 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 			assert.Equal(t, "parent", *child.ParentSessionID)
 		})
 	}
+}
+
+func TestWriteSessionBatchAtomicInfersLaunchOnce(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "child", "project")
+	started := "2026-01-02T03:04:03Z"
+	insertSession(t, d, "run", "project", func(s *Session) {
+		s.Agent = "codex"
+		s.Cwd = "/repo"
+		s.StartedAt = &started
+		s.SessionKind = "non-interactive"
+	})
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	var rawConn *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error { rawConn = raw.(*sqlite3.SQLiteConn); return nil }))
+	require.NoError(t, conn.Close())
+	t.Cleanup(func() { rawConn.RegisterAuthorizer(nil) })
+	write := messageCountWrite("parent", 1)
+	write.Session.Cwd = "/repo"
+	write.Messages[0].Role = "assistant"
+	write.Messages[0].Timestamp = "2026-01-02T03:04:00Z"
+	write.Messages[0].ToolCalls = []ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`},
+		{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"},
+	}
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, func() error {
+		rawConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sqlite_master" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	})
+	rawConn.RegisterAuthorizer(nil)
+	require.NoError(t, err)
+	parent, err := d.GetSessionExternalParent(t.Context(), "run")
+	require.NoError(t, err)
+	assert.Equal(t, "parent", parent.ParentSessionID)
+	child, err := d.GetSession(t.Context(), "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "parent", *child.ParentSessionID)
 }

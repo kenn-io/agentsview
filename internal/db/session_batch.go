@@ -365,7 +365,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		return result, fmt.Errorf("beginning batch parent linking: %w", err)
 	}
 	defer func() { _ = linkTx.Rollback() }()
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, linkTx, writtenUsageIDs); err != nil {
+	if _, err := linkParserSubagentSessionsTx(ctx, linkTx, writtenUsageIDs); err != nil {
 		return result, fmt.Errorf("linking batch parents: %w", err)
 	}
 	for _, id := range writtenUsageIDs {
