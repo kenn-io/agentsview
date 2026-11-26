@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -39,6 +40,26 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		})
 	}
+}
+
+func TestHybridFTSProbeStopsAtDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	searcher := &fakeVectorSearcher{}
+	d.SetVectorSearcher(searcher)
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.rawReader().Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+	previous := contentScanTimeout
+	contentScanTimeout = time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	_, err = d.SearchContent(ctx, ContentSearchFilter{Mode: "hybrid", Pattern: "needle"})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Positive(t, searcher.calls, "semantic search runs before the FTS probe")
+	assert.NoError(t, ctx.Err(), "the keyword deadline expired before the caller deadline")
 }
 
 // seedSearchSession inserts one session with the given messages
@@ -1516,4 +1537,62 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
 	assert.Equal(t, "keep", got.Matches[0].SessionID)
+}
+func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
+	d := testDB(t)
+	msgs := make([][2]string, 200)
+	for i := range msgs {
+		msgs[i] = [2]string{"user", "needle"}
+	}
+	seedSearchSession(t, d, "s1", "project", msgs)
+	d.rawReader().SetMaxIdleConns(0)
+	d.rawReader().SetMaxOpenConns(1)
+	d.rawReader().SetMaxIdleConns(1)
+	previous := contentScanTimeout
+	contentScanTimeout = time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	entered := make(chan struct{})
+	started := sync.OnceFunc(func() { close(entered) })
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("julianday", func(string) float64 {
+			started()
+			time.Sleep(20 * time.Millisecond)
+			return 0
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "substring", Pattern: "needle", Sources: []string{"messages"}, IncludeOneShot: true})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("search returned before reaching the reader: %v", err)
+	case <-time.After(10 * time.Second):
+		<-done
+		t.Fatal("search did not reach the reader")
+	}
+	assert.Positive(t, d.rawReader().Stats().InUse)
+	assert.ErrorIs(t, <-done, context.DeadlineExceeded)
+	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, err = d.rawReader().Conn(waitCtx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	assert.Zero(t, d.rawReader().Stats().InUse)
+	var releases []func()
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	for range bulkReadSlots {
+		release, ok := d.tryAcquireBulkRead()
+		require.True(t, ok)
+		releases = append(releases, release)
+	}
 }

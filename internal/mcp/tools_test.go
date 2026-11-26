@@ -2687,3 +2687,65 @@ func TestSessionResolutionTrashedExactID(t *testing.T) {
 		})
 	}
 }
+
+type deadlineContentService struct {
+	service.SessionService
+	deadlines []time.Time
+	bounded   []bool
+	oversized bool
+	local     bool
+}
+
+func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
+
+func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	d, ok := ctx.Deadline()
+	s.deadlines = append(s.deadlines, d)
+	s.bounded = append(s.bounded, ok)
+	if s.oversized {
+		if len(s.deadlines) > 1 {
+			return nil, context.DeadlineExceeded
+		}
+		matches := make([]db.ContentMatch, 20)
+		for i := range matches {
+			matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 4000)}
+		}
+		return &service.ContentSearchResult{Matches: matches, NextCursor: 20, ActiveFilterApplied: true}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSearchContentSharedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		bounded    bool
+	}{
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{local: true}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
+			require.NoError(t, err)
+			require.Greater(t, len(fake.deadlines), 1)
+			require.Equal(t, tc.bounded, fake.bounded[0])
+			for i := 1; i < len(fake.deadlines); i++ {
+				assert.Equal(t, tc.bounded, fake.bounded[i])
+				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
+			}
+		})
+	}
+}
+
+type timeoutContentService struct{ service.SessionService }
+
+func (s timeoutContentService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestSearchContentTimeoutAdvice(t *testing.T) {
+	ts := &toolset{svc: timeoutContentService{}, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, "date_from, project, or session_id")
+}

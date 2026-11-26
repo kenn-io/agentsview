@@ -27,6 +27,11 @@ const (
 // contentScanTimeout stops a keyword search so it frees its reader connection.
 var contentScanTimeout = 2 * time.Minute
 
+// WithContentScanDeadline bounds a local keyword search and its follow-ups.
+func WithContentScanDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, contentScanTimeout)
+}
+
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields
 // mirror SessionFilter; they are mapped through buildSessionFilter so the
 // include-children / one-shot / orphan logic is shared, not reimplemented.
@@ -312,7 +317,7 @@ func (db *DB) SearchContent(
 	}
 	if f.Mode != "semantic" && (f.Mode != "hybrid" || f.KeywordOnly) {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		ctx, cancel = WithContentScanDeadline(ctx)
 		defer cancel()
 	}
 
@@ -1744,13 +1749,6 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, ErrSemanticUnavailable
 		}
 	}
-	if !db.HasFTS(ctx) {
-		if err := ctx.Err(); err != nil {
-			return ContentSearchPage{}, err
-		}
-		return ContentSearchPage{}, errFTSUnavailable
-	}
-
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
@@ -1759,6 +1757,17 @@ func (db *DB) searchContentHybrid(
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
+	}
+	if searcher != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = WithContentScanDeadline(ctx)
+		defer cancel()
+	}
+	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return ContentSearchPage{}, err
+		}
+		return ContentSearchPage{}, errFTSUnavailable
 	}
 	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
@@ -1867,8 +1876,6 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) hybridWordHits(
 	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
 ) ([]hybridDisplay, error) {
-	ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
-	defer cancel()
 	snapshot, err := db.BeginMessageSnapshot(ctx)
 	if err != nil {
 		return nil, err
