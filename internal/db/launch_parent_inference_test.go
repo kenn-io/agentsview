@@ -365,7 +365,7 @@ func TestLaunchParentTrashEvidence(t *testing.T) {
 	ctx := t.Context()
 	add := func(id string) {
 		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex -m $MODEL exec hi"}`, WorkingDirectory: "/repo"}}})
+		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex -m \"$MODEL\" exec hi"}`, WorkingDirectory: "/repo"}}})
 	}
 	add("first")
 	start := "2026-01-02T03:04:03Z"
