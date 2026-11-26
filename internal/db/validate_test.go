@@ -139,6 +139,7 @@ func TestSelfParentNeverPersists(t *testing.T) {
 
 // Dialogue classification survives sanitization and persistence, including
 // ordinary prose whose dialogue and display text happen to be identical.
+// Tool-call directories are sanitized as well.
 func TestSanitizeMessageAndToolCall(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, thinking string
@@ -165,6 +166,7 @@ func TestSanitizeMessageAndToolCall(t *testing.T) {
 		})
 	}
 
+	// Tool-call directories are sanitized independently of message text.
 	call := ToolCall{WorkingDirectory: "/repo\x01"}
 	SanitizeToolCall(&call)
 	assert.Equal(t, "/repo", call.WorkingDirectory)

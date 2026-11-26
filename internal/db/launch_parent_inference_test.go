@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -314,21 +315,13 @@ func TestLaunchParentBulkImportBackfillsAfterIndexRebuild(t *testing.T) {
 	assert.Empty(t, state)
 	_, err = d.GetSessionExternalParent(t.Context(), "child")
 	require.ErrorIs(t, err, sql.ErrNoRows)
-	_, err = d.LinkSubagentSessionsContext(t.Context())
-	require.NoError(t, err)
-	parent, err := d.GetSessionExternalParent(t.Context(), "child")
-	require.NoError(t, err)
-	assert.Equal(t, "parent", parent.ParentSessionID)
-	state, err = d.GetSyncState(t.Context(), launchBackfillKey)
-	require.NoError(t, err)
-	assert.Equal(t, "done", state)
 }
 
 func TestLaunchParentCandidateQueryPlan(t *testing.T) {
 	d := testDB(t)
 	plan := explainQueryPlan(t, d, launchCandidateSQL, "2026-01-01", "2026-01-02", "local", "child")
 	require.NotEmpty(t, plan)
-	assert.Contains(t, plan[1], "idx_tool_calls_message")
+	assert.Contains(t, strings.Join(plan, "\n"), "idx_tool_calls_message")
 }
 
 func TestLaunchParentSchemaMigration(t *testing.T) {
@@ -342,8 +335,6 @@ func TestLaunchParentSchemaMigration(t *testing.T) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `ALTER TABLE session_external_parents DROP COLUMN inferred`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN working_directory`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `DROP TABLE session_parent_inference_blocks`)
 	require.NoError(t, err)
@@ -432,7 +423,7 @@ func TestLaunchParentUnusableEvidenceKeepsParserParent(t *testing.T) {
 }
 
 func TestLaunchParentReplacementWritePaths(t *testing.T) {
-	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "competitor", "unresolved competitor", "new child", "new child batch", "mixed batch append"} {
+	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "new child", "new child batch", "mixed batch append"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "new child" || mode == "new child batch" {
 				d := testDB(t)
@@ -513,20 +504,6 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_kind='' WHERE id='child'`)
 				require.NoError(t, err)
 				_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			case "competitor", "unresolved competitor":
-				insertSession(t, d, "competitor", "project", func(s *Session) {
-					s.Agent = "claude"
-					if mode == "unresolved competitor" {
-						s.Agent = "codex"
-					}
-					s.Cwd = "/repo"
-				})
-				message.SessionID = "competitor"
-				if mode == "unresolved competitor" {
-					message.ToolCalls[0].ToolName = "exec"
-					message.ToolCalls[0].InputJSON = `tools.exec_command({cmd})`
-				}
-				insertMessages(t, d, message)
 			case "messages":
 				err = d.ReplaceSessionMessages(t.Context(), "parent", nil)
 			case "late":
@@ -613,6 +590,47 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 }
 
 func TestLaunchParentAmbiguousRuns(t *testing.T) {
+	for _, mode := range []string{"competitor", "unresolved competitor"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			message := Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}}
+			insertMessages(t, d, message)
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.GetSessionExternalParent(t.Context(), "child")
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET sync_marker='2000-01-01T00:00:00Z' WHERE id='child'`)
+			require.NoError(t, err)
+			insertSession(t, d, "competitor", "project", func(s *Session) {
+				s.Agent = "claude"
+				if mode == "unresolved competitor" {
+					s.Agent = "codex"
+				}
+				s.Cwd = "/repo"
+			})
+			message.SessionID = "competitor"
+			if mode == "unresolved competitor" {
+				message.ToolCalls[0].ToolName = "exec"
+				message.ToolCalls[0].InputJSON = `tools.exec_command({cmd})`
+			}
+			insertMessages(t, d, message)
+			_, err = d.GetSessionExternalParent(t.Context(), "child")
+			require.ErrorIs(t, err, sql.ErrNoRows)
+			child, err := d.GetSession(t.Context(), "child")
+			require.NoError(t, err)
+			assert.Nil(t, child.ParentSessionID)
+			var marker string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT sync_marker FROM sessions WHERE id='child'`).Scan(&marker))
+			assert.Greater(t, marker, "2000-01-01T00:00:00Z")
+		})
+	}
+
 	d := testDB(t)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
 	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})

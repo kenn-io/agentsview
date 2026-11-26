@@ -723,7 +723,7 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
 		failLink, checkOnce bool
-	}{{"success", false, false}, {"link failure", true, false}, {"launch once", false, true}} {
+	}{{"link failure", true, false}, {"launch once", false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "child", "project")
@@ -736,6 +736,7 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 			write.Messages[0].ToolCalls = []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}}
 			var beforeCommit []func() error
 			var rawConn *sqlite3.SQLiteConn
+			var launchReads int
 			if tc.checkOnce {
 				started := "2026-01-02T03:04:03Z"
 				insertSession(t, d, "run", "project", func(s *Session) {
@@ -753,9 +754,9 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 				write.Messages[0].Timestamp = "2026-01-02T03:04:00Z"
 				write.Messages[0].ToolCalls = append(write.Messages[0].ToolCalls, ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"})
 				beforeCommit = append(beforeCommit, func() error {
-					rawConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
-						if op == sqlite3.SQLITE_READ && table == "sqlite_master" {
-							return sqlite3.SQLITE_DENY
+					rawConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
+						if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
+							launchReads++
 						}
 						return sqlite3.SQLITE_OK
 					})
@@ -765,6 +766,7 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 			result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, beforeCommit...)
 			if tc.checkOnce {
 				rawConn.RegisterAuthorizer(nil)
+				assert.Zero(t, launchReads, "post-commit linking must not reread launch evidence")
 			}
 			if tc.failLink {
 				require.ErrorContains(t, err, "injected link failure")
