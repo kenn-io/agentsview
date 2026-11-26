@@ -23,17 +23,19 @@ var (
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
 type liveVectorServing struct {
-	mu       sync.Mutex
-	serving  vectorServing
-	cfg      config.Config
-	database *db.DB
-	ctx      context.Context
-	idle     *server.IdleTracker
-	cancel   context.CancelFunc
-	done     chan struct{}
-	setup    server.EmbeddingsSetupStatus
-	reload   func() (config.Config, error)
-	push     *vectorPushSource
+	mu                sync.Mutex
+	serving           vectorServing
+	cfg               config.Config
+	database          *db.DB
+	ctx               context.Context
+	idle              *server.IdleTracker
+	cancel            context.CancelFunc
+	done              chan struct{}
+	setup             server.EmbeddingsSetupStatus
+	paused            bool
+	switchLockRelease func()
+	reload            func() (config.Config, error)
+	push              *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -106,6 +108,10 @@ func (v *liveVectorServing) Close() error {
 	var err error
 	if v.serving.Close != nil {
 		err = v.serving.Close()
+	}
+	if v.switchLockRelease != nil {
+		v.switchLockRelease()
+		v.switchLockRelease = nil
 	}
 	return errors.Join(err, v.push.Close())
 }
@@ -230,7 +236,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.setup.Busy {
+	if v.setup.Busy || v.paused {
 		return vector.ErrBuildRunning
 	}
 	embeddings := v.cfg.Vector.Embeddings
@@ -274,6 +280,72 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 		}
 	}()
 	return nil
+}
+
+// PauseBuilds blocks new setup and builds while a server switch is in progress.
+func (v *liveVectorServing) PauseBuilds(ctx context.Context, onWait func()) (func(), <-chan struct{}, error) {
+	for {
+		v.mu.Lock()
+		if v.paused {
+			v.mu.Unlock()
+			return nil, nil, vector.ErrBuildRunning
+		}
+		if !v.setup.Busy {
+			v.paused = true
+			managers := []*vector.Manager{v.serving.manager, v.serving.recallManager}
+			v.mu.Unlock()
+			var releases []func()
+			release := sync.OnceFunc(func() {
+				for _, fn := range releases {
+					fn()
+				}
+				v.mu.Lock()
+				v.switchLockRelease = nil
+				v.paused = false
+				v.mu.Unlock()
+			})
+			if managers[0] == nil && managers[1] == nil {
+				lock, err := waitForEmbeddingsWriteLockWithWait(ctx, v.cfg.DataDir, onWait)
+				if err != nil {
+					release()
+					return nil, nil, err
+				}
+				lockRelease := sync.OnceFunc(func() { _ = lock.Close() })
+				v.mu.Lock()
+				if err := v.ctx.Err(); err != nil {
+					v.mu.Unlock()
+					lockRelease()
+					release()
+					return nil, nil, err
+				}
+				v.switchLockRelease = lockRelease
+				v.mu.Unlock()
+				releases = append(releases, lockRelease)
+			}
+			for _, manager := range managers {
+				if manager == nil {
+					continue
+				}
+				fn, err := manager.Pause(ctx, onWait)
+				if err != nil {
+					release()
+					return nil, nil, err
+				}
+				releases = append(releases, fn)
+			}
+			return release, v.ctx.Done(), nil
+		}
+		done := v.done
+		v.mu.Unlock()
+		if onWait != nil {
+			onWait()
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
 }
 
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, builtin bool) error {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -25,6 +26,196 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedlocal"
 )
+
+func TestSwitchDrainWaitsForBuildStartedDuringRecall(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	started, unblock := make(chan struct{}, 1), make(chan struct{})
+	var unblockOnce sync.Once
+	t.Cleanup(func() { unblockOnce.Do(func() { close(unblock) }) })
+	oldServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-unblock
+		writeEmbeddingsResponse(t, w, len(req.Input), 3)
+	}))
+	t.Cleanup(oldServer.Close)
+	writeEmbeddingsTestConfig(t, dir, oldServer.URL+"/v1")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "message")})
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	t.Cleanup(func() { unblockOnce.Do(func() { close(unblock) }); assert.NoError(t, owner.Close()) })
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	handler := server.New(cfg, database, nil, owner.ServerOptions()...).Handler()
+	var once sync.Once
+	startTestServer(t, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/embeddings/status" && r.URL.Query().Get("store") == "recall" {
+			once.Do(func() { assert.NoError(t, owner.Manager("").StartBuild(vector.BuildRequest{})) })
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	restartErr := errors.New("restart stopped for test")
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	newEndpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	result := make(chan error, 1)
+	var output strings.Builder
+	go func() { result <- runEmbeddingsSwitch(t.Context(), &output, newEndpoint, "new-model", 3, "") }()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "message build did not start")
+	}
+	require.Eventually(t, func() bool { owner.mu.Lock(); defer owner.mu.Unlock(); return owner.paused }, 10*time.Second, 10*time.Millisecond)
+	select {
+	case err := <-result:
+		require.FailNow(t, fmt.Sprintf("switch finished while build was active: %v", err))
+	default:
+	}
+	unblockOnce.Do(func() { close(unblock) })
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, restartErr)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "switch did not finish after build")
+	}
+	assert.Equal(t, 1, strings.Count(output.String(), "Waiting for the current embedding build or setup to finish"))
+}
+
+func TestSwitchDrainBlocksBuildsUntilCanceled(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	writeEmbeddingsTestConfig(t, dir, endpoint)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	srv := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	client := embeddingsDaemonClient{baseURL: srv.URL}
+	release, err := client.pauseBuilds(t.Context(), io.Discard, nil)
+	require.NoError(t, err)
+	t.Cleanup(release)
+	manager := owner.Manager("")
+	require.NotNil(t, manager)
+	require.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
+	_, err = client.pauseBuilds(t.Context(), io.Discard, nil)
+	require.ErrorContains(t, err, "already running")
+	require.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
+	release()
+	require.Eventually(t, func() bool {
+		return manager.StartBuild(vector.BuildRequest{}) == nil
+	}, 10*time.Second, 10*time.Millisecond)
+	manager.Wait()
+}
+
+func TestSwitchDrainStaysClosedDuringShutdown(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	writeEmbeddingsTestConfig(t, dir, endpoint)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	owner, err := newLiveVectorServing(ctx, cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	srv := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	requestCtx, stopRequest := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(stopRequest)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, srv.URL+"/api/v1/embeddings/switch-drain", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", srv.URL)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	scanner := bufio.NewScanner(resp.Body)
+	require.True(t, scanner.Scan())
+	require.Equal(t, "event: ready", scanner.Text())
+	cancel()
+	for scanner.Scan() {
+	}
+	require.NoError(t, scanner.Err())
+	assert.ErrorIs(t, owner.Manager("").StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
+}
+
+func TestSwitchDrainWithoutVectorManagersHoldsDirectBuildLockUntilShutdown(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	owner := &liveVectorServing{
+		cfg:    config.Config{DataDir: dir},
+		ctx:    ctx,
+		cancel: cancel,
+		push:   &vectorPushSource{},
+	}
+	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+
+	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.NoError(t, err)
+
+	waiting := make(chan struct{}, 1)
+	type pauseResult struct {
+		release func()
+		err     error
+	}
+	result := make(chan pauseResult, 1)
+	go func() {
+		release, _, err := owner.PauseBuilds(t.Context(), func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		})
+		result <- pauseResult{release: release, err: err}
+	}()
+
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch drain did not wait for the direct build")
+	}
+	require.NoError(t, held.Close())
+
+	var paused pauseResult
+	select {
+	case paused = <-result:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch drain did not acquire the direct build lock")
+	}
+	require.NoError(t, paused.err)
+	require.NotNil(t, paused.release)
+	_, err = tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.ErrorContains(t, err, "held by another process")
+
+	require.NoError(t, owner.Close())
+	lock, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.NoError(t, err, "daemon shutdown must release the switch lock")
+	require.NoError(t, lock.Close())
+	paused.release()
+}
 
 func TestSharedChoiceStartsIndexing(t *testing.T) {
 	setTestHome(t, t.TempDir())

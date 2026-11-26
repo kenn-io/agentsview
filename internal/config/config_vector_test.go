@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -400,6 +402,186 @@ func TestVectorConfigAPIKeyEnv(t *testing.T) {
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", requireAPIKey(t, server))
+}
+
+func TestSaveVectorEmbeddingsServer(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteTOML(t, map[string]any{
+		"unrelated": map[string]any{"keep": true},
+		"vector": map[string]any{
+			"enabled": false, "include_automated": true, "roles": []string{"user"},
+			"db_path": "custom-vectors.db",
+			"embed":   map[string]any{"recall": true},
+			"embeddings": map[string]any{
+				"model": "nomic-embed-text", "dimension": 768, "max_input_chars": 4000,
+				"query_prefix": "old query: ", "document_prefix": "old document: ",
+				"default_server": "old",
+				"servers": map[string]any{
+					"old":   map[string]any{"endpoint": "http://127.0.0.1:11434/v1", "timeout": "5m"},
+					"extra": map[string]any{"endpoint": "http://127.0.0.1:8000/v1"},
+				},
+			},
+		},
+	})
+	keyDir := testutil.PrivateTempDir(t)
+	require.NoError(t, os.Chmod(keyDir, 0o700))
+	keyPath := filepath.Join(keyDir, "embedding-api-key")
+	writePrivateFile(t, keyPath, "private test key")
+	cfg := f.LoadFile(t)
+	require.NoError(t, cfg.SaveVectorEmbeddingsServer(
+		"https://embed.example/v1", "embeddinggemma", 768, keyPath,
+	))
+
+	got := f.LoadFile(t)
+	assert.True(t, got.Vector.Enabled)
+	assert.Equal(t, "embeddinggemma", got.Vector.Embeddings.Model)
+	assert.Equal(t, 768, got.Vector.Embeddings.Dimension)
+	assert.Equal(t, []string{"default"}, got.Vector.Embeddings.ServerNames())
+	assert.Empty(t, got.Vector.Embeddings.DefaultServer)
+	server := got.Vector.Embeddings.Servers["default"]
+	assert.Equal(t, "https://embed.example/v1", server.Endpoint)
+	assert.Equal(t, keyPath, server.APIKeyFile)
+	assert.Equal(t, "30s", server.Timeout)
+	assert.Equal(t, 8192, got.Vector.Embeddings.MaxInputChars)
+	assert.Empty(t, got.Vector.Embeddings.QueryPrefix)
+	assert.Empty(t, got.Vector.Embeddings.DocumentPrefix)
+
+	t.Run("Nomic keeps its default input recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true}})
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer(
+			"https://embed.example/v1", "nomic-embed-text", 768, "",
+		))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
+	t.Run("implicit Nomic keeps requested dimensions", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\ndimension = 512\nrequest_dimensions = true\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 512, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.True(t, got.RequestDimensions)
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
+	t.Run("explicit Nomic keeps effective recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n")
+		cfg := f.LoadFile(t)
+		before := cfg.Vector.Embeddings
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 768, ""))
+		after := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, before.MaxInputChars, after.MaxInputChars)
+		assert.Equal(t, before.ModelContextTokens, after.ModelContextTokens)
+		assert.Equal(t, before.QueryPrefix, after.QueryPrefix)
+		assert.Equal(t, before.DocumentPrefix, after.DocumentPrefix)
+	})
+
+	t.Run("same model keeps recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\nmax_input_chars = 1234\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, 1234, got.MaxInputChars)
+		assert.Equal(t, "suffix", got.InputSuffix)
+	})
+
+	t.Run("same model keeps default server tuning", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, `[vector]
+enabled = true
+[vector.embeddings]
+model = 'custom'
+dimension = 768
+model_context_tokens = 512
+default_server = 'selected'
+[vector.embeddings.servers.selected]
+endpoint = 'http://127.0.0.1:1/v1'
+api_key_env = 'OLD_EMBEDDING_KEY'
+timeout = '5m'
+batch_size = 4
+max_batch_tokens = 1024
+concurrency = 2
+max_retries = 7
+[vector.embeddings.servers.other]
+endpoint = 'http://127.0.0.1:2/v1'
+timeout = '1s'
+`)
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "custom", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			server := got.Servers["default"]
+			assert.Equal(t, "5m", server.Timeout)
+			assert.Equal(t, 4, server.BatchSize)
+			assert.Equal(t, 1024, server.MaxBatchTokens)
+			assert.Equal(t, 2, server.Concurrency)
+			assert.Equal(t, 7, server.MaxRetries)
+			assert.Empty(t, server.APIKeyEnv)
+		}
+	})
+
+	t.Run("same model keeps sole server timeout", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\n[vector.embeddings.servers.old]\nendpoint = 'http://127.0.0.1:1/v1'\ntimeout = '5m'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		assert.Equal(t, "5m", f.LoadFile(t).Vector.Embeddings.Servers["default"].Timeout)
+	})
+
+	t.Run("new Nomic model gets defaults", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 768, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Empty(t, got.InputSuffix)
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
+	for _, tc := range []struct {
+		name, endpoint string
+		deployment     bool
+	}{
+		{name: "invalid endpoint", endpoint: "file:///bad"},
+		{name: "deployment conflict", endpoint: "https://embed.example/v1", deployment: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, "[vector]\nenabled = false\n")
+			before, err := os.ReadFile(f.Path(configFileName))
+			require.NoError(t, err)
+			cfg := f.LoadFile(t)
+			if tc.deployment {
+				t.Setenv("AGENTSVIEW_MODE", "serve")
+				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "https://embed.example/v1")
+			}
+			err = cfg.SaveVectorEmbeddingsServer(
+				tc.endpoint, "embeddinggemma", 768, "",
+			)
+			require.Error(t, err)
+			if tc.deployment {
+				require.ErrorContains(t, err, "cannot be combined with a [vector] section")
+			}
+			after, readErr := os.ReadFile(f.Path(configFileName))
+			require.NoError(t, readErr)
+			assert.Equal(t, before, after)
+		})
+	}
 }
 
 // minimalServers returns the smallest valid servers table for TOML load

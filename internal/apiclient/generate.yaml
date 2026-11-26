@@ -52,6 +52,7 @@ filter:
       - post-api-v1-data-compact
       - post-api-v1-embeddings-setup
       - post-api-v1-embeddings-build
+      - post-api-v1-embeddings-switch-drain
       - get-api-v1-embeddings-status
       - get-api-v1-embeddings-generations
       - post-api-v1-embeddings-generations-id-activate

@@ -26,12 +26,14 @@ import (
 	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/safefileio"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -63,7 +65,7 @@ max_retries = 1
 // uses.
 func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model string   `json:"model"`
 			Input []string `json:"input"`
@@ -72,6 +74,8 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 
 		writeEmbeddingsResponse(t, w, len(req.Input), dimension)
 	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func writeEmbeddingsResponse(t *testing.T, w http.ResponseWriter, count, dimension int) {
@@ -1358,6 +1362,14 @@ func startEmbeddingsTestDaemon(
 		Service: daemonService,
 		Version: "test",
 	}))
+	if _, ok := handlers["POST /api/v1/embeddings/switch-drain"]; !ok {
+		mux.HandleFunc("POST /api/v1/embeddings/switch-drain", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: ready\ndata: true\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		})
+	}
 	for pattern, h := range handlers {
 		mux.HandleFunc(pattern, h)
 	}
@@ -1454,6 +1466,560 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 	assert.Contains(t, out.String(), "Generation activated.")
 	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
 		"daemon-dispatched build must not open vectors.db directly")
+}
+
+func TestEmbeddingsSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name, conflictStore, failedStore                       string
+		recall, running, setupBusy, failedBefore, manualRecall bool
+		wantEvents                                             []string
+	}{
+		{name: "waits and rebuilds recall", recall: true, running: true, wantEvents: []string{"status:messages", "status:messages", "status:messages", "status:recall", "restart", "build:messages", "build:recall", "status:messages", "status:recall"}},
+		{name: "waits for setup", setupBusy: true, wantEvents: []string{"status:messages", "status:messages", "status:messages", "status:recall", "restart", "build:messages", "status:messages"}},
+		{name: "waits for manual recall", manualRecall: true, wantEvents: []string{"status:messages", "status:recall", "status:recall", "status:recall", "restart", "build:messages", "status:messages"}},
+		{name: "ignores previous errors", failedBefore: true, wantEvents: []string{"status:messages", "status:recall", "restart", "build:messages", "status:messages"}},
+		{name: "starts recall before retrying messages", recall: true, conflictStore: "messages", wantEvents: []string{"status:messages", "status:recall", "restart", "build:messages", "build:recall", "status:messages", "build:messages", "status:recall", "status:messages"}},
+		{name: "retries a recall build", recall: true, conflictStore: "recall", wantEvents: []string{"status:messages", "status:recall", "restart", "build:messages", "build:recall", "status:recall", "build:recall", "status:messages", "status:recall"}},
+		{name: "observes recall after messages fail", recall: true, failedStore: "messages", wantEvents: []string{"status:messages", "status:recall", "restart", "build:messages", "build:recall", "status:messages", "status:recall"}},
+		{name: "reports recall failure", recall: true, failedStore: "recall", wantEvents: []string{"status:messages", "status:recall", "restart", "build:messages", "build:recall", "status:messages", "status:recall"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			writeTestConfig(t, dataDir, fmt.Sprintf(`
+[vector]
+enabled = true
+include_automated = true
+
+[vector.embeddings]
+model = "old-model"
+dimension = 3
+max_input_chars = 1000
+default_server = "old"
+
+[vector.embeddings.servers.old]
+endpoint = "http://127.0.0.1:1/v1"
+
+[vector.embeddings.servers.removed]
+endpoint = "http://127.0.0.1:2/v1"
+api_key_file = "/missing-old-key"
+
+[vector.embed]
+recall = %t
+`, tc.recall))
+			endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+
+			oldPollInterval, oldRestart := embeddingsPollInterval, restartEmbeddingsDaemon
+			embeddingsPollInterval = time.Millisecond
+			t.Cleanup(func() {
+				embeddingsPollInterval = oldPollInterval
+				restartEmbeddingsDaemon = oldRestart
+			})
+
+			var events []string
+			statusReads := map[string]int{}
+			var requests []vector.BuildRequest
+			conflicted := false
+			startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+					store := r.URL.Query().Get("store")
+					if store == "" {
+						store = "messages"
+					}
+					statusReads[store]++
+					events = append(events, "status:"+store)
+					running := tc.running && len(requests) == 0 &&
+						store == "messages" && statusReads[store] <= 2
+					running = running || (tc.manualRecall && len(requests) == 0 && store == "recall" && statusReads[store] <= 2)
+					w.Header().Set("Content-Type", "application/json")
+					status := vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2}
+					if tc.setupBusy && len(requests) == 0 && store == "messages" && statusReads[store] <= 2 {
+						status.Setup = &vector.SetupStatus{Busy: true}
+					}
+					if tc.failedBefore && len(requests) == 0 {
+						status.LastError = "previous build failed"
+						status.Setup = &vector.SetupStatus{Action: "turn-on", Error: "previous setup failed"}
+					}
+					if len(requests) > 0 && store == tc.failedStore {
+						status.LastError = "build failed"
+					}
+					_ = json.MarshalWrite(w, status)
+				},
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+					var req vector.BuildRequest
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					requests = append(requests, req)
+					events = append(events, "build:"+req.Store)
+					w.Header().Set("Content-Type", "application/json")
+					if req.Store == tc.conflictStore && !conflicted {
+						conflicted = true
+						w.WriteHeader(http.StatusConflict)
+						io.WriteString(w, `{"message":"a build is already running"}`)
+						return
+					}
+					w.WriteHeader(http.StatusAccepted)
+					io.WriteString(w, `{"started":true}`)
+				},
+			})
+
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+				events = append(events, "restart")
+				cfg, err := config.LoadReadOnly()
+				require.NoError(t, err)
+				assert.True(t, cfg.Vector.Enabled)
+				assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+				assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+				return nil
+			}
+
+			cmd := newRootCommand()
+			cmd.SetContext(t.Context())
+			cmd.SetIn(strings.NewReader(""))
+			var out strings.Builder
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{
+				"index", "embeddings", "switch", endpoint,
+				"--model", "new-model", "--dimension", "3",
+			})
+			err := cmd.Execute()
+			if tc.failedStore != "" {
+				require.ErrorContains(t, err, "building "+tc.failedStore+" embeddings: build failed")
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tc.wantEvents, events)
+			require.NotEmpty(t, requests)
+			assert.Equal(t, "messages", requests[0].Store)
+			assert.True(t, requests[0].IncludeAutomated)
+			count := strings.Count(out.String(), "Waiting for the current embedding build or setup to finish")
+			if tc.running || tc.setupBusy || tc.manualRecall {
+				assert.Equal(t, 1, count)
+			} else {
+				assert.Zero(t, count)
+			}
+		})
+	}
+}
+
+func TestEmbeddingsSwitchRestartFailurePreservesConfig(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	restartErr := errors.New("restart unavailable")
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
+	require.ErrorIs(t, err, restartErr)
+	require.ErrorContains(t, err, "embedding server saved")
+	require.ErrorContains(t, err, "rerun 'agentsview index embeddings switch'")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+}
+
+func TestEmbeddingsSwitchMigratesLegacyConfigBeforeSaving(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	legacy := fmt.Sprintf(`{
+	"codex_sessions_dirs": ["/legacy/codex"],
+	"vector": {
+		"enabled": true,
+		"embeddings": {
+			"model": "test-model",
+			"dimension": 3,
+			"max_input_chars": 1000,
+			"servers": {
+				"local": {
+					"endpoint": %q,
+					"batch_size": 10,
+					"timeout": "5s",
+					"max_retries": 1
+				}
+			}
+		}
+	}
+}`, "http://127.0.0.1:1/v1")
+	jsonPath := filepath.Join(dataDir, "config.json")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(legacy), 0o600))
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	restartErr := errors.New("restart unavailable")
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
+	require.ErrorIs(t, err, restartErr)
+	require.FileExists(t, filepath.Join(dataDir, "config.toml"))
+	require.FileExists(t, jsonPath+".bak")
+
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	legacyDir, err := filepath.Abs("/legacy/codex")
+	require.NoError(t, err)
+	assert.Equal(t, []string{legacyDir}, cfg.AgentDirs["codex"])
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+}
+
+func TestEmbeddingsSwitchLegacyRequestedDimensions(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(strconv.FormatBool(reject), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			legacy := `{"vector":{"enabled":true,"embeddings":{"model":"test-model","dimension":3,"request_dimensions":true,"input_suffix":"suffix","servers":{"local":{"endpoint":"http://127.0.0.1:1/v1","timeout":"5s"}}}}}`
+			path := filepath.Join(dataDir, "config.json")
+			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+			var dimensions int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Dimensions int `json:"dimensions"`
+				}
+				assert.NoError(t, json.UnmarshalRead(r.Body, &req))
+				dimensions = req.Dimensions
+				if reject {
+					http.Error(w, "unavailable", http.StatusBadRequest)
+					return
+				}
+				if req.Dimensions == 3 {
+					writeEmbeddingsResponse(t, w, 1, 3)
+				} else {
+					writeEmbeddingsResponse(t, w, 1, 5)
+				}
+			}))
+			t.Cleanup(server.Close)
+			oldRestart := restartEmbeddingsDaemon
+			t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+			restartErr := errors.New("restart unavailable")
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+			err := runEmbeddingsSwitch(t.Context(), io.Discard, server.URL+"/v1", "test-model", 3, "")
+			assert.Equal(t, 3, dimensions)
+			if reject {
+				require.ErrorContains(t, err, "testing embedding server")
+				data, readErr := os.ReadFile(path)
+				require.NoError(t, readErr)
+				assert.Equal(t, legacy, string(data))
+				assert.NoFileExists(t, filepath.Join(dataDir, "config.toml"))
+				return
+			}
+			require.ErrorIs(t, err, restartErr)
+			cfg, loadErr := config.LoadReadOnly()
+			require.NoError(t, loadErr)
+			assert.True(t, cfg.Vector.Embeddings.RequestDimensions)
+			assert.Equal(t, "suffix", cfg.Vector.Embeddings.InputSuffix)
+			assert.Equal(t, "5s", cfg.Vector.Embeddings.Servers["default"].Timeout)
+		})
+	}
+}
+
+func TestEmbeddingsSwitchFindsDaemonWhileWaitingForLock(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Close() })
+
+	restartErr := errors.New("restart stopped by test")
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	waiting := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- runEmbeddingsSwitch(ctx, &embeddingsSwitchSignalWriter{firstWrite: waiting}, endpoint, "new-model", 3, "")
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "switch did not wait for the lock")
+	}
+
+	draining := make(chan struct{})
+	drained := make(chan struct{})
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/switch-drain": func(w http.ResponseWriter, r *http.Request) {
+			close(draining)
+			lock, err := waitForEmbeddingsWriteLock(r.Context(), io.Discard, dataDir, nil)
+			if err != nil {
+				return
+			}
+			defer lock.Close()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: ready\ndata: true\n\n")
+			w.(http.Flusher).Flush()
+			close(drained)
+			<-r.Context().Done()
+		},
+	})
+	select {
+	case <-draining:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "switch did not find the daemon while it held the lock")
+	}
+	select {
+	case <-result:
+		require.FailNow(t, "switch finished before the direct build released its lock")
+	default:
+	}
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "test-model", cfg.Vector.Embeddings.Model)
+	require.NoError(t, held.Close())
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "daemon drain did not acquire the lock after the direct build finished")
+	}
+	require.ErrorIs(t, <-result, restartErr)
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+}
+
+func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+
+	restartErr := errors.New("restart stopped by test")
+	restartLockAvailable := make(chan bool, 1)
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+		if err == nil {
+			_ = lock.Close()
+		}
+		restartLockAvailable <- err == nil
+		return restartErr
+	}
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+
+	waiting := make(chan struct{})
+	out := &embeddingsSwitchSignalWriter{firstWrite: waiting}
+	result := make(chan error, 1)
+	go func() {
+		result <- runEmbeddingsSwitch(t.Context(), out, endpoint, "new-model", 3, "")
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch did not report waiting for the direct build")
+	}
+
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "test-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, "http://127.0.0.1:1/v1", cfg.Vector.Embeddings.Servers["local"].Endpoint)
+
+	select {
+	case <-restartLockAvailable:
+		require.FailNow(t, "switch restarted the daemon while the direct build held the lock")
+	default:
+	}
+	require.NoError(t, held.Close())
+	require.ErrorIs(t, <-result, restartErr)
+	select {
+	case available := <-restartLockAvailable:
+		assert.True(t, available, "switch must release the lock before daemon startup")
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch did not restart the daemon")
+	}
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+}
+
+type embeddingsSwitchSignalWriter struct {
+	once       sync.Once
+	firstWrite chan struct{}
+}
+
+func (w *embeddingsSwitchSignalWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.firstWrite) })
+	return len(p), nil
+}
+
+func TestWaitForEmbeddingsWriteLockHonorsCancellation(t *testing.T) {
+	dataDir := t.TempDir()
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	waiting := make(chan struct{})
+	result := make(chan error, 1)
+	reported := false
+	go func() {
+		_, err := waitForEmbeddingsWriteLock(
+			ctx, &embeddingsSwitchSignalWriter{firstWrite: waiting}, dataDir, &reported,
+		)
+		result <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "lock wait did not report the active build")
+	}
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+}
+
+func TestEmbeddingsSwitchFailureBeforeSavePreservesConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		dimension           int
+		statusError, cancel bool
+	}{
+		{name: "wrong vector dimension", dimension: 2},
+		{name: "status error", dimension: 3, statusError: true},
+		{name: "canceled wait", dimension: 3, cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+			path := filepath.Join(dataDir, "config.toml")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			endpoint := newEmbeddingsStubServer(t, tc.dimension).URL + "/v1"
+			ctx, stop := context.WithCancel(t.Context())
+			defer stop()
+			if tc.statusError || tc.cancel {
+				startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+					"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+						if tc.cancel {
+							stop()
+							w.Header().Set("Content-Type", "application/json")
+							_, _ = io.WriteString(w, `{"running":true}`)
+						} else {
+							http.Error(w, "status failed", http.StatusInternalServerError)
+						}
+					},
+				})
+			}
+			oldRestart := restartEmbeddingsDaemon
+			restarted := false
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+				restarted = true
+				return nil
+			}
+			t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+			err = runEmbeddingsSwitch(ctx, io.Discard, endpoint, "test-model", 3, "")
+			require.Error(t, err)
+			if tc.cancel {
+				require.ErrorIs(t, err, context.Canceled)
+				assert.NotContains(t, err.Error(), "testing embedding server")
+			}
+			assert.False(t, restarted)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeTestConfig(t, dataDir, "[vector]\nenabled = false\n[vector.embed]\nrecall = true\n")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	var stores []string
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"running":false}`)
+			},
+			"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+				var req vector.BuildRequest
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				stores = append(stores, req.Store)
+				w.WriteHeader(http.StatusAccepted)
+			},
+		})
+		return nil
+	}
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, ""))
+	assert.Equal(t, []string{"messages", "recall"}, stores)
+}
+
+func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
+	home := testutil.PrivateTempDir(t)
+	require.NoError(t, os.Chmod(home, 0o700))
+	setTestHome(t, home)
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		writeEmbeddingsResponse(t, w, 1, 3)
+	}))
+	t.Cleanup(server.Close)
+	endpoint := server.URL + "/v1"
+	dir := testutil.PrivateTempDir(t)
+	require.NoError(t, os.Chmod(dir, 0o700))
+	dir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	key := filepath.Join(dir, "key")
+	file, err := safefileio.CreatePrivateFile(key)
+	require.NoError(t, err)
+	_, err = file.WriteString("test-key")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	t.Chdir(dir)
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"running":false}`)
+		},
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		},
+	})
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return nil }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "key"))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, key, cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
+
+	file, err = safefileio.CreatePrivateFile(filepath.Join(home, "key"))
+	require.NoError(t, err)
+	_, err = file.WriteString("test-key")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "~/key"))
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "~/key", cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
+	assert.Equal(t, 2, requests)
 }
 
 func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {

@@ -127,6 +127,7 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 		path   string
 	}{
 		{method: "post", path: "/api/v1/embeddings/build"},
+		{method: "post", path: "/api/v1/embeddings/switch-drain"},
 		{method: "get", path: "/api/v1/embeddings/status"},
 		{method: "get", path: "/api/v1/embeddings/generations"},
 		{method: "post", path: "/api/v1/embeddings/generations/{id}/activate"},

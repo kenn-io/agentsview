@@ -299,7 +299,13 @@ type VectorEmbeddingsServerConfig struct {
 	apiKey string
 }
 
-const defaultNomicModel = "nomic-embed-text"
+const (
+	defaultNomicModel       = "nomic-embed-text"
+	nomicMaxInputChars      = 4000
+	nomicModelContextTokens = 2048
+	nomicQueryPrefix        = "search_query: "
+	nomicDocumentPrefix     = "search_document: "
+)
 
 func isNomicModel(model string) bool {
 	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
@@ -2357,16 +2363,16 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.Vector.Embeddings.Dimension = 768
 		}
 		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
-			c.Vector.Embeddings.MaxInputChars = 4000
+			c.Vector.Embeddings.MaxInputChars = nomicMaxInputChars
 		}
 		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
-			c.Vector.Embeddings.ModelContextTokens = 2048
+			c.Vector.Embeddings.ModelContextTokens = nomicModelContextTokens
 		}
 		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
-			c.Vector.Embeddings.QueryPrefix = "search_query: "
+			c.Vector.Embeddings.QueryPrefix = nomicQueryPrefix
 		}
 		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
-			c.Vector.Embeddings.DocumentPrefix = "search_document: "
+			c.Vector.Embeddings.DocumentPrefix = nomicDocumentPrefix
 		}
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
@@ -4267,13 +4273,103 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate()
+		_, candidate, err := c.vectorSetupCandidate(nil)
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
 		}
 		return err
 	})
 	return embeddings, err
+}
+
+// SaveVectorEmbeddingsServer replaces the configured servers with one named
+// OpenAI-compatible server after validating the complete config.
+func (c *Config) SaveVectorEmbeddingsServer(
+	endpoint, model string, dimension int, apiKeyFile string,
+) error {
+	if err := c.migrateJSONToTOML(); err != nil {
+		return err
+	}
+	return c.withConfigLock(func() error {
+		existing, _, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+		if err != nil {
+			return err
+		}
+		return c.writeConfigMap(existing)
+	})
+}
+
+// VectorEmbeddingsServerCandidate returns the validated in-memory config that
+// SaveVectorEmbeddingsServer would write, without changing the saved config.
+func (c *Config) VectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+		if err != nil {
+			return err
+		}
+		embeddings = candidate.Vector.Embeddings
+		return nil
+	})
+	return embeddings, err
+}
+
+func (c *Config) vectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (map[string]any, Config, error) {
+	server := map[string]any{"endpoint": endpoint}
+	if apiKeyFile != "" {
+		server["api_key_file"] = apiKeyFile
+	}
+	existing, candidate, err := c.vectorSetupCandidateFrom(c.readConfigMapOrLegacy, func(section map[string]any) {
+		embeddings, _ := section["embeddings"].(map[string]any)
+		oldModel, _ := embeddings["model"].(string)
+		_, hasServers := embeddings["servers"]
+		preserveDefaultModelConfig := oldModel == "" && !hasServers && model == defaultNomicModel
+		if oldModel == model {
+			servers, _ := embeddings["servers"].(map[string]any)
+			name, _ := embeddings["default_server"].(string)
+			if name == "" && len(servers) == 1 {
+				for name = range servers {
+				}
+			}
+			previous, _ := servers[name].(map[string]any)
+			for _, key := range []string{"timeout", "batch_size", "max_batch_tokens", "concurrency", "max_retries"} {
+				if value, ok := previous[key]; ok {
+					server[key] = value
+				}
+			}
+		}
+		if embeddings == nil || (oldModel != model && !preserveDefaultModelConfig) {
+			embeddings = make(map[string]any)
+		}
+		delete(embeddings, "default_server")
+		embeddings["model"] = model
+		embeddings["dimension"] = dimension
+		embeddings["servers"] = map[string]any{"default": server}
+		if isNomicModel(model) && oldModel != model {
+			for key, value := range map[string]any{
+				"max_input_chars":      nomicMaxInputChars,
+				"model_context_tokens": nomicModelContextTokens,
+				"query_prefix":         nomicQueryPrefix,
+				"document_prefix":      nomicDocumentPrefix,
+			} {
+				if _, ok := embeddings[key]; !ok {
+					embeddings[key] = value
+				}
+			}
+		}
+		section["embeddings"] = embeddings
+	})
+	if err != nil {
+		return nil, Config{}, err
+	}
+	if err := candidate.ApplyDeploymentEmbeddings(); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	return existing, candidate, nil
 }
 
 // VectorExplicitlyDisabled reports a saved opt-out.
@@ -4331,7 +4427,7 @@ func (c *Config) SharedVectorSetup() (Config, bool, error) {
 				return nil
 			}
 		}
-		_, candidate, err = c.vectorSetupCandidate()
+		_, candidate, err = c.vectorSetupCandidate(nil)
 		if err != nil {
 			return err
 		}
@@ -4351,7 +4447,7 @@ func (c *Config) SharedVectorSetup() (Config, bool, error) {
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
 func (c *Config) SaveVectorSetup() error {
 	return c.withConfigLock(func() error {
-		existing, _, err := c.vectorSetupCandidate()
+		existing, _, err := c.vectorSetupCandidate(nil)
 		if err != nil {
 			return err
 		}
@@ -4359,8 +4455,39 @@ func (c *Config) SaveVectorSetup() error {
 	})
 }
 
-func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
-	existing, err := c.readConfigMap()
+// readConfigMapOrLegacy reads config.toml, or an unmigrated config.json when
+// config.toml is absent, without changing either file.
+func (c *Config) readConfigMapOrLegacy() (map[string]any, error) {
+	if _, err := os.Stat(c.configPath()); !os.IsNotExist(err) {
+		return c.readConfigMap()
+	}
+	existing := make(map[string]any)
+	data, err := os.ReadFile(c.jsonConfigPath())
+	if os.IsNotExist(err) {
+		return existing, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config.json: %w", err)
+	}
+	converted, err := legacyJSONToTOML(data)
+	if err != nil {
+		return nil, err
+	}
+	_, err = toml.Decode(converted, &existing)
+	return existing, err
+}
+
+func (c *Config) vectorSetupCandidate(
+	mutate func(section map[string]any),
+) (map[string]any, Config, error) {
+	return c.vectorSetupCandidateFrom(c.readConfigMap, mutate)
+}
+
+func (c *Config) vectorSetupCandidateFrom(
+	read func() (map[string]any, error),
+	mutate func(section map[string]any),
+) (map[string]any, Config, error) {
+	existing, err := read()
 	if err != nil {
 		if _, ok := errors.AsType[toml.ParseError](err); ok {
 			err = invalidVectorSetupError{err}
@@ -4375,6 +4502,9 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 		section = make(map[string]any)
 	}
 	section["enabled"] = true
+	if mutate != nil {
+		mutate(section)
+	}
 	existing["vector"] = section
 	encoded, err := toml.Marshal(existing)
 	if err != nil {

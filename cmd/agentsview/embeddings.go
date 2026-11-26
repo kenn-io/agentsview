@@ -1,4 +1,4 @@
-// ABOUTME: `embeddings` command group — build, list, activate, and retire
+// ABOUTME: `embeddings` command group — build, switch, list, activate, and retire
 // ABOUTME: semantic-search embedding generations, via the daemon or directly.
 package main
 
@@ -12,6 +12,8 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +55,16 @@ const fingerprintDisplayLen = 12
 // cut off.
 var embeddingsDaemonHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// The drain stream stays open until active builds finish. The request context
+// cancels it; an overall client timeout would cut off a long-running build.
+var embeddingsSwitchDrainHTTPClient = &http.Client{Timeout: 0}
+
+var errNoReachableEmbeddingsDaemon = errors.New("no reachable local agentsview daemon found")
+
+var restartEmbeddingsDaemon = func(ctx context.Context, out io.Writer) error {
+	return runDaemonRestart(ctx, out, defaultDaemonCommandDeps())
+}
+
 func newEmbeddingsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "embeddings",
@@ -68,10 +80,234 @@ func newEmbeddingsCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newEmbeddingsBuildCommand())
+	cmd.AddCommand(newEmbeddingsSwitchCommand())
 	cmd.AddCommand(newEmbeddingsListCommand())
 	cmd.AddCommand(newEmbeddingsActivateCommand())
 	cmd.AddCommand(newEmbeddingsRetireCommand())
 	return cmd
+}
+
+func newEmbeddingsSwitchCommand() *cobra.Command {
+	var model, apiKeyFile string
+	var dimension int
+	cmd := &cobra.Command{
+		Use:          "switch <endpoint>",
+		Short:        "Switch the embedding server and rebuild the index",
+		Long:         "Switch to one embedding server and rebuild the session index. Before saving, the command sends one sample query and checks the returned vector dimension. The same model keeps its recipe; a new model starts from its defaults. The command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
+		Example:      "  agentsview index embeddings switch https://host/v1 --model embeddinggemma --dimension 768 --api-key-file ~/.config/agentsview/api-key",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEmbeddingsSwitch(
+				cmd.Context(), cmd.OutOrStdout(), args[0], model, dimension, apiKeyFile,
+			)
+		},
+	}
+	cmd.Flags().StringVar(&model, "model", "", "Embedding model served by the endpoint")
+	cmd.Flags().IntVar(&dimension, "dimension", 0, "Length of each returned embedding vector")
+	cmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "File containing the endpoint API key")
+	_ = cmd.MarkFlagRequired("model")
+	_ = cmd.MarkFlagRequired("dimension")
+	return cmd
+}
+
+func runEmbeddingsSwitch(
+	ctx context.Context, out io.Writer, endpoint, model string, dimension int, apiKeyFile string,
+) error {
+	cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if cfg.ArchiveContent.UsageOnly() {
+		return requireVectorEnabled(cfg)
+	}
+	stores := []string{"messages"}
+	if cfg.Vector.Embed.Recall {
+		stores = append(stores, "recall")
+	}
+	waiting := false
+
+	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
+	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
+		return daemonErr
+	}
+	if daemonErr == nil {
+		for _, store := range []string{"messages", "recall"} {
+			client.store = store
+			if _, err := waitDaemonBuild(ctx, out, client, true, &waiting); err != nil {
+				return err
+			}
+		}
+	}
+	if apiKeyFile != "" && apiKeyFile != "~" && !strings.HasPrefix(apiKeyFile, "~/") && !filepath.IsAbs(apiKeyFile) {
+		apiKeyFile, err = filepath.Abs(apiKeyFile)
+		if err != nil {
+			return fmt.Errorf("resolving API key file: %w", err)
+		}
+	}
+	candidate, err := cfg.VectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+	if err != nil {
+		return fmt.Errorf("validating embedding server: %w", err)
+	}
+	if err := preflightEmbeddingsServer(ctx, candidate); err != nil {
+		return fmt.Errorf("testing embedding server: %w", err)
+	}
+	directBuildLock, release, err := pauseEmbeddingsSwitchBuilds(ctx, out, cfg, client, daemonErr, &waiting)
+	if err != nil {
+		return fmt.Errorf("waiting for embedding builds: %w", err)
+	}
+	defer release()
+	defer func() {
+		if directBuildLock != nil {
+			_ = directBuildLock.Close()
+		}
+	}()
+	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
+		return fmt.Errorf("saving embedding server: %w", err)
+	}
+	if directBuildLock != nil {
+		if err := directBuildLock.Close(); err != nil {
+			return fmt.Errorf("releasing embedding build lock: %w", err)
+		}
+		directBuildLock = nil
+	}
+	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
+		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
+	}
+
+	cfg, err = config.LoadReadOnlyFor(config.ScopeLocal)
+	if err != nil {
+		return fmt.Errorf("loading config after daemon restart: %w", err)
+	}
+	client, err = resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return err
+	}
+	var started, conflicts []vector.BuildRequest
+	var buildErrors []error
+	for _, store := range stores {
+		req := vector.BuildRequest{Store: store}
+		if store == vector.MessageIndexSpec().Name {
+			req.IncludeAutomated = vector.MessageIndexSpec().NormalizeIncludeAutomated(
+				cfg.Vector.IncludeAutomated,
+			)
+		}
+		client.store = daemonEmbeddingStore(store)
+		err := client.startBuild(ctx, req)
+		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusConflict {
+			conflicts = append(conflicts, req)
+		} else if err != nil {
+			buildErrors = append(buildErrors, fmt.Errorf("starting %s embeddings: %w", store, err))
+		} else {
+			started = append(started, req)
+		}
+	}
+	for _, req := range conflicts {
+		client.store = daemonEmbeddingStore(req.Store)
+		for {
+			if _, err := waitDaemonBuild(ctx, out, client, false, &waiting); err != nil {
+				buildErrors = append(buildErrors, fmt.Errorf("waiting for %s embeddings: %w", req.Store, err))
+				break
+			}
+			err := client.startBuild(ctx, req)
+			apiErr, conflict := errors.AsType[*daemonAPIError](err)
+			if !conflict || apiErr.status != http.StatusConflict {
+				if err != nil {
+					buildErrors = append(buildErrors, fmt.Errorf("starting %s embeddings: %w", req.Store, err))
+				} else {
+					started = append(started, req)
+				}
+				break
+			}
+		}
+	}
+	for _, req := range started {
+		client.store = daemonEmbeddingStore(req.Store)
+		if err := pollDaemonBuildStatus(ctx, out, client, false); err != nil {
+			buildErrors = append(buildErrors, fmt.Errorf("building %s embeddings: %w", req.Store, err))
+		}
+	}
+	return errors.Join(buildErrors...)
+}
+
+// pauseEmbeddingsSwitchBuilds pauses daemon builds, or waits for the direct
+// build lock when no daemon is reachable. A compatible daemon that appears
+// during the lock wait takes over through the same daemon pause.
+func pauseEmbeddingsSwitchBuilds(
+	ctx context.Context, out io.Writer, cfg config.Config,
+	client embeddingsDaemonClient, daemonErr error, waiting *bool,
+) (*writeOwnerLock, func(), error) {
+	if daemonErr != nil {
+		waitCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		lock, err := waitForEmbeddingsWriteLockWithWait(waitCtx, cfg.DataDir, func() {
+			if !*waiting {
+				fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+				*waiting = true
+			}
+			if client, daemonErr = resolveEmbeddingsDaemonClient(cfg); daemonErr == nil {
+				stop()
+			}
+		})
+		if err == nil {
+			return lock, func() {}, nil
+		}
+		if daemonErr != nil || ctx.Err() != nil {
+			return nil, nil, err
+		}
+	}
+	release, err := client.pauseBuilds(ctx, out, waiting)
+	return nil, release, err
+}
+
+func waitForEmbeddingsWriteLock(
+	ctx context.Context, out io.Writer, dataDir string, waiting *bool,
+) (*writeOwnerLock, error) {
+	return waitForEmbeddingsWriteLockWithWait(ctx, dataDir, func() {
+		if waiting != nil && !*waiting {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			*waiting = true
+		}
+	})
+}
+
+func waitForEmbeddingsWriteLockWithWait(
+	ctx context.Context, dataDir string, onWait func(),
+) (*writeOwnerLock, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+		if err == nil {
+			return lock, nil
+		}
+		if _, held := errors.AsType[writeOwnerLockHeldError](err); !held {
+			return nil, err
+		}
+		if onWait != nil {
+			onWait()
+		}
+		timer := time.NewTimer(vectorsWriteLockRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func preflightEmbeddingsServer(ctx context.Context, embeddings config.VectorEmbeddingsConfig) error {
+	encode, err := newVectorQueryEncoder(embeddings, "default")
+	if err != nil {
+		return err
+	}
+	// The encoder rejects a response whose vector count or length is wrong.
+	_, err = encode(ctx, []string{"AgentsView embedding server check"})
+	return err
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
@@ -763,27 +999,42 @@ func buildViaDaemon(
 func pollDaemonBuildStatus(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
+	status, err := waitDaemonBuild(ctx, out, client, setup, nil)
+	if err != nil {
+		return err
+	}
+	if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
+		return errors.New(status.Setup.Error)
+	}
+	return finalizeBuildStatus(out, status)
+}
+
+func waitDaemonBuild(
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, waiting *bool,
+) (vector.BuildStatus, error) {
 	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
-			return err
+			return status, err
 		}
-		if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
-			return errors.New(status.Setup.Error)
+		busy := setup && status.Setup != nil && status.Setup.Busy
+		if !status.Running && !busy {
+			return status, nil
+		}
+		if waiting != nil && !*waiting {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			*waiting = true
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
-		if !setup || status.Setup == nil || !status.Setup.Busy {
-			if !status.Running {
-				return finalizeBuildStatus(out, status)
-			}
+		if !busy {
 			progress.print(out, status.Phase, status.Done, status.Total)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return status, ctx.Err()
 		case <-time.After(embeddingsPollInterval):
 		}
 	}
@@ -1062,7 +1313,7 @@ func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, e
 		); err != nil {
 			return embeddingsDaemonClient{}, err
 		}
-		return embeddingsDaemonClient{}, errors.New("no reachable local agentsview daemon found")
+		return embeddingsDaemonClient{}, errNoReachableEmbeddingsDaemon
 	}
 	return embeddingsDaemonClient{baseURL: urlFromDaemonRuntime(rt), token: cfg.AuthToken}, nil
 }
@@ -1073,6 +1324,63 @@ type embeddingsDaemonClient struct {
 	baseURL string
 	token   string
 	store   string
+}
+
+func (c embeddingsDaemonClient) pauseBuilds(ctx context.Context, out io.Writer, waiting *bool) (func(), error) {
+	ctx, cancel := context.WithCancel(ctx)
+	origin, err := url.Parse(c.baseURL)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	origin.Path, origin.RawPath, origin.RawQuery, origin.Fragment = "", "", "", ""
+	response, err := apiclient.RawRequest(c.baseURL, embeddingsSwitchDrainHTTPClient, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1EmbeddingsSwitchDrainWithResponse(ctx)
+		return err
+	}, func(_ context.Context, req *http.Request) error {
+		req.Header.Set("Origin", origin.String())
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		return nil
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+		_ = response.Body.Close()
+		cancel()
+		return nil, embeddingResponseError(response.StatusCode, body, readErr)
+	}
+	closeResponse := func() { cancel(); _ = response.Body.Close() }
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		switch scanner.Text() {
+		case "event: waiting":
+			if waiting != nil && !*waiting {
+				fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+				*waiting = true
+			}
+		case "event: ready":
+			return closeResponse, nil
+		case "event: error":
+			if scanner.Scan() {
+				var message string
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &message); err == nil {
+					closeResponse()
+					return nil, errors.New(message)
+				}
+			}
+		}
+	}
+	err = scanner.Err()
+	closeResponse()
+	if err == nil {
+		err = io.ErrUnexpectedEOF
+	}
+	return nil, err
 }
 
 // daemonAPIError carries an embeddings API error response's HTTP status
