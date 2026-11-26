@@ -120,10 +120,16 @@ func TestParserProcessKillsAndReaps(t *testing.T) {
 		{"above_cap", ErrSizeLimit},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
-			timeout := 3 * time.Second
-			if errors.Is(tc.want, context.DeadlineExceeded) && tc.mode != "closed_stdout" {
-				// These cases assert the deadline stopping a deliberately blocked child.
-				timeout = 100 * time.Millisecond
+			input := []byte("{}")
+			if tc.mode == "blocked_stdin" {
+				input = bytes.Repeat([]byte("x"), 1<<20)
+			}
+			timeout := 10 * time.Second
+			if tc.mode == "before_ready" {
+				timeout = 2 * time.Second
+			} else if errors.Is(tc.want, context.DeadlineExceeded) {
+				// Leave room for child startup and READY handshake on slower runners.
+				timeout = 3 * time.Second
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), timeout)
 			defer cancel()
@@ -131,16 +137,17 @@ func TestParserProcessKillsAndReaps(t *testing.T) {
 			defer stopChild()
 			cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^TestParserProcessHarness$", "--", tc.mode)
 			cmd.Env = []string{"RAW_TEST_CHILD=1"}
-			input := []byte("{}")
-			if tc.mode == "blocked_stdin" {
-				input = bytes.Repeat([]byte("x"), 1<<20)
-			}
+			readyBeforeDeadline := false
 			decodedBeforeDeadline := false
 			err := runParserProcess(ctx, stopChild, cmd, input, 1024, 1024, func(src io.Reader) error {
+				readyBeforeDeadline = ctx.Err() == nil
 				_, err := decodeParserOutcome(src)
 				decodedBeforeDeadline = err == nil && ctx.Err() == nil
 				return err
 			})
+			if tc.mode == "blocked" || tc.mode == "blocked_stdin" {
+				assert.True(t, readyBeforeDeadline, "child must print READY before the deadline kills it")
+			}
 			if tc.mode == "closed_stdout" {
 				assert.True(t, decodedBeforeDeadline, "stdout must reach EOF before the deadline kills the still-running child")
 			}
@@ -192,6 +199,60 @@ func TestParserProcessPreservesCallerCancellation(t *testing.T) {
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, cmd.ProcessState)
+}
+
+func TestParserProcessStartFailurePreservesContextError(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (context.Context, string)
+		want  error
+	}{
+		{
+			name: "deadline_exceeded",
+			setup: func(t *testing.T) (context.Context, string) {
+				t.Helper()
+				ctx, cancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+				t.Cleanup(cancel)
+				return ctx, os.Args[0]
+			},
+			want: context.DeadlineExceeded,
+		},
+		{
+			name: "canceled",
+			setup: func(t *testing.T) (context.Context, string) {
+				t.Helper()
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return ctx, os.Args[0]
+			},
+			want: context.Canceled,
+		},
+		{
+			name: "start_error",
+			setup: func(t *testing.T) (context.Context, string) {
+				t.Helper()
+				return t.Context(), filepath.Join(t.TempDir(), "missing-parser-binary")
+			},
+			want: ErrSandboxUnavailable,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, bin := tc.setup(t)
+			childCtx, stopChild := context.WithCancel(ctx)
+			defer stopChild()
+			cmd := exec.CommandContext(childCtx, bin, "-test.run=^TestParserProcessHarness$", "--", "success")
+			cmd.Env = []string{"RAW_TEST_CHILD=1"}
+			err := runParserProcess(ctx, stopChild, cmd, []byte("{}"), 1024, 1024, func(src io.Reader) error {
+				_, err := decodeParserOutcome(src)
+				return err
+			})
+			require.ErrorIs(t, err, tc.want)
+			if !errors.Is(tc.want, ErrSandboxUnavailable) {
+				require.NotErrorIs(t, err, ErrSandboxUnavailable)
+			}
+			assert.Nil(t, cmd.Process)
+		})
+	}
 }
 
 func TestSandboxWireRejectsInvalidOutcome(t *testing.T) {
