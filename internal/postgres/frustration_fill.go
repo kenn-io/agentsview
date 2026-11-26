@@ -14,6 +14,8 @@ import (
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
 
+var frustrationFillRetryDelay = time.Second
+
 var frustrationJoinWait = 5 * time.Second
 
 type frustrationChunk struct {
@@ -28,24 +30,25 @@ type frustrationFillState struct {
 	completed uint64
 }
 
-var errSharedFillWait = errors.New("shared load cannot wait for count fill")
+type frustrationCountSave struct {
+	versions      map[string]string
+	counts        map[string]int
+	versionColumn string
+}
 
-// keptSignals lets a caller whose shared load would wait on a pending count
-// fill load under its own deadline instead.
+// keptSignals keeps cacheable report loads shared during startup fill.
 func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
 	return keptAnalyticsWithLoads(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
 		return s.loadAnalyticsSignalsWithMode(ctx, f, true)
 	})
 }
 
-// completedCount is the number of finished chunks.
 func (state *frustrationFillState) completedCount() uint64 {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return state.completed
 }
 
-// release drops a finished chunk's session IDs and wakes waiters.
 func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -57,7 +60,6 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	close(chunk.done)
 }
 
-// joinFrustrationFill waits only for chunks fully covered by the request.
 func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64, shared bool) (bool, error) {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
@@ -88,7 +90,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 		return false, nil
 	}
 	if shared {
-		return false, errSharedFillWait
+		return false, nil
 	}
 	budget := frustrationJoinWait
 	if deadline, ok := ctx.Deadline(); ok {
@@ -111,10 +113,10 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	state.mu.Lock()
 	state.pending = make(map[string]*frustrationChunk)
 	state.chunks = nil
-	for ids := range slices.Chunk(ids, maxPGVars) {
-		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
+	for chunkIDs := range slices.Chunk(ids, maxPGVars) {
+		chunk := &frustrationChunk{ids: chunkIDs, done: make(chan struct{})}
 		state.chunks = append(state.chunks, chunk)
-		for _, id := range ids {
+		for _, id := range chunkIDs {
 			state.pending[id] = chunk
 		}
 	}
@@ -164,13 +166,29 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		ids, err := s.staleFrustrationSessions(ctx, column)
-		if err != nil {
-			log.Printf("selecting stale frustration counts: %v", err)
-			return
-		}
-		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
-			log.Printf("filling frustration counts: %v", err)
+		for pass := range 3 {
+			if pass > 0 {
+				timer := time.NewTimer(frustrationFillRetryDelay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+			}
+			ids, err := s.staleFrustrationSessions(ctx, column)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Printf("selecting stale frustration counts: %v", err)
+				}
+				return
+			}
+			if len(ids) == 0 {
+				return
+			}
+			if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
+				log.Printf("filling frustration counts: %v", err)
+			}
 		}
 	}()
 	return func() { cancel(); <-done }

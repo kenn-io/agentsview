@@ -2921,9 +2921,7 @@ func (s *Store) populateFrustrationMarkers(
 		memo.Store(generation, id, version, counts[id])
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		if err := s.storeFrustrationCountsForRead(ctx, scannedVersions, counts, versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
-			log.Printf("storing frustration counts: %v", err)
-		}
+		s.storeFrustrationCountsForRead(scannedVersions, counts, versionColumn)
 	}
 	return nil
 }
