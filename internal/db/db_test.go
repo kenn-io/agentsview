@@ -807,6 +807,9 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	requireNoError(t, err, "verify column removed")
 	require.Equal(t, 0, count,
 		"expected result_content column to be absent")
+	err = conn.QueryRowContext(t.Context(), `SELECT count(*) FROM pragma_table_info('tool_calls') WHERE name='working_directory'`).Scan(&count)
+	requireNoError(t, err, "verify working directory column removed")
+	require.Zero(t, count)
 	var tcCount int
 	err = conn.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM tool_calls`,
@@ -828,6 +831,9 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	requireNoError(t, err, "verify column added")
 	require.Equal(t, 1, count,
 		"expected result_content column after migration")
+	err = d2.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_table_info('tool_calls') WHERE name='working_directory'`).Scan(&count)
+	requireNoError(t, err, "verify working directory column added")
+	require.Equal(t, 1, count)
 
 	// Verify tool_calls row preserved with fields intact.
 	msgs, err := d2.GetMessages(
@@ -841,6 +847,7 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	assert.Equal(t, "tu1", tc.ToolUseID, "ToolUseID")
 	assert.Equal(t, 42, tc.ResultContentLength, "ResultContentLength")
 	assert.Empty(t, tc.ResultContent, "ResultContent")
+	assert.Empty(t, tc.WorkingDirectory, "WorkingDirectory")
 }
 
 func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
