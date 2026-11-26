@@ -5900,13 +5900,12 @@ func SetCloseDrainTimeoutForTest(d time.Duration) (restore func()) {
 	return func() { closeDrainTimeout = prev }
 }
 
-// PauseReads holds new readerHandle queries until Reopen installs a fresh
-// reader pool or the returned resume function runs. In-flight queries that
-// already leased a connection keep running and drain when CloseConnections
-// runs. Live archive swaps call PauseReads before CloseConnections and defer
-// resume so concurrent HTTP reads wait across the file swap instead of failing
-// with sql: database is closed.
-func (db *DB) PauseReads() func() {
+// pauseReadsLocked holds new readerHandle queries until reopenLockedWithBarrier
+// installs a fresh reader pool or the returned resume function runs. The caller
+// must hold db.mu for the entire paused interval so no other db.mu-holding
+// method can block on paused reads and deadlock Reopen. In-flight queries that
+// already leased a connection keep running and drain in closeConnectionsLocked.
+func (db *DB) pauseReadsLocked() func() {
 	ch := make(chan struct{})
 	db.connMu.Lock()
 	if prev := db.readPause.Swap(&ch); prev != nil {
@@ -5920,6 +5919,69 @@ func (db *DB) PauseReads() func() {
 		}
 		db.connMu.Unlock()
 	})
+}
+
+func (db *DB) clearReadPause() {
+	db.connMu.Lock()
+	if prev := db.readPause.Swap(nil); prev != nil {
+		close(*prev)
+	}
+	db.connMu.Unlock()
+}
+
+// ArchiveSwap exposes locked close and reopen operations inside
+// WithArchiveSwap.
+type ArchiveSwap struct {
+	db       *DB
+	reopened bool
+}
+
+// Close closes and drains both connection pools while db.mu is held.
+func (s *ArchiveSwap) Close(ctx context.Context) error {
+	return s.db.closeConnectionsLocked(ctx)
+}
+
+// Reopen reopens both connection pools and wakes paused readers while db.mu is
+// held.
+func (s *ArchiveSwap) Reopen() error {
+	if err := s.db.reopenLocked(); err != nil {
+		return err
+	}
+	s.db.startWALCheckpointLoop()
+	s.reopened = true
+	return nil
+}
+
+// WithArchiveSwap pauses new readerHandle queries while holding db.mu across
+// fn's close, file replacement, and reopen sequence. Holding db.mu for the
+// entire paused interval guarantees no db.mu-holding caller can block on
+// paused reads and deadlock Reopen. If fn reopened the pools, post-reopen
+// cache retirement and backfill restart run after db.mu is released.
+func (db *DB) WithArchiveSwap(
+	_ context.Context,
+	fn func(*ArchiveSwap) error,
+) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	db.StopUsageCacheBackfill()
+	db.stopWALCheckpointLoop()
+	db.mu.Lock()
+	resumeReads := db.pauseReadsLocked()
+	swap := &ArchiveSwap{db: db}
+	err := func() error {
+		defer db.mu.Unlock()
+		defer resumeReads()
+		return fn(swap)
+	}()
+	if !swap.reopened {
+		return err
+	}
+	finishErr := db.finishReopen()
+	if err != nil {
+		return errors.Join(err, finishErr)
+	}
+	return finishErr
 }
 
 // CloseConnections closes both connections without reopening,
@@ -6088,6 +6150,10 @@ func (db *DB) Reopen() error {
 	}
 	db.startWALCheckpointLoop()
 	db.mu.Unlock()
+	return db.finishReopen()
+}
+
+func (db *DB) finishReopen() error {
 	// Reopen can follow a full archive replacement. Retire cache generations
 	// tied to the old database ID so their notification workers do not keep
 	// querying the replacement archive or retain SQLite pools indefinitely.

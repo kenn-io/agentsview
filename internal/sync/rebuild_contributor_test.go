@@ -378,7 +378,7 @@ func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testin
 	stats, err := engine.resyncAllWithOptionsAndOperations(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
 			rebuildFTS: productionRebuildOperations.rebuildFTS,
-			reopen:     func(*db.DB) error { return sentinel },
+			reopen:     func(func() error) error { return sentinel },
 		},
 	)
 	require.ErrorIs(t, err, sentinel)
@@ -421,12 +421,12 @@ func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
 	stats, err := engine.resyncAllWithOptionsAndOperations(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
 			rebuildFTS: productionRebuildOperations.rebuildFTS,
-			reopen: func(database *db.DB) error {
+			reopen: func(reopen func() error) error {
 				reopenCalls++
 				if reopenCalls == 1 {
 					return errors.New("transient reopen failure")
 				}
-				return database.Reopen()
+				return reopen()
 			},
 		},
 	)

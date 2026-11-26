@@ -5261,10 +5261,21 @@ func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 
-	resume := d.PauseReads()
-	defer resume()
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(t.Context(), func(swap *ArchiveSwap) error {
+			if err := swap.Close(t.Context()); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
 
-	require.NoError(t, d.CloseConnections(t.Context()), "CloseConnections")
+	<-closed
 
 	// A read whose context cancels while paused must unblock with context.Canceled
 	// instead of waiting or reporting sql: database is closed.
@@ -5291,7 +5302,13 @@ func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
 	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; read must remain paused until Reopen installs the new pool
 	}
 
-	require.NoError(t, d.Reopen(), "Reopen")
+	close(allowReopen)
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap did not complete")
+	}
 
 	select {
 	case res := <-readDone:
@@ -5300,6 +5317,88 @@ func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
 		assert.Equal(t, "s1", res.session.ID)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "paused read did not wake after Reopen")
+	}
+}
+
+func TestWithArchiveSwapDoesNotDeadlockPreviewOrWriteLockedReaders(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReclassificationSession(t, d, "wt-1", "archive.example", "/worktrees/service/app", "branch")
+
+	draft := WorktreeReclassificationDraft{
+		Machine:    "archive.example",
+		PathPrefix: "/worktrees/service",
+		Project:    "service",
+		Enabled:    true,
+	}
+
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(ctx, func(swap *ArchiveSwap) error {
+			if err := swap.Close(ctx); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
+
+	<-closed
+
+	type previewResult struct {
+		preview WorktreeReclassificationPreview
+		err     error
+	}
+	previewDone := make(chan previewResult, 1)
+	go func() {
+		p, err := d.PreviewWorktreeReclassification(ctx, draft)
+		previewDone <- previewResult{preview: p, err: err}
+	}()
+
+	// InsertMissingModelPricing acquires db.mu and reads via db.getReader();
+	// because WithArchiveSwap holds db.mu for the entire paused window, it
+	// blocks on db.mu rather than entering paused reads while holding db.mu.
+	pricingDone := make(chan error, 1)
+	go func() {
+		pricingDone <- d.InsertMissingModelPricing(ctx, []ModelPricing{{
+			ModelPattern: "swap-regression-model",
+		}})
+	}()
+
+	select {
+	case res := <-previewDone:
+		require.Failf(t, "preview returned while swap paused reads", "preview=%+v err=%v", res.preview, res.err)
+	case err := <-pricingDone:
+		require.Failf(t, "write-locked reader returned while swap held db.mu", "err=%v", err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; concurrent preview and write-locked reader must wait without returning early or deadlocking
+	}
+
+	close(allowReopen)
+
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap stalled waiting for concurrent preview or write-locked reader")
+	}
+
+	select {
+	case res := <-previewDone:
+		require.NoError(t, res.err, "PreviewWorktreeReclassification")
+		assert.Equal(t, 1, res.preview.MatchedSessions)
+		assert.Equal(t, 1, res.preview.UpdatedSessions)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "PreviewWorktreeReclassification did not complete after Reopen")
+	}
+
+	select {
+	case err := <-pricingDone:
+		require.NoError(t, err, "InsertMissingModelPricing")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "InsertMissingModelPricing did not complete after WithArchiveSwap")
 	}
 }
 

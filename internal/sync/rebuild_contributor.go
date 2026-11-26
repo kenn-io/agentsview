@@ -87,7 +87,7 @@ func (e *RebuildContributorError) Unwrap() error { return e.Err }
 type rebuildOperations struct {
 	rebuildFTS                        func(context.Context, *db.DB) error
 	rebuildUsageIndexes               func(context.Context, *db.DB) error
-	reopen                            func(*db.DB) error
+	reopen                            func(func() error) error
 	listActiveWorktreeMappingMachines func(context.Context, *db.DB) ([]string, error)
 	applyWorktreeMappings             func(context.Context, *db.DB, string) (db.ApplyWorktreeProjectMappingsResult, error)
 }
@@ -97,7 +97,7 @@ var productionRebuildOperations = rebuildOperations{
 	rebuildUsageIndexes: func(ctx context.Context, database *db.DB) error {
 		return database.RebuildBulkImportIndexes(ctx)
 	},
-	reopen: func(database *db.DB) error { return database.Reopen() },
+	reopen: func(reopen func() error) error { return reopen() },
 	listActiveWorktreeMappingMachines: func(
 		ctx context.Context, database *db.DB,
 	) ([]string, error) {

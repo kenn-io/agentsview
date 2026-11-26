@@ -99,8 +99,6 @@ func (db *DB) PreviewWorktreeReclassification(
 		ctx = context.Background()
 	}
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return WorktreeReclassificationPreview{}, fmt.Errorf(

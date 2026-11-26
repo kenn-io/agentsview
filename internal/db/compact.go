@@ -640,9 +640,9 @@ func checkpointWALTruncateConn(ctx context.Context, conn *sql.DB) error {
 // write barrier still up. On failure the unchanged (or restored) original is
 // serving again before the error returns.
 func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation) error {
-	resumeReads := db.PauseReads()
-	defer resumeReads()
 	db.mu.Lock()
+	resumeReads := db.pauseReadsLocked()
+	defer resumeReads()
 	if err := db.closeConnectionsLocked(ctx); err != nil {
 		return db.reopenUnchangedAfterSwapFailureLocked(
 			fmt.Errorf("close archive connections: %w", err), op)
@@ -678,6 +678,7 @@ func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation)
 // db.mu; it is released here.
 func (db *DB) reopenUnchangedAfterSwapFailureLocked(primary error, op *compactOperation) error {
 	reopenErr := db.reopenLockedWithBarrier(true)
+	db.clearReadPause()
 	db.mu.Unlock()
 	if reopenErr != nil {
 		return errors.Join(primary, fmt.Errorf(
@@ -723,6 +724,7 @@ func (db *DB) restoreOriginalAfterSwapFailureLocked(primary error, op *compactOp
 	if restoreErr == nil {
 		restoreErr = db.reopenLockedWithBarrier(true)
 	}
+	db.clearReadPause()
 	db.mu.Unlock()
 	if restoreErr != nil {
 		// Leave the prepared manifest and backup in place: startup recovery
