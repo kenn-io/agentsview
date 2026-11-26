@@ -278,7 +278,7 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, got.message.sql)
 	}
-	re := regexp.MustCompile(`fo(o)`)
+	re := regexp.MustCompile(`(fo)o`)
 	prefix := regexBodyLiterals(re, requiredLiterals(re.String()))
 	got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, regexLiteralTexts(prefix))
 	require.NoError(t, err)
