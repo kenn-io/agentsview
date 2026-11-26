@@ -4295,17 +4295,15 @@ func (c *Config) SaveVectorEmbeddingsServer(
 		existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
 			embeddings, _ := section["embeddings"].(map[string]any)
 			oldModel, _ := embeddings["model"].(string)
-			if _, hasServers := embeddings["servers"]; oldModel == "" && !hasServers {
-				oldModel = defaultNomicModel
-			}
-			if oldModel != model || embeddings == nil {
+			_, hasServers := embeddings["servers"]
+			if embeddings == nil || (oldModel != model && !(oldModel == "" && !hasServers && model == defaultNomicModel)) {
 				embeddings = make(map[string]any)
 			}
 			delete(embeddings, "default_server")
 			embeddings["model"] = model
 			embeddings["dimension"] = dimension
 			embeddings["servers"] = map[string]any{"default": server}
-			if isNomicModel(model) {
+			if isNomicModel(model) && oldModel != model {
 				for key, value := range map[string]any{
 					"max_input_chars":      nomicMaxInputChars,
 					"model_context_tokens": nomicModelContextTokens,

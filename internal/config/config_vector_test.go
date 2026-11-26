@@ -485,6 +485,19 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 		assert.Equal(t, "search_document: ", got.DocumentPrefix)
 	})
 
+	t.Run("explicit Nomic keeps effective recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n")
+		cfg := f.LoadFile(t)
+		before := cfg.Vector.Embeddings
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 768, ""))
+		after := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, before.MaxInputChars, after.MaxInputChars)
+		assert.Equal(t, before.ModelContextTokens, after.ModelContextTokens)
+		assert.Equal(t, before.QueryPrefix, after.QueryPrefix)
+		assert.Equal(t, before.DocumentPrefix, after.DocumentPrefix)
+	})
+
 	t.Run("same model keeps recipe", func(t *testing.T) {
 		f := newConfigFixture(t)
 		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\nmax_input_chars = 1234\ninput_suffix = 'suffix'\n")
