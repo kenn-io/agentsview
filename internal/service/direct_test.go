@@ -946,6 +946,53 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 	assert.Contains(t, msg, "session sync <id>")
 }
 
+func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
+	for _, requested := range []int{0, 1} {
+		t.Run([]string{"ordinary", "older labeled"}[requested], func(t *testing.T) {
+			root := t.TempDir()
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+			roots := []string{filepath.Join(root, "ordinary"), filepath.Join(root, "logs")}
+			paths := []string{
+				filepath.Join(roots[0], "2026", "10", "08", name),
+				filepath.Join(roots[1], "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
+				filepath.Join(roots[1], "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
+			}
+			for i, path := range paths {
+				meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+				dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
+				mtime := time.Now().Add(time.Duration(i) * time.Hour)
+				require.NoError(t, os.Chtimes(path, mtime, mtime))
+			}
+			d := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
+			t.Cleanup(engine.Close)
+			svc := service.NewDirectBackend(d, engine)
+			detail, err := svc.Sync(t.Context(), service.SyncInput{Path: paths[requested]})
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			assert.Equal(t, "codex:"+id, detail.ID)
+			assert.Equal(t, "b", detail.Project)
+			require.NotNil(t, detail.FirstMessage)
+			assert.Equal(t, "b", *detail.FirstMessage)
+		})
+	}
+}
+
+func TestDirectBackend_Sync_RemoteCodexID(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	path := "remote:/archive/session.jsonl"
+	const id = "remote~codex:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "codex", Machine: "remote", Project: "archived", FilePath: &path}))
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	detail, err := service.NewDirectBackend(d, engine).Sync(t.Context(), service.SyncInput{ID: id})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, id, detail.ID)
+	assert.Equal(t, "archived", detail.Project)
+}
+
 func TestDirectBackend_Sync_CodexID(t *testing.T) {
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"

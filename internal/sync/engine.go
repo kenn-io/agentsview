@@ -1632,7 +1632,7 @@ func (e *Engine) prepareChangedPathSync(
 // one owned pass. The caller holds syncMu, so this progress cannot overwrite a
 // different pass while waiting to enter the serialized sync path.
 func (e *Engine) syncChangedPathsLocked(
-	ctx context.Context, paths []string,
+	ctx context.Context, paths []string, selectedCodexPath *string,
 ) (stats SyncStats, tombstoned int, retErr error) {
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, paths)
 	if err != nil {
@@ -1650,6 +1650,9 @@ func (e *Engine) syncChangedPathsLocked(
 	e.invalidateNativeTitleCache(paths)
 	summary := e.beginChangedPathPass(paths)
 	prepared := e.prepareChangedPathSync(ctx, paths)
+	if selectedCodexPath != nil && len(prepared.files) == 1 && prepared.files[0].Agent == parser.AgentCodex {
+		*selectedCodexPath = prepared.files[0].Path
+	}
 	summary.sources = len(prepared.files)
 	defer func() { log.Print(summary.finish(e, stats)) }()
 	if len(prepared.missingPaths) > 0 && ctx.Value(pollScanSyncContextKey{}) != nil {
@@ -1844,6 +1847,13 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	return e.syncPathsContext(ctx, paths, false)
 }
 
+// SyncPathContext returns the selected Codex path when one source owns the event.
+func (e *Engine) SyncPathContext(ctx context.Context, path string) (string, error) {
+	var selected string
+	err := e.syncPathsWithLockContext(ctx, []string{path}, false, false, &selected)
+	return selected, err
+}
+
 // ReparsePathsContext fully parses only the selected sources, retaining the
 // normal publication rules and bounded-memory staging for large Codex files.
 func (e *Engine) ReparsePathsContext(ctx context.Context, paths []string) error {
@@ -1851,10 +1861,10 @@ func (e *Engine) ReparsePathsContext(ctx context.Context, paths []string) error 
 }
 
 func (e *Engine) syncPathsContext(ctx context.Context, paths []string, force bool) error {
-	return e.syncPathsWithLockContext(ctx, paths, force, false)
+	return e.syncPathsWithLockContext(ctx, paths, force, false, nil)
 }
 
-func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, force, try bool) error {
+func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, force, try bool, selectedCodexPath *string) error {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -1871,7 +1881,7 @@ func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, f
 		previous := e.forceFullParse
 		e.forceFullParse = previous || force
 		defer func() { e.forceFullParse = previous }()
-		return e.syncChangedPathsLocked(ctx, paths)
+		return e.syncChangedPathsLocked(ctx, paths, selectedCodexPath)
 	}()
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
@@ -4333,7 +4343,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
 	if len(wakePaths) > 0 && ctx.Err() == nil && !stats.Aborted {
-		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths)
+		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths, nil)
 		var merged SyncStats
 		mergeReconciliationSyncStats(&merged, stats)
 		mergeReconciliationSyncStats(&merged, wakeStats)
