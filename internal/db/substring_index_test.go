@@ -499,8 +499,10 @@ func TestRequiredLiterals(t *testing.T) {
 		{`unique-rare.*common fixed portion`, []regexLiteral{{text: "unique-rare"}, {text: "common fixed portion"}}},
 		{`foo(?:alpha|zebra)bar`, []regexLiteral{{text: "foo"}, {text: "bar"}}},
 		{`fo(o)`, []regexLiteral{{text: "fo"}, {text: "o"}}},
-		{`abc*`, []regexLiteral{{text: "ab"}}}, {`(?:abc){2,3}`, []regexLiteral{{text: "abc"}}},
-		{`(?i)KELVIN`, []regexLiteral{{text: "elvin", fold: true}}}, {`(?i)sk`, nil},
+		{`abc*`, []regexLiteral{{text: "ab"}}},
+		{`(?:abc){2,3}`, []regexLiteral{{text: "abc"}}},
+		{`(?i)KELVIN`, []regexLiteral{{text: "elvin", fold: true}}},
+		{`(?i)sk`, nil},
 		{`ab\x00cdef`, []regexLiteral{{text: "ab"}, {text: "cdef"}}},
 		{`abc\x{FFFD}def`, []regexLiteral{{text: "abc"}, {text: "def"}}},
 	} {

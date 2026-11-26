@@ -1237,6 +1237,10 @@ func requiredLiterals(pattern string) []regexLiteral {
 			for _, sub := range re.Sub {
 				visit(sub)
 			}
+		case syntax.OpNoMatch, syntax.OpEmptyMatch, syntax.OpCharClass, syntax.OpAnyCharNotNL,
+			syntax.OpAnyChar, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText,
+			syntax.OpEndText, syntax.OpWordBoundary, syntax.OpNoWordBoundary, syntax.OpStar,
+			syntax.OpQuest, syntax.OpAlternate:
 		}
 	}
 	visit(re)
