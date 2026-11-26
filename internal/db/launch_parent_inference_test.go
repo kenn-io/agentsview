@@ -759,5 +759,9 @@ func TestLaunchParentDenseBatchIngest(t *testing.T) {
 			s.SessionKind = "non-interactive"
 		})
 	}
-	assert.Less(t, time.Since(start), 20*time.Second, "dense launch ingest repeatedly scans the same candidates")
+	limit := 20 * time.Second
+	if raceEnabled {
+		limit = 2 * time.Minute
+	}
+	assert.Less(t, time.Since(start), limit, "dense launch ingest repeatedly scans the same candidates")
 }
