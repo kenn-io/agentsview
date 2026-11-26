@@ -15,13 +15,6 @@ func OneShotRun(agent string, args []string) bool {
 	return found
 }
 
-func oneShotRunState(agent string, args []string) (bool, bool) {
-	if launchHelpOption(agent, args) {
-		return false, true
-	}
-	return oneShotRunArgsState(agent, args)
-}
-
 func launchHelpOption(agent string, args []string) bool {
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--" {
@@ -37,7 +30,7 @@ func launchHelpOption(agent string, args []string) bool {
 	return false
 }
 
-func oneShotRunArgsState(agent string, args []string) (bool, bool) {
+func oneShotRunState(agent string, args []string) (bool, bool) {
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
