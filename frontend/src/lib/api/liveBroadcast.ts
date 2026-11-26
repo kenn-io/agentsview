@@ -47,7 +47,9 @@ export class LiveBroadcast {
       if (message.type === "frame") {
         if (message.id !== this.id) return;
         if (this.hub) {
-          if (message.from && message.from < this.id) this.stepDown();
+          // With Web Locks, the lock holder is the only leader, so a frame from
+          // another hub is a stale leftover from the previous leader.
+          if (!this.useLocks && message.from && message.from < this.id) this.stepDown();
           else {
             this.announce();
             return;

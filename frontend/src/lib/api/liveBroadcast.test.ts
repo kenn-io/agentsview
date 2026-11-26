@@ -243,6 +243,41 @@ it("keeps leadership across brief hide/show and yields after staying idle", asyn
   expect(hubs).toHaveLength(2);
 });
 
+it("keeps the new lock holder's hub when a stale frame from the previous leader arrives", async () => {
+  const locks = new FakeLockManager();
+  vi.stubGlobal("navigator", { locks });
+  vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
+  const leader = new LiveBroadcast("http://example.test");
+  const sendLeader = leader.connect(() => {});
+  sendLeader(request("s1"));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
+  const followerFrames: LiveFrame[] = [];
+  const follower = new LiveBroadcast("http://example.test");
+  const sendFollower = follower.connect((frame) => followerFrames.push(frame));
+  sendFollower(request("s2"));
+  await Promise.resolve();
+  expect(hubs).toHaveLength(1);
+  const [port] = hubs[0]!.update.mock.calls.find(
+    ([, value]) => (value as LiveRequest).session === "s2",
+  ) as [LivePort, LiveRequest];
+
+  // The old leader's frame is still queued when its lock passes to the follower.
+  FakeChannel.deliverImmediately = false;
+  port.postMessage({ type: "session_updated", data: "s2" });
+  locks.dropCurrent("agentsview-live:http://example.test");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(hubs).toHaveLength(2);
+
+  FakeChannel.deliverImmediately = true;
+  FakeChannel.flush();
+  expect(hubs[1]!.close).not.toHaveBeenCalled();
+  expect(followerFrames).toEqual([]);
+});
+
 it("steps down immediately in BroadcastChannel fallback when a superior leader appears", () => {
   vi.stubGlobal("navigator", {});
   vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
