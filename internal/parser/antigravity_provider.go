@@ -166,7 +166,7 @@ func (p *antigravityProvider) Parse(
 		sess.ParentSessionID = antigravityIDPrefix + parent
 		sess.RelationshipType = RelSubagent
 	}
-	applyAntigravityTitle(ctx, sess, src)
+	applyAntigravityTitle(ctx, sess, src.Root, src.ID)
 	if antigravityHashCoversSummary(req.Fingerprint.Hash, summaries.fingerprintDigest(src.ID)) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}

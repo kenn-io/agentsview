@@ -1299,19 +1299,36 @@ func loadAntigravityTitleVerification(root string) antigravityTitleVerification 
 	return applied
 }
 
+func (p *PreparedRemote) hasAntigravityTitleTargets() bool {
+	return len(p.targets.Dirs[parser.AgentAntigravity]) > 0 ||
+		len(p.targets.Dirs[parser.AgentAntigravityCLI]) > 0
+}
+
 func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
-	if len(p.targets.Dirs[parser.AgentAntigravity]) == 0 || p.sync.DB.ArchiveContent().UsageOnly() {
+	if !p.hasAntigravityTitleTargets() || p.sync.DB.ArchiveContent().UsageOnly() {
 		return false, nil
 	}
 	current := make(map[string]parser.SQLiteContainerState)
-	for _, remoteRoot := range p.targets.Dirs[parser.AgentAntigravity] {
-		root, err := safeRemappedRemotePath(p.root, remoteRoot)
-		if err != nil {
-			return false, err
-		}
-		store := filepath.Join(root, parser.AntigravitySummariesDBName)
-		if state, ok := parser.StatSQLiteContainerState(store); ok {
-			current[store] = state
+	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI} {
+		for _, remoteRoot := range p.targets.Dirs[agent] {
+			root, err := safeRemappedRemotePath(p.root, remoteRoot)
+			if err != nil {
+				return false, err
+			}
+			roots := []string{root}
+			if agent == parser.AgentAntigravityCLI {
+				var expandErr error
+				roots, expandErr = parser.ExpandAntigravityCLIRoot(root)
+				if expandErr != nil {
+					return false, expandErr
+				}
+			}
+			for _, leaf := range roots {
+				store := filepath.Join(leaf, parser.AntigravitySummariesDBName)
+				if state, ok := parser.StatSQLiteContainerState(store); ok {
+					current[store] = state
+				}
+			}
 		}
 	}
 	applied := loadAntigravityTitleVerification(p.root)
@@ -1322,7 +1339,7 @@ func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
 }
 
 func (p *PreparedRemote) persistAntigravityTitleStates() error {
-	if len(p.targets.Dirs[parser.AgentAntigravity]) == 0 || p.sync.DB.ArchiveContent().UsageOnly() {
+	if !p.hasAntigravityTitleTargets() || p.sync.DB.ArchiveContent().UsageOnly() {
 		return nil
 	}
 	if data, err := os.ReadFile(mirrorAntigravityTitlesPath(p.root)); err == nil {

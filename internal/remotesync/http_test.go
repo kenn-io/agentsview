@@ -1385,6 +1385,64 @@ func TestHTTPUnchangedMirrorBackfillsAntigravityTitles(t *testing.T) {
 	}
 }
 
+func TestHTTPUnchangedMirrorBackfillsAntigravityCLITitles(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	cliRoot := filepath.Join(remote.dir, "instance-a", "antigravity-acp")
+	conversations := filepath.Join(cliRoot, "conversations")
+	require.NoError(t, os.MkdirAll(conversations, 0o700))
+	dbPath := filepath.Join(conversations, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, cliRoot, "hello")
+	dbtest.SetAntigravityTitle(t, cliRoot, "Saved CLI title")
+	remote.targets.Dirs = map[parser.AgentType][]string{parser.AgentAntigravityCLI: {cliRoot}}
+
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	first, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SessionsSynced)
+	const sessionID = "devbox~antigravity-cli:" + dbtest.AntigravityTitleID
+	session, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, new("Saved CLI title"), session.SessionName)
+
+	// Simulate an existing mirror from before Antigravity CLI title import:
+	// the title store is already mirrored, the session is untitled, and the
+	// verification sidecar is missing.
+	sidecar := mirrorAntigravityTitlesPath(MirrorDir(hs.DataDir, hs.Host))
+	require.NoError(t, database.RefreshNativeSessionName(t.Context(), sessionID, nil))
+	require.NoError(t, os.Remove(sidecar))
+	requests := len(remote.archiveRequests)
+
+	backfill, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, backfill.SessionsSynced)
+	assert.Empty(t, backfill.FullReason)
+	assert.Zero(t, backfill.FilesDiscovered)
+	assert.Zero(t, backfill.FilesProcessed)
+	assert.Len(t, remote.archiveRequests, requests)
+	session, err = database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Saved CLI title"), session.SessionName)
+
+	idle, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, SyncStats{}, idle)
+
+	dbtest.SetAntigravityTitle(t, cliRoot, "Renamed CLI title")
+	updated, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated.SessionsSynced)
+	session, err = database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Renamed CLI title"), session.SessionName)
+}
+
 func TestHTTPAntigravityAppliedStatesCoverMultipleRoots(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	var roots []string

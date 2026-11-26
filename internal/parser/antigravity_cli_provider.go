@@ -150,6 +150,9 @@ func (p *antigravityCLIProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
+	if !strings.HasPrefix(src.ID, antigravityImplicitTag) {
+		applyAntigravityTitle(ctx, sess, src.Root, src.ID)
+	}
 	if antigravityHashCoversSummary(req.Fingerprint.Hash, status.summaryDigest) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
@@ -529,10 +532,14 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				DebounceKey:  string(AgentAntigravityCLI) + ":conversations:" + root,
 			},
 			WatchRoot{
-				Path:         root,
-				Recursive:    false,
-				IncludeGlobs: []string{"history.jsonl"},
-				DebounceKey:  string(AgentAntigravityCLI) + ":history:" + root,
+				Path:      root,
+				Recursive: false,
+				IncludeGlobs: []string{
+					"history.jsonl",
+					AntigravitySummariesDBName,
+					AntigravitySummariesDBName + "-wal",
+				},
+				DebounceKey: string(AgentAntigravityCLI) + ":history:" + root,
 			},
 			WatchRoot{
 				Path:         filepath.Join(root, "cache"),
@@ -1017,6 +1024,7 @@ func antigravityCLIProviderCapabilities() Capabilities {
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
 			Relationships:        CapabilitySupported,
 			Thinking:             CapabilitySupported,

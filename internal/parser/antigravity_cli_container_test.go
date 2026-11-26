@@ -151,6 +151,23 @@ func TestAntigravityCLIProviderExpandsMetaHarnessContainers(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, parsed.Results, 1)
 			assert.Equal(t, "antigravity-cli:"+idA, parsed.Results[0].Result.Session.ID)
+			assert.Equal(t, "Sample Title", parsed.Results[0].Result.Session.SessionName)
+			assert.True(t, parsed.Results[0].Result.Session.SessionNamePresent)
+
+			// Implicit sessions share a UUID with conversations/ and must not
+			// claim the conversation's title.
+			foundImplicitA, ok, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: implicitA})
+			require.NoError(t, err)
+			require.True(t, ok)
+			implicitFP, err := provider.Fingerprint(t.Context(), foundImplicitA)
+			require.NoError(t, err)
+			parsedImplicit, err := provider.Parse(t.Context(), ParseRequest{
+				Source: foundImplicitA, Fingerprint: implicitFP, Machine: "devbox",
+			})
+			require.NoError(t, err)
+			require.Len(t, parsedImplicit.Results, 1)
+			assert.Empty(t, parsedImplicit.Results[0].Result.Session.SessionName)
+			assert.False(t, parsedImplicit.Results[0].Result.Session.SessionNamePresent)
 
 			// Changed-path routing maps .db-wal and brain transcript directly to the owning session.
 			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{

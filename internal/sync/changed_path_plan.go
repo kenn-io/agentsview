@@ -120,7 +120,7 @@ func (e *Engine) planOneChangedPath(
 			)
 			continue
 		}
-		if agent == parser.AgentAntigravity &&
+		if (agent == parser.AgentAntigravity || agent == parser.AgentAntigravityCLI) &&
 			strings.TrimSuffix(filepath.Base(path), "-wal") == parser.AntigravitySummariesDBName {
 			// The title store holds no transcripts; titles reconcile after the plan runs.
 			continue

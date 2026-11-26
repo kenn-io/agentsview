@@ -74,6 +74,45 @@ func TestAntigravityFramelessWALEventsDoNotRereadStore(t *testing.T) {
 	assert.Empty(t, spy.queries, "reader-created WAL events must not reread titles")
 }
 
+func TestAntigravityCLIFramelessWALEventsDoNotRereadStore(t *testing.T) {
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	sessionRoot := filepath.Join(container, "inst-a", "antigravity-acp")
+	convDir := filepath.Join(sessionRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(convDir, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, sessionRoot, "hello")
+	store := dbtest.SetAntigravityTitle(t, sessionRoot, "First")
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {container}},
+		Machine:   "host-a",
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	spy := &antigravityTitleQuerySpy{Store: archive, reader: archive}
+	engine.archiveStore = spy
+	engine.deferredNativeTitles = make(map[string]*string)
+	for _, size := range []int{0, 32} {
+		require.NoError(t, os.WriteFile(store+"-wal", make([]byte, size), 0o600))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store + "-wal"}))
+		require.NoError(t, os.Remove(store+"-wal"))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store + "-wal"}))
+		plan, err := engine.PlanChangedPathsContext(t.Context(), []string{store + "-wal"})
+		require.NoError(t, err)
+		assert.Empty(t, plan.Files)
+		assert.Empty(t, plan.FallbackProviders)
+		_, err = engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+		require.NoError(t, err)
+	}
+	assert.Empty(t, spy.queries, "reader-created WAL events must not reread CLI titles")
+}
+
 func TestQoderTitleStoreOutsideWatchedRootsDoesNotRetry(t *testing.T) {
 	root, store := testjsonl.QoderTitleRoot(t)
 	transcript := testjsonl.WriteQoderTranscript(t, root, testjsonl.QoderTitleID, "hello")

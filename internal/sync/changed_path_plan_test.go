@@ -1056,6 +1056,34 @@ func TestPlanChangedPathsAntigravityTitleStoreIndex(t *testing.T) {
 		"reading titles rewrites their WAL index without changing any session")
 }
 
+func TestPlanChangedPathsAntigravityCLITitleStore(t *testing.T) {
+	base := t.TempDir()
+	directRoot := filepath.Join(base, "antigravity-cli")
+	container := filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+	instanceRoot := filepath.Join(container, "hash1", "antigravity-acp")
+	require.NoError(t, os.MkdirAll(filepath.Join(directRoot, "conversations"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(instanceRoot, "conversations"), 0o700))
+
+	engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {directRoot, container},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	for _, root := range []string{directRoot, instanceRoot} {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			path := filepath.Join(root, parser.AntigravitySummariesDBName+suffix)
+			require.NoError(t, os.WriteFile(path, nil, 0o600))
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{path})
+			require.NoError(t, err)
+			assert.Empty(t, plan.Files, "path %s", path)
+			assert.Empty(t, plan.FallbackProviders, "path %s must not trigger fallback scan", path)
+		}
+	}
+}
+
 // Codex's own databases and lock files in its home directory change
 // constantly. Before Codex classified them, each event fell back to a scan
 // of every Codex transcript.

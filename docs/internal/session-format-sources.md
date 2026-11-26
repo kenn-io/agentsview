@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-23
+last_edited: 2026-11-26
 ---
 
 # Session Format Source Inventory
@@ -5439,7 +5439,12 @@ schemas keep their existing ordering behavior.
   uses `~/.gemini/antigravity/conversation_summaries.db` with
   `conversation_summaries(conversation_id PRIMARY KEY, title, ...)` in the
   desktop app. The IDE root is read the same way but remains unconfirmed;
-  `antigravity-cli` has no known title store. Titles stay out of the
+  `antigravity-cli` shares the same title store table and reconciliation path
+  (reverified 2026-11-26 against local `antigravity-acp` profiles under
+  `~/.t3/userdata/providers/antigravity/<hash>/antigravity-acp`, where
+  `conversation_summaries.title` holds generated conversation titles, and
+  standalone `~/.gemini/antigravity-cli/conversation_summaries.db`, where
+  `title` was empty `""`). Titles stay out of the
   transcript fingerprint: parsing copies the saved title, and each sync pass
   copies changed titles onto stored sessions, including those whose transcript
   is gone. A NULL title or unreadable store keeps the stored title; a blank
@@ -5605,10 +5610,12 @@ schemas keep their existing ordering behavior.
   `cache/last_conversations.json`. Agentsview includes
   `$T3CODE_HOME/userdata/providers/antigravity` (default
   `~/.t3/userdata/providers/antigravity`) as a default container root for
-  `antigravity-cli` and expands per-instance roots dynamically across both T3
+  `antigravity-cli`, expands per-instance roots dynamically across both T3
   Code and user-configured meta-harness containers
   (`internal/config/meta_harnesses.go`, `internal/parser/instance_container.go`,
-  and `internal/parser/antigravity_cli_provider.go`). Evidence remains
+  and `internal/parser/antigravity_cli_provider.go`), and imports
+  `conversation_summaries.title` into `session_name` on parse and native-title
+  reconciliation (excluding `implicit/` sessions). Evidence remains
   `no-public-source`.
 
 ## iFlow CLI (`iflow`)
