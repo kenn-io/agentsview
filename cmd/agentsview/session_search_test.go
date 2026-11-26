@@ -1044,33 +1044,3 @@ func TestSessionSearchHybridKeywordFallback(t *testing.T) {
 	require.NotEmpty(t, got.Note)
 	assert.Equal(t, got.Note+"\n", stderr.String())
 }
-
-type deadlineCLIService struct {
-	service.SessionService
-	deadlines []time.Time
-}
-
-func (s *deadlineCLIService) SupportsRecallQueries() bool { return true }
-
-func (s *deadlineCLIService) MemoryStatus(context.Context) (service.MemoryStatus, error) {
-	return service.MemoryStatus{}, errors.New("status unavailable")
-}
-
-func (s *deadlineCLIService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
-	deadline, _ := ctx.Deadline()
-	s.deadlines = append(s.deadlines, deadline)
-	return &service.ContentSearchResult{}, nil
-}
-
-func TestSessionSearchFollowupsShareDeadline(t *testing.T) {
-	svc := &deadlineCLIService{}
-	cmd := newSessionSearchCommand()
-	req := service.ContentSearchRequest{Pattern: "missing words", Mode: "substring"}
-	_, _, err := searchContentWithHints(t.Context(), cmd, svc, req)
-	require.NoError(t, err)
-	require.Greater(t, len(svc.deadlines), 1)
-	assert.False(t, svc.deadlines[0].IsZero())
-	for _, deadline := range svc.deadlines {
-		assert.Equal(t, svc.deadlines[0], deadline)
-	}
-}

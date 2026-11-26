@@ -1210,8 +1210,6 @@ func (t *toolset) searchContent(
 	if listing {
 		req.Sources = []string{"messages"}
 	}
-	ctx, cancel := service.ContentSearchContext(ctx, t.svc, req)
-	defer cancel()
 	res, err := t.searchContentMatches(ctx, req, listing)
 	if err != nil {
 		return nil, searchContentOut{}, err
@@ -1280,9 +1278,7 @@ func (t *toolset) searchContent(
 			out.NextCursor, out.Note = nil, strings.TrimSpace(out.Note+" Reduce limit to fit ranked results in one response.")
 		} else if len(items) > 0 {
 			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, legacy, keepMatch)
-			if errors.Is(err, context.DeadlineExceeded) {
-				out.Note = strings.TrimSpace(out.Note + " Match count timed out.")
-			} else if err != nil {
+			if err != nil {
 				return nil, searchContentOut{}, err
 			}
 		}

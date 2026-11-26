@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -19,80 +18,35 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 	previous := contentScanTimeout
 	contentScanTimeout = time.Nanosecond
 	t.Cleanup(func() { contentScanTimeout = previous })
-	for _, tc := range []struct {
-		name, mode, pattern, sessionID string
-		keywordOnly                    bool
-	}{
-		{"session substring", "substring", "ask opus and fable", "s1", false},
-		{"session regex", "regex", "ask.*fable", "s1", false},
-		{"session terms", "terms", "ask opus and fable", "s1", false},
-		{"fts", "fts", "ask opus and fable", "", false},
-		{"hybrid", "hybrid", "ask opus and fable", "", true},
+	for _, tc := range []struct{ mode, pattern string }{
+		{"substring", "ask opus and fable"},
+		{"regex", "ask.*fable"},
+		{"terms", "ask opus and fable"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, SessionID: tc.sessionID, KeywordOnly: tc.keywordOnly})
+		t.Run(tc.mode, func(t *testing.T) {
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, SessionID: "s1"})
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		})
 	}
 }
 
-type hybridDeadlineSearcher struct {
-	fakeVectorSearcher
-	hasDeadline bool
-}
-
-func (s *hybridDeadlineSearcher) PrepareSemanticSearch(ctx context.Context, pattern string) (VectorSearchPage, int, error) {
-	_, s.hasDeadline = ctx.Deadline()
-	return s.fakeVectorSearcher.PrepareSemanticSearch(ctx, pattern)
-}
-
-func TestContentScanHybridPreservesVectorDeadline(t *testing.T) {
-	d := testDB(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("fts5 not available")
-	}
-	searcher := &hybridDeadlineSearcher{}
-	d.SetVectorSearcher(searcher)
-	_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "needle"})
-	require.NoError(t, err)
-	assert.False(t, searcher.hasDeadline)
-}
-
-func TestContentScanDeadlineIncludesSlotWait(t *testing.T) {
-	for _, mode := range []string{"substring", "regex", "terms"} {
+func TestContentSearchFTSProbeDeadline(t *testing.T) {
+	for _, mode := range []string{"fts", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				d := testDB(t)
-				var releases []func()
-				defer func() {
-					for _, release := range releases {
-						release()
-					}
-				}()
-				for range bulkReadSlots {
-					release, ok := d.tryAcquireBulkRead()
-					require.True(t, ok)
-					releases = append(releases, release)
-				}
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				done := make(chan error, 1)
-				go func() {
-					_, err := d.SearchContent(ctx, ContentSearchFilter{Mode: mode, Pattern: "needle"})
-					done <- err
-				}()
-				synctest.Wait()
-				time.Sleep(contentScanTimeout)
-				synctest.Wait()
-				select {
-				case err := <-done:
-					require.ErrorIs(t, err, context.DeadlineExceeded)
-				default:
-					cancel()
-					<-done
-					require.FailNow(t, "search did not stop while waiting for a slot")
-				}
-			})
+			d := testDB(t)
+			requireFTS(t, d)
+			reader := d.rawReader()
+			reader.SetMaxOpenConns(1)
+			conn, err := reader.Conn(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+
+			waits := reader.Stats().WaitCount
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: deadline expires while the reader connection is held
+			defer cancel()
+			_, err = d.SearchContent(ctx, ContentSearchFilter{Mode: mode, Pattern: "hello", KeywordOnly: true})
+			assert.Greater(t, reader.Stats().WaitCount, waits)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 		})
 	}
 }

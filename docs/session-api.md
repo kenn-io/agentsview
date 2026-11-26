@@ -845,11 +845,6 @@ Run a substring, RE2 regex, or FTS5 search across message bodies, thinking,
 tool inputs, and tool result content. The response shape matches
 `GET /api/v1/search/content`.
 
-On a local archive, substring, regex, terms, and FTS searches stop after two
-minutes. A hybrid search that falls back to keywords has the same limit (HTTP
-504 from the API). Narrow a search with `--date-from` or `--project`
-(`date_from` or `project` over HTTP).
-
 ```bash
 agentsview session search <pattern> [flags]
 ```

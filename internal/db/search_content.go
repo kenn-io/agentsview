@@ -24,6 +24,7 @@ const (
 	ContentSnippetRadius      = 60 // chars of context on each side of a match
 )
 
+// contentScanTimeout stops a keyword search so it frees its reader connection.
 var contentScanTimeout = 2 * time.Minute
 
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields
@@ -299,16 +300,6 @@ func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
-// ContentScanBounded reports whether a search uses the local keyword scan deadline.
-func ContentScanBounded(mode string, keywordOnly bool) bool {
-	return mode != "semantic" && (mode != "hybrid" || keywordOnly)
-}
-
-// WithContentScanDeadline bounds a content scan and its follow-up searches.
-func WithContentScanDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, contentScanTimeout)
-}
-
 // SearchContent runs a content search and returns a page of matches.
 func (db *DB) SearchContent(
 	ctx context.Context, f ContentSearchFilter,
@@ -319,9 +310,9 @@ func (db *DB) SearchContent(
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
 	}
-	if ContentScanBounded(f.Mode, f.KeywordOnly) {
+	if f.Mode != "semantic" && (f.Mode != "hybrid" || f.KeywordOnly) {
 		var cancel context.CancelFunc
-		ctx, cancel = WithContentScanDeadline(ctx)
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
 		defer cancel()
 	}
 
