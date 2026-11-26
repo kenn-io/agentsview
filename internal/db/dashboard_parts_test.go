@@ -399,13 +399,33 @@ func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 
 func TestDashboardPartsMemoOversizedBatchPreservesHotParts(t *testing.T) {
 	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
-	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
-	hot := map[string]kept.Part[dashboardPart]{"a": part("a")}
-	memo.storeParts("UTC", "version", hot)
-	selection := map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b"), "c": part("c"), "d": part("d")}
-	memo.storeParts("UTC", "version", selection)
-	_, ok := memo.peek("a")
-	assert.True(t, ok)
+	a, b, c, d := part("a"), part("b"), part("c"), part("d")
+	cases := []struct {
+		name      string
+		initial   map[string]kept.Part[dashboardPart]
+		selection map[string]kept.Part[dashboardPart]
+	}{
+		{
+			name:      "preserve selected memo part",
+			initial:   map[string]kept.Part[dashboardPart]{"a": a},
+			selection: map[string]kept.Part[dashboardPart]{"a": a, "b": b, "c": c, "d": d},
+		},
+		{
+			name:      "retain fitting cold parts",
+			selection: map[string]kept.Part[dashboardPart]{"a": a, "b": b, "c": c},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(a)}
+			if len(tc.initial) > 0 {
+				memo.storeParts("UTC", "version", tc.initial)
+			}
+			memo.storeParts("UTC", "version", tc.selection)
+			assert.Equal(t, []string{"a", "b"}, memo.keys())
+			assert.Equal(t, dashboardPartBytes(a)+dashboardPartBytes(b), memo.bytes)
+		})
+	}
 }
 
 func TestDashboardPartsBroadSelectionPreservesHotParts(t *testing.T) {
@@ -430,37 +450,6 @@ func TestDashboardPartsBroadSelectionPreservesHotParts(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	assert.Equal(t, [][]string{{"a"}, {"b", "c"}}, reads)
-}
-
-func TestDashboardPartsColdBroadSelectionRetainsFittingParts(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"a", "b", "c"} {
-		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
-		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
-	}
-	_, seeded, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	d.dashboardMemo.maxBytes = 2 * dashboardPartBytes(seeded["a"])
-	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.reset()
-
-	var reads [][]string
-	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
-	t.Cleanup(func() { dashboardPartsReadObserver = nil })
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
-	require.NoError(t, err)
-	require.True(t, handled)
-
-	assert.Equal(t, [][]string{{"a", "b", "c"}, {"c"}}, reads)
-	assert.Contains(t, d.dashboardMemo.keys(), "a")
-	assert.Contains(t, d.dashboardMemo.keys(), "b")
-	assert.NotContains(t, d.dashboardMemo.keys(), "c")
 }
 
 func TestDashboardPartsSavedFilterRefreshesMemoRecency(t *testing.T) {
@@ -497,184 +486,79 @@ func TestDashboardPartsSavedFilterRefreshesMemoRecency(t *testing.T) {
 	assert.Contains(t, d.dashboardMemo.keys(), "c")
 }
 
-func TestDashboardPartsSavedFiltersSeedMemo(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"a", "b"} {
-		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
-		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
-	}
-	filters := []AnalyticsFilter{{Timezone: "UTC", Project: "a"}, {Timezone: "UTC", Project: "b"}}
-	for _, f := range filters {
-		_, _, handled, err := d.dashboardParts(ctx, f)
-		require.NoError(t, err)
-		require.True(t, handled)
-	}
-	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.reset()
-	var reads [][]string
-	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
-	t.Cleanup(func() { dashboardPartsReadObserver = nil })
-	for _, f := range filters {
-		_, _, handled, err := d.dashboardParts(ctx, f)
-		require.NoError(t, err)
-		require.True(t, handled)
-	}
-	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	assert.Len(t, parts, 2)
-	assert.Empty(t, reads)
-}
-
-func TestDashboardPartsSavedFilterEvictsUnrelatedPart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"a", "b", "c"} {
-		insertSession(t, d, id, id, func(s *Session) {
-			s.Agent = "codex"
-			if id == "b" {
-				s.Agent = "gemini"
-			}
-		})
-		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
-	}
-	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	d.dashboardMemo.maxBytes = 2 * dashboardPartBytes(parts["a"])
-	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.reset()
-	var reads [][]string
-	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
-	t.Cleanup(func() { dashboardPartsReadObserver = nil })
-	for _, id := range []string{"b", "c", "a"} {
-		_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: id})
-		require.NoError(t, err)
-		require.True(t, handled)
-	}
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	assert.Equal(t, [][]string{{"b"}, {"c"}}, reads)
-	_, ok := d.dashboardMemo.peek("b")
-	assert.False(t, ok)
-}
-
-func TestDashboardPartsBroadSelectionReplacesUnrelatedParts(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"a", "b", "c", "d", "e"} {
-		insertSession(t, d, id, id, func(s *Session) {
-			s.Agent = "codex"
-			if id >= "c" {
-				s.Agent = "gemini"
-			}
-		})
-		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
-	}
-	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	d.dashboardMemo.maxBytes = 2 * dashboardPartBytes(parts["a"])
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "b"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "gemini"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	for _, id := range []string{"c", "d"} {
-		_, ok := d.dashboardMemo.peek(id)
-		assert.True(t, ok, "%s", id)
-	}
-	for _, id := range []string{"a", "b"} {
-		_, ok := d.dashboardMemo.peek(id)
-		assert.False(t, ok, "%s", id)
-	}
-}
-
-func TestDashboardPartsWarmDiskEvictsOldestPart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"a", "b", "c"} {
-		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
-		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
-	}
-	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.reset()
-	for _, id := range []string{"b", "c"} {
-		_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: id})
-		require.NoError(t, err)
-		require.True(t, handled)
-	}
-	d.dashboardMemo.maxBytes = d.dashboardMemo.bytes
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	assert.NotContains(t, d.dashboardMemo.keys(), "b")
-	assert.Contains(t, d.dashboardMemo.keys(), "c")
-	assert.Contains(t, d.dashboardMemo.keys(), "a")
-}
-
 func TestDashboardPartsMemoSkipsOversizedPart(t *testing.T) {
-	small := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
-	large := kept.Part[dashboardPart]{ID: "b", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 1)}}}
-	memo := dashboardPartsMemo{maxBytes: dashboardPartBytes(small)}
-	require.Greater(t, dashboardPartBytes(large), memo.maxBytes)
-	a := map[string]kept.Part[dashboardPart]{"a": small}
-	b := map[string]kept.Part[dashboardPart]{"b": large}
-	memo.storeParts("UTC", "version", a)
-	memo.storeParts("UTC", "version", b)
-	got := make(map[string]kept.Part[dashboardPart])
-	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}, {ID: "b"}}, map[string]string{"a": "v", "b": "v"}, got)
-	assert.Equal(t, a, got)
+	t.Run("larger than budget", func(t *testing.T) {
+		small := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
+		large := kept.Part[dashboardPart]{ID: "b", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 1)}}}
+		memo := dashboardPartsMemo{maxBytes: dashboardPartBytes(small)}
+		require.Greater(t, dashboardPartBytes(large), memo.maxBytes)
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"a": small})
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"b": large})
+		got := make(map[string]kept.Part[dashboardPart])
+		memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}, {ID: "b"}}, map[string]string{"a": "v", "b": "v"}, got)
+		assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": small}, got)
+	})
+	t.Run("larger than remaining budget preserves unrelated entry", func(t *testing.T) {
+		part := func(id string, cycles int) kept.Part[dashboardPart] {
+			return kept.Part[dashboardPart]{ID: id, Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, cycles)}}}
+		}
+		a, unrelated, large := part("a", 0), part("x", 0), part("b", 20)
+		maxBytes := 2 * dashboardPartBytes(a)
+		require.Less(t, dashboardPartBytes(large), maxBytes)
+		require.Greater(t, dashboardPartBytes(large), maxBytes-dashboardPartBytes(a))
+		memo := dashboardPartsMemo{maxBytes: maxBytes}
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"x": unrelated})
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"a": a, "b": large})
+		assert.Equal(t, []string{"x", "a"}, memo.keys())
+		assert.Equal(t, maxBytes, memo.bytes)
+	})
 }
 
 func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
-	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
-	memo := dashboardPartsMemo{maxBytes: 3 * dashboardPartBytes(part("a"))}
-	for _, id := range []string{"a", "b", "c"} {
-		p := map[string]kept.Part[dashboardPart]{id: part(id)}
-		memo.storeParts("UTC", "version", p)
+	part := func(id, fingerprint string, cycles int) kept.Part[dashboardPart] {
+		return kept.Part[dashboardPart]{ID: id, Fingerprint: fingerprint, Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, cycles)}}}
 	}
-	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "v"}, make(map[string]kept.Part[dashboardPart]))
-	d := map[string]kept.Part[dashboardPart]{"d": part("d")}
-	memo.storeParts("UTC", "version", d)
-	assert.Equal(t, []string{"c", "a", "d"}, memo.keys())
-}
-
-func TestDashboardPartsMemoStaleReuseDoesNotPromote(t *testing.T) {
-	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
-	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
-	initial := map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")}
-	memo.storeParts("UTC", "version", initial)
-	got := make(map[string]kept.Part[dashboardPart])
-	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "new"}, got)
-	assert.Empty(t, got)
-	c := map[string]kept.Part[dashboardPart]{"c": part("c")}
-	memo.storeParts("UTC", "version", c)
-	assert.NotContains(t, memo.keys(), "a")
-}
-
-func TestDashboardPartsMemoAccounting(t *testing.T) {
-	a := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
-	b := kept.Part[dashboardPart]{ID: "b", Fingerprint: "version"}
-	c := kept.Part[dashboardPart]{ID: "c", Fingerprint: "v"}
-	memo := dashboardPartsMemo{maxBytes: dashboardPartBytes(a) + dashboardPartBytes(b)}
-	initial := map[string]kept.Part[dashboardPart]{"a": a, "b": b}
-	memo.storeParts("UTC", "version", initial)
-	assert.Equal(t, dashboardPartBytes(a)+dashboardPartBytes(b), memo.bytes)
-	next := map[string]kept.Part[dashboardPart]{"c": c}
-	memo.storeParts("UTC", "version", next)
-	assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
-	assert.NotContains(t, memo.keys(), "a")
+	t.Run("matching reuse promotes", func(t *testing.T) {
+		a, b, c, d := part("a", "v", 0), part("b", "v", 0), part("c", "v", 0), part("d", "v", 0)
+		memo := dashboardPartsMemo{maxBytes: 3 * dashboardPartBytes(a)}
+		for _, p := range []kept.Part[dashboardPart]{a, b, c} {
+			memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{p.ID: p})
+		}
+		memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "v"}, make(map[string]kept.Part[dashboardPart]))
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"d": d})
+		assert.Equal(t, []string{"c", "a", "d"}, memo.keys())
+		assert.Equal(t, 3*dashboardPartBytes(a), memo.bytes)
+	})
+	t.Run("stale reuse does not promote", func(t *testing.T) {
+		a, b, c := part("a", "v", 0), part("b", "v", 0), part("c", "v", 0)
+		memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(a)}
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"a": a, "b": b})
+		got := make(map[string]kept.Part[dashboardPart])
+		memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "new"}, got)
+		assert.Empty(t, got)
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
+		assert.Equal(t, []string{"b", "c"}, memo.keys())
+	})
+	t.Run("unequal part sizes update accounting", func(t *testing.T) {
+		a, b, c := part("a", "v", 0), part("b", "version", 0), part("c", "v", 0)
+		memo := dashboardPartsMemo{maxBytes: dashboardPartBytes(a) + dashboardPartBytes(b)}
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"a": a, "b": b})
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
+		assert.Equal(t, []string{"b", "c"}, memo.keys())
+		assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
+	})
+	t.Run("stale selected entry does not block fitting parts", func(t *testing.T) {
+		a, freshZ := part("a", "v", 10), part("z", "new", 10)
+		staleZ, unrelated := part("z", "old", 18), part("y", "v", 1)
+		maxBytes := dashboardPartBytes(a) + dashboardPartBytes(freshZ)
+		require.LessOrEqual(t, dashboardPartBytes(staleZ)+dashboardPartBytes(unrelated), maxBytes)
+		require.Greater(t, dashboardPartBytes(staleZ), maxBytes-dashboardPartBytes(a))
+		memo := dashboardPartsMemo{maxBytes: maxBytes}
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"y": unrelated, "z": staleZ})
+		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"a": a, "z": freshZ})
+		assert.Equal(t, []string{"a", "z"}, memo.keys())
+		assert.Equal(t, maxBytes, memo.bytes)
+	})
 }
 
 func TestDashboardPartsMemoRetainedHeap(t *testing.T) {

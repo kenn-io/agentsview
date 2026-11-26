@@ -67,11 +67,17 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts map[string]k
 	var pending []string
 	var selectedBytes int64
 	for id, p := range parts {
-		if cached, ok := m.peek(id); !ok || cached.Fingerprint != p.Fingerprint {
+		cached, ok := m.peek(id)
+		if !ok {
 			pending = append(pending, id)
-		} else {
-			selectedBytes += dashboardPartBytes(cached)
+			continue
 		}
+		if cached.Fingerprint != p.Fingerprint {
+			m.remove(id)
+			pending = append(pending, id)
+			continue
+		}
+		selectedBytes += dashboardPartBytes(cached)
 	}
 	if len(pending) == 0 {
 		return
@@ -81,7 +87,6 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts map[string]k
 	next := 0
 	for _, id := range pending {
 		p := parts[id]
-		m.remove(id)
 		size := dashboardPartBytes(p)
 		if size > maxBytes-selectedBytes {
 			continue
