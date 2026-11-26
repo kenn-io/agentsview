@@ -1409,11 +1409,14 @@ func (s codexSourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			source, ok := s.sourceRef(root, path, true)
-			if !ok {
-				source, ok = s.directPathSource(root, path, true)
+			if source, ok := s.sourceRef(root, path, true); ok {
+				if !req.RequireFreshSource || req.PreferStoredSource {
+					return source, true, nil
+				}
+				preferred, err := s.preferredKnownRolloutSource(ctx, source)
+				return preferred, err == nil, err
 			}
-			if ok {
+			if source, ok := s.directPathSource(root, path, true); ok {
 				if !req.RequireFreshSource || req.PreferStoredSource {
 					return source, true, nil
 				}

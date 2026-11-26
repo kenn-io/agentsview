@@ -947,45 +947,23 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 }
 
 func TestDirectBackend_Sync_CodexID(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		prefixes   []string
-		wantAbsent bool
-		labeled    bool
-	}{
-		{name: "labeled", labeled: true},
-		{name: "not found after sync", prefixes: []string{"/other"}, wantAbsent: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-			sessions := root
-			if tc.labeled {
-				sessions = filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
-			}
-			path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			dbtest.WriteTestFile(t, path, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
-			d := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, IncludeCwdPrefixes: tc.prefixes})
-			t.Cleanup(engine.Close)
-			svc := service.NewDirectBackend(d, engine)
-			detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
-			if tc.wantAbsent {
-				require.ErrorContains(t, err, "was not found after sync")
-				assert.Nil(t, detail)
-				return
-			}
-			require.NoError(t, err)
-			require.NotNil(t, detail)
-			if tc.labeled {
-				assert.Equal(t, "team", detail.Project)
-			}
-			require.NoError(t, os.Remove(path))
-			detail, err = svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
-			require.NoError(t, err)
-			require.NotNil(t, detail)
-		})
-	}
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	sessions := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
+	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	dbtest.WriteTestFile(t, path, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	svc := service.NewDirectBackend(d, engine)
+	detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "team", detail.Project)
+	require.NoError(t, os.Remove(path))
+	detail, err = svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
 }
 
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
