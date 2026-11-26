@@ -79,6 +79,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"exit before launch", `{"command":"exit 0; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"redirection substitution competitor", `{"command":"cat > \"$(codex exec hi)\""}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"process substitution competitor", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
 		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "shell", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "codex", "codex", `C:\Users\example\project`, ""},
 		{"claude-claude", `{"command":"claude -p hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "claude", "claude", "/repo", ""},

@@ -67,6 +67,7 @@ func TestLaunchCommands(t *testing.T) {
 		{`cmd.exe /c codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`cmd.exe /c "codex exec hi"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`echo $(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`cat <(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Unknown: true}}},
 		{`env echo "$TEXT"`, nil},
 		{`bash -c "$COMMAND"`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
 		{`cd /other && cd nested && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/other/nested"}}}},
