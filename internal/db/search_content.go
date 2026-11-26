@@ -790,9 +790,11 @@ func (db *DB) searchContentRegex(
 		defer release()
 	}
 
-	literals := requiredLiterals(f.Pattern)
-	texts := regexIndexLiterals(re, literals)
-	literals = regexBodyLiterals(re, literals)
+	literals := regexBodyLiterals(re, requiredLiterals(f.Pattern))
+	texts := make([]string, len(literals))
+	for i, literal := range literals {
+		texts[i] = literal.text
+	}
 	out, err := searchWithSubstringCandidates(ctx, db, f, texts,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, literals, candidates)
@@ -1165,20 +1167,9 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	return i, true
 }
 
-// regexIndexLiterals keeps the compiled prefix when captures split it into
-// runs too short for the trigram index.
-func regexIndexLiterals(re *regexp.Regexp, literals []regexLiteral) []string {
-	var texts []string
-	if prefix, _ := re.LiteralPrefix(); prefix != "" && !strings.ContainsAny(prefix, "\x00\ufffd") {
-		texts = append(texts, prefix)
-	}
-	for _, literal := range literals {
-		texts = append(texts, literal.text)
-	}
-	return texts
-}
-
-// regexBodyLiterals uses the compiled prefix once when it spans captures.
+// regexBodyLiterals puts the compiled prefix first, whole, because captures
+// can split it into runs too short for the trigram index, and drops runs it
+// already contains.
 func regexBodyLiterals(re *regexp.Regexp, literals []regexLiteral) []regexLiteral {
 	prefix, _ := re.LiteralPrefix()
 	if prefix == "" || strings.ContainsAny(prefix, "\x00\ufffd") {

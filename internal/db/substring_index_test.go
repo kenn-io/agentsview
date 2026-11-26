@@ -552,30 +552,14 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 	}
 }
 
-func TestRegexIndexRepeatedTrigramsKeepRareSuffix(t *testing.T) {
-	d := testDB(t)
-	pattern := strings.Repeat("0", 40) + "needle"
-	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", pattern}, {"user", strings.Repeat("0", 80)}})
-	countMessagesForSubstringIndex(t, d, "s1")
-	literals := requiredLiterals(pattern)
-	assert.Equal(t, []regexLiteral{{text: pattern}}, literals)
-	query, ok := substringIndexQuery(literalTexts(literals)...)
-	require.True(t, ok)
-	assert.Contains(t, query, `"nee"`)
-	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, literalTexts(literals))
-	require.NoError(t, err)
-	require.NotEmpty(t, candidates.message.sql)
-	assert.Equal(t, []substringHit{{"message", 0}}, substringHits(t, d, ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 50}))
-}
-
 func TestRegexIndexRetainsSelectiveLiteral(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	var messages [][2]string
 	for range 40 {
-		messages = append(messages, [2]string{"user", "common fixed portion"})
+		messages = append(messages, [2]string{"user", "common fixed portion " + strings.Repeat("0", 80)})
 	}
-	messages = append(messages, [2]string{"user", "unique-rare then common fixed portion"}, [2]string{"user", "common fixed portion then unique-rare"}, [2]string{"user", "abcde"}, [2]string{"user", "foo"})
+	messages = append(messages, [2]string{"user", "unique-rare then common fixed portion"}, [2]string{"user", "common fixed portion then unique-rare"}, [2]string{"user", "abcde"}, [2]string{"user", "foo"}, [2]string{"user", strings.Repeat("0", 40) + "needle"})
 	seedSearchSession(t, d, "s1", "proj", messages)
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, tc := range []struct {
@@ -586,10 +570,11 @@ func TestRegexIndexRetainsSelectiveLiteral(t *testing.T) {
 		{`common fixed portion.*unique-rare`, 41},
 		{`ab(c)de`, 42},
 		{`fo(o)`, 43},
+		{strings.Repeat("0", 40) + "needle", 44},
 	} {
 		t.Run(tc.pattern, func(t *testing.T) {
 			f := ContentSearchFilter{Pattern: tc.pattern, Mode: "regex", Limit: 50, Sources: []string{"messages"}}
-			candidates, err := d.substringCandidates(ctx, f, regexIndexLiterals(regexp.MustCompile(f.Pattern), requiredLiterals(f.Pattern)))
+			candidates, err := d.substringCandidates(ctx, f, literalTexts(regexBodyLiterals(regexp.MustCompile(f.Pattern), requiredLiterals(f.Pattern))))
 			require.NoError(t, err)
 			require.NotEmpty(t, candidates.message.sql)
 			assert.Equal(t, []substringHit{{"message", tc.ordinal}}, substringHits(t, d, f))

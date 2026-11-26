@@ -1391,17 +1391,16 @@ each row. Regex search intersects index lists for required literals and filters
 every source with NUL-safe `instr`; Go's regex engine decides the final match.
 The filter folds case only for case-insensitive literals.
 Alternation branches keep scanning when no literal outside them is required.
-The tokenizer folds case for every script, while `LIKE` and `lower()` fold only
-ASCII. The index returns a superset, so results stay identical to a scan.
+The tokenizer folds case for every script while `LIKE` and `lower()` fold only
+ASCII, so the index returns a superset and results stay identical to a scan.
 Patterns shorter than three characters, single-session searches, and branches
 where the index lists more than a quarter of the messages in the scope's
 sessions keep the scan. A capped count of the listed IDs makes that choice; it
-stops as soon as the share is passed. Tool input and tool result branches have
-no trigram index. Regex searches use `instr` to filter their bodies when the
-pattern has a required literal.
+stops as soon as the share is passed. Tool input and tool result branches are
+not indexed.
 
-Tool branches scan the sessions they cover, so substring, word, and regex
-search read the scope's sessions in batches, newest
+Because the tool branches read every row of every session they cover,
+substring, word, and regex search read the scope's sessions in batches, newest
 first in the result order, and stop after the batch that fills the page and
 its next-page row. The first batch holds sessions totaling 16,384 messages and
 each later batch doubles that. Results sort by session recency, then session
