@@ -483,6 +483,42 @@ func TestAutomationAuditPGRestoresClaudeSDKWorker(t *testing.T) {
 	assert.Equal(t, "subagent", relationship)
 }
 
+func TestAutomationAuditPGKeepsWaitingLauncherLinkAutomated(t *testing.T) {
+	pgURL := testPGSchemaURL(t, "agentsview")
+	local := testDB(t)
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "review", Machine: "local", Project: "project", Agent: "codex",
+		SessionKind:  "non-interactive",
+		FirstMessage: new("You are a code reviewer. Review this change."), UserMessageCount: 1, MessageCount: 1,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}))
+	// The launcher's session is not in the archive, so the link waits.
+	link, err := local.SetSessionExternalParent(t.Context(), "review", "missing-launcher")
+	require.NoError(t, err)
+	require.False(t, link.Changed)
+	sqliteRow, err := local.GetSessionFull(t.Context(), "review")
+	require.NoError(t, err)
+	require.True(t, sqliteRow.IsAutomated)
+	require.Empty(t, sqliteRow.RelationshipType)
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "review-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	var relationship, externalParent string
+	var automated bool
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated, COALESCE(external_parent_session_id, '')
+		 FROM sessions WHERE id = 'review'`,
+	).Scan(&relationship, &automated, &externalParent))
+	require.Equal(t, "missing-launcher", externalParent)
+	assert.True(t, automated)
+	assert.Empty(t, relationship, "SQLite counts a run with a waiting launcher link as Automated")
+}
+
 // reconcileClearTracer runs after when the audit's statement that clears
 // automated parentless workers finishes.
 type reconcileClearTracer struct{ after func() }

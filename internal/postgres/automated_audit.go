@@ -114,16 +114,18 @@ func backfillIsAutomatedPGWithProgress(
 
 // clearableHeadlessWorkerPG mirrors the SQLite rule: an automated parentless
 // session counts as Automated only when its subagent role was inferred from
-// headless shape and nothing ever spawned or launched it. Rows pushed by
-// older binaries carry no parser relationship; they keep the non-interactive
-// fallback and treat Grok rows as explicit children, as SQLite's legacy
-// backfill does.
+// headless shape and nothing ever spawned or launched it. A launcher link
+// counts only once it applies, which spawn_linked records; a link still
+// waiting for its parent leaves the row Automated, as in SQLite. Rows pushed
+// by older binaries carry no parser relationship or spawn record; they keep
+// the non-interactive fallback, treat any launcher link as a spawn, and treat
+// Grok rows as explicit children, as SQLite's legacy backfill does.
 const clearableHeadlessWorkerPG = `is_automated
 		  AND COALESCE(parent_session_id, '') = ''
-		  AND COALESCE(external_parent_session_id, '') = ''
 		  AND NOT spawn_linked
 		  AND CASE WHEN parser_relationship_type IS NULL
 			THEN session_kind = 'non-interactive' AND agent <> 'grok'
+				AND COALESCE(external_parent_session_id, '') = ''
 				AND COALESCE(parser_parent_session_id, '') = ''
 				AND left(id, 6) <> 'agent-'
 			ELSE relationship_inferred END
