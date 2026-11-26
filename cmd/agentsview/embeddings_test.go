@@ -1458,10 +1458,12 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 
 func TestEmbeddingsSwitch(t *testing.T) {
 	for _, tc := range []struct {
-		name, conflictStore string
-		recall, running     bool
+		name, conflictStore                      string
+		recall, running, setupBusy, failedBefore bool
 	}{
 		{name: "waits and rebuilds recall", recall: true, running: true},
+		{name: "waits for setup", setupBusy: true},
+		{name: "ignores previous errors", failedBefore: true},
 		{name: "skips recall", recall: false},
 		{name: "retries a messages build", conflictStore: "messages"},
 		{name: "retries a recall build", recall: true, conflictStore: "recall"},
@@ -1513,7 +1515,15 @@ recall = %t
 					running := tc.running && len(requests) == 0 &&
 						store == "messages" && statusReads[store] == 1
 					w.Header().Set("Content-Type", "application/json")
-					_ = json.MarshalWrite(w, vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2})
+					status := vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2}
+					if tc.setupBusy && len(requests) == 0 && store == "messages" && statusReads[store] == 1 {
+						status.Setup = &vector.SetupStatus{Busy: true}
+					}
+					if tc.failedBefore && len(requests) == 0 {
+						status.LastError = "previous build failed"
+						status.Setup = &vector.SetupStatus{Action: "turn-on", Error: "previous setup failed"}
+					}
+					_ = json.MarshalWrite(w, status)
 				},
 				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 					var req vector.BuildRequest
@@ -1557,10 +1567,13 @@ recall = %t
 			require.NoError(t, cmd.Execute())
 
 			wantEvents := []string{"status:messages"}
-			if tc.running {
+			if tc.running || tc.setupBusy {
 				wantEvents = append(wantEvents, "status:messages")
 			}
-			wantEvents = append(wantEvents, "status:recall", "restart", "build:messages", "status:messages")
+			if tc.recall {
+				wantEvents = append(wantEvents, "status:recall")
+			}
+			wantEvents = append(wantEvents, "restart", "build:messages", "status:messages")
 			if tc.conflictStore == "messages" {
 				wantEvents = append(wantEvents, "build:messages", "status:messages")
 			}
@@ -1585,9 +1598,6 @@ recall = %t
 			}
 			assert.Equal(t, "messages", requests[0].Store)
 			assert.True(t, requests[0].IncludeAutomated)
-			if tc.running {
-				assert.Contains(t, out.String(), "Waiting for the current embedding build to finish")
-			}
 		})
 	}
 }

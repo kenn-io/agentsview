@@ -116,16 +116,19 @@ func runEmbeddingsSwitch(
 	if cfg.ArchiveContent.UsageOnly() {
 		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
 	}
+	stores := []string{"messages"}
+	if cfg.Vector.Embed.Recall {
+		stores = append(stores, "recall")
+	}
 
 	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
 		return daemonErr
 	}
 	if daemonErr == nil {
-		waiting := false
-		for _, store := range []string{"messages", "recall"} {
+		for _, store := range stores {
 			client.store = store
-			if err := pollEmbeddingsBuild(ctx, out, client, false, &waiting); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, true); err != nil {
 				return err
 			}
 		}
@@ -146,10 +149,6 @@ func runEmbeddingsSwitch(
 	cfg, err = config.LoadMinimalFor(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config after daemon restart: %w", err)
-	}
-	stores := []string{"messages"}
-	if cfg.Vector.Embed.Recall {
-		stores = append(stores, "recall")
 	}
 	client, err = resolveEmbeddingsDaemonClient(cfg)
 	if err != nil {
@@ -175,8 +174,7 @@ func runEmbeddingsSwitch(
 				}
 				break
 			}
-			waiting := false
-			if err := pollEmbeddingsBuild(ctx, out, client, false, &waiting); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, false); err != nil {
 				return fmt.Errorf("waiting for %s embeddings: %w", store, err)
 			}
 		}
@@ -873,41 +871,38 @@ func buildViaDaemon(
 func pollDaemonBuildStatus(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
-	return pollEmbeddingsBuild(ctx, out, client, setup, nil)
+	status, err := waitDaemonBuild(ctx, out, client, setup)
+	if err != nil {
+		return err
+	}
+	if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
+		return errors.New(status.Setup.Error)
+	}
+	return finalizeBuildStatus(out, status)
 }
 
-// A non-nil announced waits for another build without reporting its result.
-func pollEmbeddingsBuild(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, announced *bool,
-) error {
+func waitDaemonBuild(
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
+) (vector.BuildStatus, error) {
 	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
-			return err
+			return status, err
 		}
-		if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
-			return errors.New(status.Setup.Error)
+		busy := setup && status.Setup != nil && status.Setup.Busy
+		if !status.Running && !busy {
+			return status, nil
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
-		if !setup || status.Setup == nil || !status.Setup.Busy {
-			if !status.Running {
-				if announced != nil {
-					return nil
-				}
-				return finalizeBuildStatus(out, status)
-			}
-			if announced != nil && !*announced {
-				fmt.Fprintln(out, "Waiting for the current embedding build to finish…")
-				*announced = true
-			}
+		if !busy {
 			progress.print(out, status.Phase, status.Done, status.Total)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return status, ctx.Err()
 		case <-time.After(embeddingsPollInterval):
 		}
 	}
