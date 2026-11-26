@@ -1458,11 +1458,12 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 
 func TestEmbeddingsSwitch(t *testing.T) {
 	for _, tc := range []struct {
-		name, conflictStore, failedStore         string
-		recall, running, setupBusy, failedBefore bool
+		name, conflictStore, failedStore                       string
+		recall, running, setupBusy, failedBefore, manualRecall bool
 	}{
 		{name: "waits and rebuilds recall", recall: true, running: true},
 		{name: "waits for setup", setupBusy: true},
+		{name: "waits for manual recall", manualRecall: true},
 		{name: "ignores previous errors", failedBefore: true},
 		{name: "skips recall", recall: false},
 		{name: "retries a messages build", conflictStore: "messages"},
@@ -1517,6 +1518,7 @@ recall = %t
 					events = append(events, "status:"+store)
 					running := tc.running && len(requests) == 0 &&
 						store == "messages" && statusReads[store] <= 2
+					running = running || (tc.manualRecall && len(requests) == 0 && store == "recall" && statusReads[store] <= 2)
 					w.Header().Set("Content-Type", "application/json")
 					status := vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2}
 					if tc.setupBusy && len(requests) == 0 && store == "messages" && statusReads[store] <= 2 {
@@ -1581,8 +1583,9 @@ recall = %t
 			if tc.running || tc.setupBusy {
 				wantEvents = append(wantEvents, "status:messages", "status:messages")
 			}
-			if tc.recall {
-				wantEvents = append(wantEvents, "status:recall")
+			wantEvents = append(wantEvents, "status:recall")
+			if tc.manualRecall {
+				wantEvents = append(wantEvents, "status:recall", "status:recall")
 			}
 			wantEvents = append(wantEvents, "restart", "build:messages")
 			if tc.recall {
@@ -1617,13 +1620,42 @@ recall = %t
 			assert.Equal(t, "messages", requests[0].Store)
 			assert.True(t, requests[0].IncludeAutomated)
 			count := strings.Count(out.String(), "Waiting for the current embedding build or setup to finish")
-			if tc.running || tc.setupBusy {
+			if tc.running || tc.setupBusy || tc.manualRecall {
 				assert.Equal(t, 1, count)
 			} else {
 				assert.Zero(t, count)
 			}
 		})
 	}
+}
+
+func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeTestConfig(t, dataDir, "[vector]\nenabled = false\n[vector.embed]\nrecall = true\n")
+	var stores []string
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"running":false}`)
+			},
+			"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+				var req vector.BuildRequest
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				stores = append(stores, req.Store)
+				w.WriteHeader(http.StatusAccepted)
+			},
+		})
+		return nil
+	}
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, ""))
+	assert.Equal(t, []string{"messages", "recall"}, stores)
 }
 
 func TestEmbeddingsSwitchWaitFailurePreservesConfig(t *testing.T) {

@@ -4282,8 +4282,8 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	return embeddings, err
 }
 
-// SaveVectorEmbeddingsServer replaces the configured embedding recipe with
-// one named OpenAI-compatible server after validating the complete config.
+// SaveVectorEmbeddingsServer replaces the configured servers with one named
+// OpenAI-compatible server after validating the complete config.
 func (c *Config) SaveVectorEmbeddingsServer(
 	endpoint, model string, dimension int, apiKeyFile string,
 ) error {
@@ -4292,17 +4292,31 @@ func (c *Config) SaveVectorEmbeddingsServer(
 		if apiKeyFile != "" {
 			server["api_key_file"] = apiKeyFile
 		}
-		embeddings := map[string]any{
-			"model": model, "dimension": dimension,
-			"servers": map[string]any{"default": server},
-		}
-		if isNomicModel(model) {
-			embeddings["max_input_chars"] = nomicMaxInputChars
-			embeddings["model_context_tokens"] = nomicModelContextTokens
-			embeddings["query_prefix"] = nomicQueryPrefix
-			embeddings["document_prefix"] = nomicDocumentPrefix
-		}
 		existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
+			embeddings, _ := section["embeddings"].(map[string]any)
+			oldModel, _ := embeddings["model"].(string)
+			if _, hasServers := embeddings["servers"]; oldModel == "" && !hasServers {
+				oldModel = defaultNomicModel
+			}
+			if oldModel != model || embeddings == nil {
+				embeddings = make(map[string]any)
+			}
+			delete(embeddings, "default_server")
+			embeddings["model"] = model
+			embeddings["dimension"] = dimension
+			embeddings["servers"] = map[string]any{"default": server}
+			if isNomicModel(model) {
+				for key, value := range map[string]any{
+					"max_input_chars":      nomicMaxInputChars,
+					"model_context_tokens": nomicModelContextTokens,
+					"query_prefix":         nomicQueryPrefix,
+					"document_prefix":      nomicDocumentPrefix,
+				} {
+					if _, ok := embeddings[key]; !ok {
+						embeddings[key] = value
+					}
+				}
+			}
 			section["embeddings"] = embeddings
 		})
 		if err != nil {

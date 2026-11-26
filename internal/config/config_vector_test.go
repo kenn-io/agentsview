@@ -472,6 +472,42 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 		assert.Equal(t, "search_document: ", got.DocumentPrefix)
 	})
 
+	t.Run("implicit Nomic keeps requested dimensions", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\ndimension = 512\nrequest_dimensions = true\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 512, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.True(t, got.RequestDimensions)
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
+	t.Run("same model keeps recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\nmax_input_chars = 1234\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, 1234, got.MaxInputChars)
+		assert.Equal(t, "suffix", got.InputSuffix)
+	})
+
+	t.Run("new Nomic model gets defaults", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 768, ""))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Empty(t, got.InputSuffix)
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
 	for _, tc := range []struct {
 		name, endpoint, apiKeyFile string
 		dimension                  int

@@ -88,7 +88,7 @@ func newEmbeddingsSwitchCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "switch <endpoint>",
 		Short:        "Switch the embedding server and rebuild the index",
-		Long:         "Replace the embedding recipe with the supplied model and one server, restart the AgentsView daemon, and rebuild the session index. Other recipe options return to their defaults. Recall is rebuilt too when its embedding index is enabled.",
+		Long:         "Switch to one embedding server and rebuild the session index. The same model keeps its recipe; a new model starts from its defaults. The command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
 		Example:      "  agentsview index embeddings switch https://host/v1 --model embeddinggemma --dimension 768 --api-key-file ~/.config/agentsview/api-key",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
@@ -120,22 +120,16 @@ func runEmbeddingsSwitch(
 	if cfg.Vector.Embed.Recall {
 		stores = append(stores, "recall")
 	}
-	announced := false
-	onWait := func() {
-		if !announced {
-			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
-			announced = true
-		}
-	}
+	waiting := "Waiting for the current embedding build or setup to finish…"
 
 	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
 		return daemonErr
 	}
 	if daemonErr == nil {
-		for _, store := range stores {
+		for _, store := range []string{"messages", "recall"} {
 			client.store = store
-			if _, err := waitDaemonBuild(ctx, out, client, true, onWait); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, true, &waiting); err != nil {
 				return err
 			}
 		}
@@ -153,7 +147,7 @@ func runEmbeddingsSwitch(
 		return err
 	}
 
-	cfg, err = config.LoadMinimalFor(config.ScopeVector)
+	cfg, err = config.LoadReadOnlyFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config after daemon restart: %w", err)
 	}
@@ -183,7 +177,7 @@ func runEmbeddingsSwitch(
 	for _, req := range conflicts {
 		client.store = daemonEmbeddingStore(req.Store)
 		for {
-			if _, err := waitDaemonBuild(ctx, out, client, false, onWait); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, false, &waiting); err != nil {
 				buildErrors = append(buildErrors, fmt.Errorf("waiting for %s embeddings: %w", req.Store, err))
 				break
 			}
@@ -908,7 +902,7 @@ func pollDaemonBuildStatus(
 }
 
 func waitDaemonBuild(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, onWait func(),
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, waiting *string,
 ) (vector.BuildStatus, error) {
 	var progress buildProgressPrinter
 	for {
@@ -920,8 +914,9 @@ func waitDaemonBuild(
 		if !status.Running && !busy {
 			return status, nil
 		}
-		if onWait != nil {
-			onWait()
+		if waiting != nil && *waiting != "" {
+			fmt.Fprintln(out, *waiting)
+			*waiting = ""
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
