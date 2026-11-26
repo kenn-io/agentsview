@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -178,32 +179,30 @@ var musePersonalBackgroundSources = map[string]bool{
 // plain runtime with conversations, so only this envelope separates them.
 var musePersonalSubagentBanner = regexp.MustCompile(`^\[Subagent Context\] You are running as a subagent \(depth [0-9]+/[0-9]+\); your completed results are delivered to your parent agent automatically, so do not busy-poll for status\.$`)
 
-// musePersonalAssignmentPrefixes open delegated assignments that Muse runs on
-// plain runtime instead of runtime.browser_input. They record no parent.
-var musePersonalAssignmentPrefixes = []string{
+// musePersonalAssignmentLines are the whole first lines of delegated
+// assignments that Muse runs on plain runtime instead of
+// runtime.browser_input. They record no parent.
+var musePersonalAssignmentLines = []string{
 	"Carry out this assignment end to end, then report the result.",
 	"## Task and updates",
+}
+
+// musePersonalFirstLine returns a message's first line without its line ending.
+func musePersonalFirstLine(content string) string {
+	line, _, _ := strings.Cut(content, "\n")
+	return strings.TrimSuffix(line, "\r")
 }
 
 // musePersonalSubagentEnvelope reports whether a first user item opens a
 // subagent run.
 func musePersonalSubagentEnvelope(source, content string) bool {
-	firstLine, _, _ := strings.Cut(content, "\n")
-	return source == "runtime" && musePersonalSubagentBanner.MatchString(strings.TrimRight(firstLine, "\r"))
+	return source == "runtime" && musePersonalSubagentBanner.MatchString(musePersonalFirstLine(content))
 }
 
 // musePersonalAssignment reports whether a first user item opens a delegated
 // assignment on plain runtime.
 func musePersonalAssignment(source, content string) bool {
-	if source != "runtime" {
-		return false
-	}
-	for _, prefix := range musePersonalAssignmentPrefixes {
-		if strings.HasPrefix(content, prefix) {
-			return true
-		}
-	}
-	return false
+	return source == "runtime" && slices.Contains(musePersonalAssignmentLines, musePersonalFirstLine(content))
 }
 
 // musePersonalRequesterField labels the requester in a subagent envelope.

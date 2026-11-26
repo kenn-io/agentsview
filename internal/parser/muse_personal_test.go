@@ -151,6 +151,9 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		{"carry-out assignment on a voice source", item(0, "runtime.voice_audio", "user", carryOut), "", carryOut},
 		{"carry-out assignment on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime", "user", carryOut), "", "hello"},
 		{"carry-out wording must open the message", item(0, "runtime", "user", "Please "+carryOut), "", "Please " + carryOut},
+		// Each assignment opener must be the whole first line.
+		{"longer task heading", item(0, "runtime", "user", "## Task and updates for the kitchen remodel\nPlan it."), "", "## Task and updates for the kitchen remodel\nPlan it."},
+		{"carry-out line with text after it", item(0, "runtime", "user", "Carry out this assignment end to end, then report the result. Thanks!"), "", "Carry out this assignment end to end, then report the result. Thanks!"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
