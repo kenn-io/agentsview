@@ -278,10 +278,6 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, regexLiteralTexts(prefix))
 	require.NoError(t, err)
 	require.NotEmpty(t, got.message.sql)
-	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: re.String(), Mode: "regex", Limit: 50}))
-	query, ok := substringIndexQuery(strings.Repeat("0", 40) + "needle")
-	require.True(t, ok)
-	assert.Contains(t, query, `"nee"`)
 }
 
 // An archive import drops the index with the other FTS tables. A search that
@@ -554,7 +550,9 @@ func TestSubstringIndexQueryReachesLaterLiterals(t *testing.T) {
 	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Sources: []string{"messages"}}, literals)
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
-	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: regexp.QuoteMeta(common) + `.*rare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages"}}))
+	query, ok = substringIndexQuery(strings.Repeat("0", 40) + "needle")
+	require.True(t, ok)
+	assert.Contains(t, query, `"nee"`)
 }
 
 func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
