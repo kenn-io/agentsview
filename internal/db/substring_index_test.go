@@ -10,8 +10,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 type substringHit struct {
@@ -68,7 +70,7 @@ func TestSearchContentSubstringIndexMatchesScan(t *testing.T) {
 	})
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, pattern := range []string{"deploy-window", "zebra-crossing"} {
-		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, pattern)
+		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern, Sources: []string{"messages", "thinking"}}, []string{pattern})
 		require.NoError(t, err)
 		require.NotEmpty(t, candidates.message.sql, pattern)
 		require.NotEmpty(t, candidates.thinking.sql, pattern)
@@ -226,13 +228,26 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	}
 	candidates := func(f ContentSearchFilter) substringCandidateFilters {
 		t.Helper()
-		got, err := d.substringCandidates(ctx, f, f.Pattern)
+		f.Sources = []string{"messages", "thinking"}
+		got, err := d.substringCandidates(ctx, f, []string{f.Pattern})
 		require.NoError(t, err)
 		return got
 	}
 
 	rare := candidates(ContentSearchFilter{Pattern: "rare-token"})
 	require.NotEmpty(t, rare.message.sql)
+	for _, tc := range []struct {
+		source            string
+		message, thinking bool
+	}{
+		{"messages", true, false},
+		{"thinking", false, true},
+	} {
+		got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{tc.source}}, []string{"rare-token"})
+		require.NoError(t, err)
+		assert.Equal(t, tc.message, got.message.sql != "")
+		assert.Equal(t, tc.thinking, got.thinking.sql != "")
+	}
 	rows, err := d.getReader().Query(ctx,
 		"EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE m.content LIKE '%rare-token%'"+rare.message.sql,
 		rare.message.args...)
@@ -255,6 +270,14 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	assert.Equal(t, []substringHit{{"message", 3}},
 		substringHits(t, d, ContentSearchFilter{Pattern: "rare-token", Limit: 50}))
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "common", Limit: 50}), 7)
+	// A capture splits the prefix into runs too short for the index.
+	_, err = d.getWriter().Exec(ctx, `UPDATE messages SET content = 'common rare-token foo here' WHERE session_id = 's1' AND ordinal = 3`)
+	require.NoError(t, err)
+	re := regexp.MustCompile(`(fo)o`)
+	prefix := regexBodyLiterals(re, requiredLiterals(re.String()))
+	got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, regexLiteralTexts(prefix))
+	require.NoError(t, err)
+	require.NotEmpty(t, got.message.sql)
 }
 
 // An archive import drops the index with the other FTS tables. A search that
@@ -274,7 +297,7 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	}
 
 	var usedIndex []bool
-	page, err := searchWithSubstringCandidates(ctx, d, f, f.Pattern,
+	page, err := searchWithSubstringCandidates(ctx, d, f, []string{f.Pattern},
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			usedIndex = append(usedIndex, candidates.message.sql != "")
 			if len(usedIndex) == 1 {
@@ -316,21 +339,21 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 				d = reader
 			}
 			f := ContentSearchFilter{
-				Pattern: `rare-tok(en)`, Mode: "regex", Limit: 50,
+				Pattern: `\brare-tok(en)`, Mode: "regex", Limit: 50,
 				Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
 			}
 			re, err := regexp.Compile(f.Pattern)
 			require.NoError(t, err)
-			lit := LiteralPrefix(f.Pattern)
+			literals := regexBodyLiterals(re, requiredLiterals(f.Pattern))
 
 			var usedIndex []bool
-			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
+			matches, err := searchWithSubstringCandidates(ctx, d, f, regexLiteralTexts(literals),
 				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 					usedIndex = append(usedIndex, candidates.message.sql != "")
 					if len(usedIndex) == 1 {
 						require.NoError(t, archive.DropFTS(ctx))
 					}
-					return d.regexSearchRows(ctx, f, re, lit, candidates)
+					return d.regexSearchRows(ctx, f, re, literals, candidates)
 				})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantIndex, usedIndex)
@@ -468,5 +491,171 @@ func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})
 		require.NoError(t, err)
 		assert.Len(t, page.Matches, 1)
+	}
+}
+
+func TestRequiredLiterals(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		want    []regexLiteral
+	}{
+		{`\bdeploy-window`, []regexLiteral{{text: "deploy-window"}}},
+		{`unique-rare.*common fixed portion`, []regexLiteral{{text: "unique-rare"}, {text: "common fixed portion"}}},
+		{`foo(?:alpha|zebra)bar`, []regexLiteral{{text: "foo"}, {text: "bar"}}},
+		{`fo(o)`, []regexLiteral{{text: "fo"}, {text: "o"}}},
+		{`abc*`, []regexLiteral{{text: "ab"}}},
+		{`(?:abc){2,3}`, []regexLiteral{{text: "abc"}}},
+		{`(?i)KELVIN`, []regexLiteral{{text: "elvin", fold: true}}},
+		{`(?i)sk`, nil},
+		{`ab\x00cdef`, []regexLiteral{{text: "ab"}, {text: "cdef"}}},
+		{`abc\x{FFFD}def`, []regexLiteral{{text: "abc"}, {text: "def"}}},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) { assert.Equal(t, tc.want, requiredLiterals(tc.pattern)) })
+	}
+	re := regexp.MustCompile(`fo(o)`)
+	assert.Equal(t, []regexLiteral{{text: "foo"}}, regexBodyLiterals(re, requiredLiterals(re.String())))
+}
+
+func TestRegexSearchCapsSQLLiterals(t *testing.T) {
+	d := testDB(t)
+	var pattern, body strings.Builder
+	for i := range 1100 {
+		word := fmt.Sprintf("word%04d ", i)
+		pattern.WriteString(`\b` + word)
+		body.WriteString(word)
+	}
+	for i := range 3 {
+		seedSearchSession(t, d, fmt.Sprintf("long-%d", i), "proj", [][2]string{{"user", body.String()}})
+	}
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern.String(), Mode: "regex", Limit: 10, Sources: []string{"messages"}})
+	require.NoError(t, err)
+	assert.Len(t, page.Matches, 3)
+}
+
+func TestSubstringIndexQueryReachesLaterLiterals(t *testing.T) {
+	d := testDB(t)
+	common := "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	insertSession(t, d, "suffix", "proj", func(s *Session) { s.MessageCount = 8; s.UserMessageCount = 4 })
+	for i := range 8 {
+		body := common
+		if i == 3 {
+			body += " rare-needle"
+		}
+		insertMessages(t, d, asstMsg("suffix", i, body))
+	}
+	literals := []string{common, "rare-needle"}
+	query, ok := substringIndexQuery(literals...)
+	require.True(t, ok)
+	assert.Contains(t, query, `"rar"`)
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Sources: []string{"messages"}}, literals)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.message.sql)
+	query, ok = substringIndexQuery(strings.Repeat("0", 40) + "needle")
+	require.True(t, ok)
+	assert.Contains(t, query, `"nee"`)
+}
+
+func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s1", "proj", func(s *Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", []Message{
+		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "rare-needle in message"},
+		{SessionID: "s1", Ordinal: 1, Role: "user", Content: "another question ſearch"},
+		{SessionID: "s1", Ordinal: 2, Role: "assistant", Content: "Foo then bar", ThinkingText: "rare-needle in thought", ToolCalls: []ToolCall{
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "a", InputJSON: `{"cmd":"rare-needle"}`, ResultContent: "rare-needle output"},
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "b", InputJSON: `{"cmd":"other"}`, ResultContent: "panic in tool output"},
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "c", InputJSON: `{"cmd":"other"}`, ResultEvents: []ToolResultEvent{{ToolUseID: "c", Source: "stdout", Status: "success", Content: "rare-needle event", EventIndex: 0}}},
+		}},
+	}))
+	// The orphan-copy sanitizer leaves legacy thinking text unchanged.
+	_, err := d.getWriter().Exec(ctx, `UPDATE messages SET thinking_text = ? WHERE session_id = 's1' AND ordinal = 2`, "before\x00rare-needle in thought foo\xffbar")
+	require.NoError(t, err)
+	// The two image occurrence paths join cached text to a call or an event.
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	for _, image := range []struct {
+		hash, text, occurrenceSQL string
+	}{
+		{"call-image", "before\x00rare-needle call image foo\xffbar", `INSERT INTO image_text_occurrences(session_id, call_id, image_index, image_hash) SELECT session_id, id, 0, ? FROM tool_calls WHERE session_id = 's1' AND tool_use_id = 'a'`},
+		{"event-image", "before\x00rare-needle event image", `INSERT INTO image_text_occurrences(session_id, event_id, image_index, image_hash) SELECT session_id, id, 0, ? FROM tool_result_events WHERE session_id = 's1' AND tool_use_id = 'c'`},
+	} {
+		result, err := d.getWriter().Exec(ctx, image.occurrenceSQL, image.hash)
+		require.NoError(t, err)
+		count, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, count)
+		require.NoError(t, d.SaveImageText(ctx, image.hash, identity, image.text, false))
+	}
+
+	f := ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
+	countMessagesForSubstringIndex(t, d, "s1")
+	// Observe the queries prepared by the public search path on its reader.
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var indexQueries atomic.Int64
+	var sqlite *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error {
+		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
+		sqlite.RegisterAuthorizer(func(op int, _, name, _ string) int {
+			if op == sqlite3.SQLITE_FUNCTION && strings.EqualFold(name, "match") {
+				indexQueries.Add(1)
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	defer sqlite.RegisterAuthorizer(nil)
+	page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: f.Pattern, Mode: "regex", Limit: 50})
+	require.NoError(t, err)
+	require.NotEmpty(t, page.Matches)
+	assert.Positive(t, indexQueries.Load(), "search must query the substring index")
+	re := regexp.MustCompile(f.Pattern)
+	literals := regexBodyLiterals(re, requiredLiterals(f.Pattern))
+	snapshot, err := d.BeginMessageSnapshot(ctx)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	scope, scopeArgs := sessionScopeSubquery(f)
+	count := func(source string, literal []regexLiteral) int {
+		filter := f
+		filter.Sources = []string{source}
+		rows, err := regexCandidateRows(ctx, snapshot.tx, filter, literal, scope, scopeArgs, substringCandidateFilters{})
+		require.NoError(t, err)
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			n++
+		}
+		require.NoError(t, rows.Err())
+		return n
+	}
+	for _, source := range []string{"tool_input", "tool_result"} {
+		assert.Less(t, count(source, literals), count(source, nil), source)
+	}
+	require.NoError(t, snapshot.Close())
+	locations := make(map[string]int)
+	for _, hit := range page.Matches {
+		locations[hit.Location]++
+	}
+	assert.Equal(t, map[string]int{"message": 1, "thinking": 1, "tool_input": 1, "tool_result": 4}, locations)
+	patterns := []string{f.Pattern, `(?i)PANIC`, `(?i)search`, `Foo.*(?i)bar`, `foo\x{FFFD}bar`}
+	pages := make(map[string]ContentSearchPage)
+	for _, pattern := range patterns {
+		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 50})
+		require.NoError(t, err)
+		require.NotEmpty(t, page.Matches, pattern)
+		pages[pattern] = page
+	}
+	require.NoError(t, d.DropFTS(ctx))
+	for _, pattern := range patterns {
+		f.Pattern = pattern
+		fullScan, err := d.regexSearchRows(ctx, f, regexp.MustCompile(pattern), nil, substringCandidateFilters{})
+		require.NoError(t, err)
+		scanPage := f.Page(fullScan)
+		require.NoError(t, d.deriveLexicalUnits(ctx, scanPage.Matches))
+		assert.Equal(t, scanPage, pages[pattern], pattern)
 	}
 }

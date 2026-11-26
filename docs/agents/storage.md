@@ -1386,8 +1386,12 @@ indexed text. Each field gets its own table because a `detail='none'` table
 cannot filter by column; `detail='column'` measured nearly three times larger.
 
 The index only narrows candidates. A search intersects the listed IDs for the
-pattern's sequences, up to 32 of them, and the existing `LIKE` still decides
-every row. The tokenizer folds case for every script while `LIKE` folds only
+pattern's sequences, up to 32 of them. Substring search uses `LIKE` to check
+each row. Regex search intersects index lists for required literals and filters
+every source with NUL-safe `instr`; Go's regex engine decides the final match.
+The filter folds case only for case-insensitive literals.
+Alternation branches keep scanning when no literal outside them is required.
+The tokenizer folds case for every script while `LIKE` and `lower()` fold only
 ASCII, so the index returns a superset and results stay identical to a scan.
 Patterns shorter than three characters, single-session searches, and branches
 where the index lists more than a quarter of the messages in the scope's
@@ -1404,9 +1408,9 @@ ID, then position, so a session's rows never split across batches and the
 batches together return the same rows in the same order as one query. A walk
 that reaches the last session counts every exact match, which word search
 needs to offset its ranked results. The message and thinking branches test the
-batch's session list before `LIKE`, because SQLite checks conditions in the
-order written and the index candidates otherwise load bodies from sessions
-outside the batch.
+batch's session list before the body filter, because SQLite checks conditions
+in the order written and the index candidates otherwise load bodies from
+sessions outside the batch.
 
 Terms search uses `message_trigram_fts` under the same share rule per term. When
 the index lists any term, the query starts from the messages it lists for the
