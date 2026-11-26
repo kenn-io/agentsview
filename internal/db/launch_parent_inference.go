@@ -98,7 +98,8 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	}
 	defer rows.Close()
 	matches := map[string]bool{}
-	known := map[string]bool{}
+	known := map[string]int{}
+	competing := map[string]map[string]bool{}
 	for rows.Next() {
 		var id, cwd, machine, stamp, tool string
 		var input sql.NullString
@@ -155,7 +156,18 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 				}
 				matches[id] = true
 				if !trashed && matched && !launch.Unknown && len(launch.Dirs) == 1 && strings.TrimSpace(machine) != "" {
-					known[id] = true
+					runs, err := launchRuns(ctx, tx, child, at)
+					if err != nil {
+						rows.Close()
+						return 0, err
+					}
+					known[id]++
+					if competing[id] == nil {
+						competing[id] = map[string]bool{}
+					}
+					for _, run := range runs {
+						competing[id][run] = true
+					}
 				}
 			}
 		}
@@ -170,6 +182,9 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 			return 0, err
 		}
 		for id := range matches {
+			if known[id] < len(competing[id]) {
+				return retractInferredLaunchParent(ctx, tx, child.id)
+			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO session_external_parents(session_id,parent_session_id,inferred) VALUES(?,?,1) ON CONFLICT(session_id) DO UPDATE SET parent_session_id=excluded.parent_session_id, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE inferred=1 AND parent_session_id != excluded.parent_session_id`, child.id, id)
 			if err != nil {
 				return 0, err
@@ -178,6 +193,27 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 		return 0, nil
 	}
 	return retractInferredLaunchParent(ctx, tx, child.id)
+}
+
+// launchRuns finds the runs that could have used an invocation.
+func launchRuns(ctx context.Context, tx *sql.Tx, child launchChild, at time.Time) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,cwd,started_at FROM sessions INDEXED BY idx_sessions_started WHERE started_at>=? AND started_at<=? AND machine=? AND agent=? AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, at.Add(-2*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano), child.machine, child.agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []string
+	for rows.Next() {
+		var id, cwd, stamp string
+		if err := rows.Scan(&id, &cwd, &stamp); err != nil {
+			return nil, err
+		}
+		started, err := time.Parse(time.RFC3339Nano, stamp)
+		if err == nil && !started.Before(at) && started.Sub(at) <= 60*time.Second && absoluteLaunchFolder(cwd) && launchFolder(cwd) == launchFolder(child.cwd) {
+			runs = append(runs, id)
+		}
+	}
+	return runs, rows.Err()
 }
 
 func absoluteLaunchFolder(dir string) bool {
@@ -212,16 +248,19 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
+	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name, tc.input_json FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	type call struct{ machine, stamp, tool string }
+	type call struct {
+		machine, stamp, tool string
+		input                sql.NullString
+	}
 	var calls []call
 	for rows.Next() {
 		var c call
-		if err := rows.Scan(&c.machine, &c.stamp, &c.tool); err != nil {
+		if err := rows.Scan(&c.machine, &c.stamp, &c.tool, &c.input); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -234,14 +273,14 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	}
 	seeds := append([]string{}, ids...)
 	for _, c := range calls {
-		if pollTool(c.tool) {
+		if pollTool(c.tool) || !launchInputMayMatter(c.input) {
 			continue
 		}
 		at, e := time.Parse(time.RFC3339Nano, c.stamp)
 		if e != nil {
 			continue
 		}
-		r, e := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE (?='' OR machine=?) AND started_at>=? AND started_at<=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, strings.TrimSpace(c.machine), c.machine, at.Add(-2*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano))
+		r, e := tx.QueryContext(ctx, `SELECT id FROM sessions INDEXED BY idx_sessions_started WHERE (?='' OR machine=?) AND started_at>=? AND started_at<=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, strings.TrimSpace(c.machine), c.machine, at.Add(-2*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano))
 		if e != nil {
 			return nil, e
 		}
@@ -260,7 +299,71 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 			return nil, e
 		}
 	}
+	childRows, err := tx.QueryContext(ctx, `SELECT machine,started_at FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND started_at IS NOT NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, string(data))
+	if err != nil {
+		return nil, err
+	}
+	defer childRows.Close()
+	var children []call
+	for childRows.Next() {
+		var c call
+		if err := childRows.Scan(&c.machine, &c.stamp); err != nil {
+			return nil, err
+		}
+		children = append(children, c)
+	}
+	if err := childRows.Err(); err != nil {
+		return nil, err
+	}
+	childRows.Close()
+	for _, c := range children {
+		at, err := time.Parse(time.RFC3339Nano, c.stamp)
+		if err != nil {
+			continue
+		}
+		r, err := tx.QueryContext(ctx, `SELECT id FROM sessions INDEXED BY idx_sessions_started WHERE started_at>=? AND started_at<=? AND machine=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, at.Add(-60*time.Second).UTC().Format(time.RFC3339Nano), at.Add(60*time.Second).UTC().Format(time.RFC3339Nano), c.machine)
+		if err != nil {
+			return nil, err
+		}
+		for r.Next() {
+			var id string
+			if err := r.Scan(&id); err != nil {
+				r.Close()
+				return nil, err
+			}
+			seeds = append(seeds, id)
+		}
+		if err := r.Err(); err != nil {
+			r.Close()
+			return nil, err
+		}
+		r.Close()
+	}
 	return seeds, nil
+}
+
+func launchInputMayMatter(input sql.NullString) bool {
+	if !input.Valid || strings.TrimSpace(input.String) == "" {
+		return true
+	}
+	calls, undecodable := shellCalls(input.String)
+	if undecodable {
+		return true
+	}
+	for _, call := range calls {
+		if call.unknown {
+			for _, re := range launchAgentWords {
+				if re.MatchString(call.command) {
+					return true
+				}
+			}
+			continue
+		}
+		if len(parser.LaunchesFromCommand(call.command, "")) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 const launchBackfillKey = "launch_parent_backfill_v1"

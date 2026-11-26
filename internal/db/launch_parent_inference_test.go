@@ -65,7 +65,11 @@ func TestLaunchParentBackfillPages(t *testing.T) {
 	tx, err := d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	for i := range 3001 {
-		_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions (id,project,agent,session_kind,cwd,started_at) VALUES (?, 'project', 'codex', 'non-interactive', '/repo', '2026-01-02T03:04:03Z')`, fmt.Sprintf("child-%04d", i))
+		started := "2026-01-01T03:04:03Z"
+		if i == 3000 {
+			started = "2026-01-02T03:04:03Z"
+		}
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions (id,project,agent,session_kind,cwd,started_at) VALUES (?, 'project', 'codex', 'non-interactive', '/repo', ?)`, fmt.Sprintf("child-%04d", i), started)
 		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit())
@@ -78,7 +82,10 @@ func TestLaunchParentBackfillPages(t *testing.T) {
 	assert.Equal(t, "done", state)
 	var linked int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sessions WHERE parent_session_id = 'parent'`).Scan(&linked))
-	assert.Equal(t, 3001, linked)
+	assert.Equal(t, 1, linked)
+	var parent sql.NullString
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT parent_session_id FROM sessions WHERE id='child-3000'`).Scan(&parent))
+	assert.Equal(t, "parent", parent.String)
 }
 
 func TestLaunchParentAgentPairs(t *testing.T) {
@@ -965,4 +972,61 @@ func TestLaunchParentLateTranscriptWrite(t *testing.T) {
 	parent, err := d.GetSessionExternalParent(t.Context(), "child")
 	require.NoError(t, err)
 	assert.Equal(t, "parent", parent.ParentSessionID)
+}
+
+func TestLaunchParentAmbiguousRuns(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	started := "2026-01-02T03:04:03Z"
+	addRun := func(id string) {
+		insertSession(t, d, id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	addRun("one")
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one"})
+	require.NoError(t, err)
+	_, err = d.GetSessionExternalParent(t.Context(), "one")
+	require.NoError(t, err)
+	addRun("two")
+	_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"two"})
+	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		_, err := d.GetSessionExternalParent(t.Context(), id)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:01Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"parent"})
+	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		parent, err := d.GetSessionExternalParent(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, "parent", parent.ParentSessionID)
+	}
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "two"))
+	_, err = d.GetSessionExternalParent(t.Context(), "one")
+	require.NoError(t, err)
+	require.NoError(t, d.DeleteSession(t.Context(), "two"))
+	_, err = d.GetSessionExternalParent(t.Context(), "one")
+	require.NoError(t, err)
+}
+
+func TestLaunchParentSeedCandidateFiltering(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{`{"command":"pwd"}`, false},
+		{`{"command":"cd /repo && codex exec hi"}`, true},
+		{`{"command":"bash -c \"$COMMAND\""}`, true},
+		{`{`, true},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, launchInputMayMatter(sql.NullString{String: tc.input, Valid: true}))
+		})
+	}
 }
