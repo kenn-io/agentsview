@@ -1458,12 +1458,13 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 
 func TestEmbeddingsSwitch(t *testing.T) {
 	for _, tc := range []struct {
-		name                      string
-		recall, running, conflict bool
+		name, conflictStore string
+		recall, running     bool
 	}{
 		{name: "waits and rebuilds recall", recall: true, running: true},
 		{name: "skips recall", recall: false},
-		{name: "joins a build started after restart", recall: false, conflict: true},
+		{name: "retries a messages build", conflictStore: "messages"},
+		{name: "retries a recall build", recall: true, conflictStore: "recall"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -1477,9 +1478,14 @@ include_automated = true
 model = "old-model"
 dimension = 3
 max_input_chars = 1000
+default_server = "old"
 
 [vector.embeddings.servers.old]
 endpoint = "http://127.0.0.1:1/v1"
+
+[vector.embeddings.servers.removed]
+endpoint = "http://127.0.0.1:2/v1"
+api_key_file = "/missing-old-key"
 
 [vector.embed]
 recall = %t
@@ -1495,6 +1501,7 @@ recall = %t
 			var events []string
 			statusReads := map[string]int{}
 			var requests []vector.BuildRequest
+			conflicted := false
 			startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 					store := r.URL.Query().Get("store")
@@ -1517,7 +1524,8 @@ recall = %t
 					requests = append(requests, req)
 					events = append(events, "build:"+req.Store)
 					w.Header().Set("Content-Type", "application/json")
-					if tc.conflict && len(requests) == 1 {
+					if req.Store == tc.conflictStore && !conflicted {
+						conflicted = true
 						w.WriteHeader(http.StatusConflict)
 						io.WriteString(w, `{"message":"a build is already running"}`)
 						return
@@ -1553,13 +1561,25 @@ recall = %t
 				wantEvents = append(wantEvents, "status:messages")
 			}
 			wantEvents = append(wantEvents, "status:recall", "restart", "build:messages", "status:messages")
+			if tc.conflictStore == "messages" {
+				wantEvents = append(wantEvents, "build:messages", "status:messages")
+			}
 			if tc.recall {
 				wantEvents = append(wantEvents, "build:recall", "status:recall")
+				if tc.conflictStore == "recall" {
+					wantEvents = append(wantEvents, "build:recall", "status:recall")
+				}
 			}
 			assert.Equal(t, wantEvents, events)
 			if tc.recall {
-				require.Len(t, requests, 2)
+				wantRequests := 2
+				if tc.conflictStore != "" {
+					wantRequests++
+				}
+				require.Len(t, requests, wantRequests)
 				assert.Equal(t, "recall", requests[1].Store)
+			} else if tc.conflictStore != "" {
+				require.Len(t, requests, 2)
 			} else {
 				require.Len(t, requests, 1)
 			}
@@ -1568,11 +1588,68 @@ recall = %t
 			if tc.running {
 				assert.Contains(t, out.String(), "Waiting for the current embedding build to finish")
 			}
-			if tc.conflict {
-				assert.Contains(t, out.String(), "a build is already running")
-			}
 		})
 	}
+}
+
+func TestEmbeddingsSwitchWaitFailurePreservesConfig(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%t", cancel), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+			path := filepath.Join(dataDir, "config.toml")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			ctx, stop := context.WithCancel(t.Context())
+			defer stop()
+			startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+					if cancel {
+						stop()
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, `{"running":true}`)
+					} else {
+						http.Error(w, "status failed", http.StatusInternalServerError)
+					}
+				},
+			})
+			err = runEmbeddingsSwitch(ctx, io.Discard, "https://embed.example/v1", "new-model", 3, "")
+			require.Error(t, err)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o700))
+	dir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	key := filepath.Join(dir, "key")
+	require.NoError(t, os.WriteFile(key, []byte("test-key"), 0o600))
+	t.Chdir(dir)
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"running":false}`)
+		},
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		},
+	})
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return nil }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "key"))
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, key, cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
 }
 
 func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {

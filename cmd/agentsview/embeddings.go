@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -108,7 +109,7 @@ func newEmbeddingsSwitchCommand() *cobra.Command {
 func runEmbeddingsSwitch(
 	ctx context.Context, out io.Writer, endpoint, model string, dimension int, apiKeyFile string,
 ) error {
-	cfg, err := loadDaemonClientConfig(config.ScopeVector)
+	cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -120,30 +121,39 @@ func runEmbeddingsSwitch(
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
 		return daemonErr
 	}
-	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
-		return fmt.Errorf("saving embedding server: %w", err)
-	}
-
 	if daemonErr == nil {
 		waiting := false
 		for _, store := range []string{"messages", "recall"} {
 			client.store = store
-			if err := waitForEmbeddingsBuild(ctx, out, client, &waiting); err != nil {
+			if err := pollEmbeddingsBuild(ctx, out, client, false, &waiting); err != nil {
 				return err
 			}
 		}
+	}
+	if apiKeyFile != "" {
+		apiKeyFile, err = filepath.Abs(apiKeyFile)
+		if err != nil {
+			return fmt.Errorf("resolving API key file: %w", err)
+		}
+	}
+	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
+		return fmt.Errorf("saving embedding server: %w", err)
 	}
 	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
 		return err
 	}
 
-	cfg, err = loadDaemonClientConfig(config.ScopeVector)
+	cfg, err = config.LoadMinimalFor(config.ScopeVector)
 	if err != nil {
 		return fmt.Errorf("loading config after daemon restart: %w", err)
 	}
 	stores := []string{"messages"}
 	if cfg.Vector.Embed.Recall {
 		stores = append(stores, "recall")
+	}
+	client, err = resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return err
 	}
 	for _, store := range stores {
 		req := vector.BuildRequest{Store: store}
@@ -152,36 +162,26 @@ func runEmbeddingsSwitch(
 				cfg.Vector.IncludeAutomated,
 			)
 		}
-		if err := runEmbeddingsBuildDaemon(ctx, out, cfg, req); err != nil {
-			return fmt.Errorf("building %s embeddings: %w", store, err)
+		client.store = daemonEmbeddingStore(store)
+		for {
+			err := client.startBuild(ctx, req)
+			apiErr, conflict := errors.AsType[*daemonAPIError](err)
+			if !conflict || apiErr.status != http.StatusConflict {
+				if err == nil {
+					err = pollDaemonBuildStatus(ctx, out, client, false)
+				}
+				if err != nil {
+					return fmt.Errorf("building %s embeddings: %w", store, err)
+				}
+				break
+			}
+			waiting := false
+			if err := pollEmbeddingsBuild(ctx, out, client, false, &waiting); err != nil {
+				return fmt.Errorf("waiting for %s embeddings: %w", store, err)
+			}
 		}
 	}
 	return nil
-}
-
-func waitForEmbeddingsBuild(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, announced *bool,
-) error {
-	var progress buildProgressPrinter
-	for {
-		status, err := client.status(ctx)
-		if err != nil {
-			return err
-		}
-		if !status.Running {
-			return nil
-		}
-		if !*announced {
-			fmt.Fprintln(out, "Waiting for the current embedding build to finish…")
-			*announced = true
-		}
-		progress.print(out, status.Phase, status.Done, status.Total)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(embeddingsPollInterval):
-		}
-	}
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
@@ -873,6 +873,13 @@ func buildViaDaemon(
 func pollDaemonBuildStatus(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
+	return pollEmbeddingsBuild(ctx, out, client, setup, nil)
+}
+
+// A non-nil announced waits for another build without reporting its result.
+func pollEmbeddingsBuild(
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, announced *bool,
+) error {
 	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
@@ -887,7 +894,14 @@ func pollDaemonBuildStatus(
 		}
 		if !setup || status.Setup == nil || !status.Setup.Busy {
 			if !status.Running {
+				if announced != nil {
+					return nil
+				}
 				return finalizeBuildStatus(out, status)
+			}
+			if announced != nil && !*announced {
+				fmt.Fprintln(out, "Waiting for the current embedding build to finish…")
+				*announced = true
 			}
 			progress.print(out, status.Phase, status.Done, status.Total)
 		}

@@ -4302,11 +4302,14 @@ func (c *Config) SaveVectorEmbeddingsServer(
 			embeddings["query_prefix"] = nomicQueryPrefix
 			embeddings["document_prefix"] = nomicDocumentPrefix
 		}
-		existing, _, err := c.vectorSetupCandidate(func(section map[string]any) {
+		existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
 			section["embeddings"] = embeddings
 		})
 		if err != nil {
 			return err
+		}
+		if err := candidate.ApplyDeploymentEmbeddings(); err != nil {
+			return invalidVectorSetupError{err}
 		}
 		return c.writeConfigMap(existing)
 	})

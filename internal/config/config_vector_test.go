@@ -497,6 +497,21 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 	}
 }
 
+func TestSaveVectorEmbeddingsServerRejectsDeploymentConflict(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, "[general]\n")
+	before, err := os.ReadFile(f.Path(configFileName))
+	require.NoError(t, err)
+	cfg := f.LoadFile(t)
+	t.Setenv("AGENTSVIEW_MODE", "serve")
+	t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "https://embed.example/v1")
+	err = cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "model", 768, "")
+	require.ErrorContains(t, err, "cannot be combined with a [vector] section")
+	after, err := os.ReadFile(f.Path(configFileName))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
 // minimalServers returns the smallest valid servers table for TOML load
 // tests, as the raw map shape loadMinimalWithConfig marshals.
 func minimalServers() map[string]any {
