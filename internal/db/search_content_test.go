@@ -14,55 +14,31 @@ import (
 
 func TestContentScanStopsAtDeadline(t *testing.T) {
 	d := testDB(t)
-	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "ask opus and fable"}})
-	previous := contentScanTimeout
-	contentScanTimeout = time.Nanosecond
-	t.Cleanup(func() { contentScanTimeout = previous })
-	for _, tc := range []struct{ mode, pattern string }{
-		{"substring", "ask opus and fable"},
-		{"regex", "ask.*fable"},
-		{"terms", "ask opus and fable"},
-	} {
-		t.Run(tc.mode, func(t *testing.T) {
-			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, SessionID: "s1"})
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-		})
-	}
-}
-
-func TestContentSearchFTSProbeDeadline(t *testing.T) {
-	for _, mode := range []string{"fts", "hybrid"} {
-		t.Run(mode, func(t *testing.T) {
-			d := testDB(t)
-			requireFTS(t, d)
-			reader := d.rawReader()
-			reader.SetMaxOpenConns(1)
-			conn, err := reader.Conn(t.Context())
-			require.NoError(t, err)
-			t.Cleanup(func() { assert.NoError(t, conn.Close()) })
-
-			waits := reader.Stats().WaitCount
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: deadline expires while the reader connection is held
-			defer cancel()
-			_, err = d.SearchContent(ctx, ContentSearchFilter{Mode: mode, Pattern: "hello", KeywordOnly: true})
-			assert.Greater(t, reader.Stats().WaitCount, waits)
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-		})
-	}
-}
-
-func TestHybridWordScanStopsAtDeadline(t *testing.T) {
-	d := testDB(t)
 	requireFTS(t, d)
 	searcher := &fakeVectorSearcher{}
 	d.SetVectorSearcher(searcher)
 	previous := contentScanTimeout
 	contentScanTimeout = time.Nanosecond
 	t.Cleanup(func() { contentScanTimeout = previous })
-
-	_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "hello world"})
-	assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	for _, tc := range []struct {
+		name, mode, pattern string
+		keywordOnly         bool
+	}{
+		{"substring", "substring", "ask opus and fable", false},
+		{"regex", "regex", "ask.*fable", false},
+		{"terms", "terms", "ask opus and fable", false},
+		{"fts", "fts", "ask opus and fable", false},
+		{"hybrid keyword", "hybrid", "ask opus and fable", true},
+		{"hybrid", "hybrid", "ask opus and fable", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: tc.keywordOnly})
+			if tc.name == "hybrid" {
+				assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
+			}
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		})
+	}
 }
 
 // seedSearchSession inserts one session with the given messages
