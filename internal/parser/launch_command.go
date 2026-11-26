@@ -133,13 +133,15 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			switch c.Op {
 			case syntax.AndStmt, syntax.OrStmt:
 				left := run(c.X, f)
-				rhs := left
-				if c.Op == syntax.AndStmt {
-					if narrowed, ok := guardedLaunchDir(c.X, before); ok {
-						rhs = narrowed
-					}
+				rhs, guarded := guardedLaunchDir(c.X, before)
+				if c.Op != syntax.AndStmt || !guarded {
+					rhs = left
 				}
+				start := len(out)
 				right := run(c.Y, rhs)
+				if c.Op != syntax.AndStmt || !guarded {
+					markConditionalLaunches(out[start:])
+				}
 				return mergeShellFlows(left, right)
 			case syntax.Pipe, syntax.PipeAll:
 				run(c.X, f)
@@ -339,9 +341,6 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				f.unknown = true
 				f.cwdChanged = true
 			}
-		}
-		if stmt.Background {
-			return before
 		}
 		return f
 	}

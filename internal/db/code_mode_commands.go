@@ -88,8 +88,8 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 		}
 	case *js.IfStmt:
 		r.expr(n.Cond)
-		r.stmt(n.Body)
-		r.stmt(n.Else)
+		r.unsupported(n.Body)
+		r.unsupported(n.Else)
 	default:
 		r.unsupported(stmt)
 	}
@@ -111,7 +111,7 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 	case *js.BinaryExpr:
 		if n.Op == js.AndToken || n.Op == js.OrToken {
 			r.expr(n.X)
-			r.expr(n.Y)
+			r.unsupported(n.Y)
 		} else {
 			r.unsupported(n)
 		}

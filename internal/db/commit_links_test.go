@@ -288,7 +288,7 @@ func TestShellCalls(t *testing.T) {
 		unknown, unknownDir          bool
 		secondCommand, secondWorkdir string
 	}{
-		{"conditional", `if (false) { tools.exec_command({cmd:"codex exec hi"}) }`, `codex exec hi`, 1, false, false, "", ""},
+		{"conditional", `if (false) { tools.exec_command({cmd:"codex exec hi"}) }`, "", 1, true, false, "", ""},
 		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false, "", ""},
 		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false, "", ""},
 		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false, "", ""},

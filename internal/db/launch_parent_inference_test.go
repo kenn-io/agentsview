@@ -68,7 +68,12 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"option terminator", `{"command":"codex exec -- '--cd=/other'"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"conditional branch", `{"command":"if false; then codex exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"conditional absolute directory", `{"command":"if false; then codex -C /repo exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
+		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"shell or conditional", `{"command":"test -f ready || codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"code if conditional", `if (flag) { await tools.exec_command({cmd:"codex exec hi"}) }`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"code and conditional", `flag && tools.exec_command({cmd:"codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"code or conditional", `flag || tools.exec_command({cmd:"codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
@@ -436,7 +441,7 @@ func TestLaunchParentUnusableEvidenceKeepsParserParent(t *testing.T) {
 }
 
 func TestLaunchParentReplacementWritePaths(t *testing.T) {
-	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "competitor", "new child", "new child batch", "mixed batch append"} {
+	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "competitor", "unresolved competitor", "new child", "new child batch", "mixed batch append"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "new child" || mode == "new child batch" {
 				d := testDB(t)
@@ -513,9 +518,13 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_kind='' WHERE id='child'`)
 				require.NoError(t, err)
 				_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			case "competitor":
+			case "competitor", "unresolved competitor":
 				insertSession(t, d, "competitor", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
 				message.SessionID = "competitor"
+				if mode == "unresolved competitor" {
+					message.ToolCalls[0].ToolName = "exec"
+					message.ToolCalls[0].InputJSON = `tools.exec_command({cmd})`
+				}
 				insertMessages(t, d, message)
 			case "messages":
 				err = d.ReplaceSessionMessages(t.Context(), "parent", nil)
@@ -642,6 +651,7 @@ func TestLaunchParentSeedCandidateFiltering(t *testing.T) {
 		want  bool
 	}{
 		{`{"command":"pwd"}`, false},
+		{`tools.exec_command({cmd})`, true},
 		{`{"command":"cd /repo && codex exec hi"}`, true},
 		{`{`, true},
 	} {
