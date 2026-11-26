@@ -11,6 +11,7 @@ const (
 	rawSyncBackfillExitCode             = 2
 	sessionExportCursorResetExitCode    = 4
 	conversationRevisionChangedExitCode = 5
+	conversationSessionNotFoundExitCode = 6
 
 	cliUsageExitCode       = 64
 	cliValidationExitCode  = 65

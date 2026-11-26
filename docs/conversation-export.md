@@ -259,6 +259,60 @@ changes listing. Do not mix masked and revealed reads of the same message,
 because their byte offsets differ. Because the changes listing never contains
 text, it has no `--reveal` flag.
 
+## Read one whole session
+
+Export one whole session from a single archive snapshot as JSON lines:
+
+```bash
+agentsview export conversations session SESSION_ID --text-mode visible
+agentsview export conversations session SESSION_ID --text-mode visible --tool-summaries
+```
+
+The command writes one JSON record per line in this order:
+
+1. A `header` record with `schema_version`, `text_mode`, `archive_id`,
+   `database_id`, `session_id`, `revision`, `session`, and `project`.
+2. The `session` change, when present, and all `message` changes together in
+   revision order, with each readable message's `text` records directly after
+   that message.
+3. The session's `tool_summary` change, when you pass `--tool-summaries`.
+4. A `trailer` record with `messages`, the total count of message records
+   written, including tombstones.
+
+Record details:
+
+- In `header`, `revision` is the archive revision for this snapshot.
+- In `header`, `session` holds `agent` and `automation`. Both `session` and
+  `project` are `null` when the session is no longer in the archive.
+- Each `session` and `message` change has the same fields as in the `changes`
+  listing, except `session_id`, `session`, and `project`, which appear in
+  `header`.
+- Each `text` record has `message_id`, `offset`, and a UTF-8-safe chunk of at
+  most `--max-bytes` bytes. The default limit is 65,536 bytes.
+- A deleted message appears as a tombstone record with no text.
+
+The stream contains the same session and message changes for this session that
+a full `changes` walk would list at the header's `revision`. Every session and
+message change in the stream is at or below that revision. After you store the
+stream, skip later session and message changes to this session at or below that
+revision.
+
+The header's `revision` does not apply to the `tool_summary` record, because
+[summaries have their own `revision` sequence](#session-tool-summaries). Keep
+the exported summary's `revision`, and replace the summary when a walk lists a
+`tool_summary` change for this session with a higher `revision`.
+
+If the stream ends without a `trailer`, or if the `messages` count in `trailer`
+does not match the message records you read, the stream is incomplete. Discard
+the stream and read the session again.
+
+By default, `session` masks detected secrets the same way `message` does. A
+message with masked text sets `redacted: true`, and its `text_bytes` counts the
+masked text. Pass `--reveal` to write the stored text unchanged.
+
+If the archive has no record of the session, the command leaves stdout empty,
+writes `session_not_found` JSON to stderr, and exits with code 6.
+
 ## What text means
 
 By default, `--text-mode stored` exports the `content` archived on user and
