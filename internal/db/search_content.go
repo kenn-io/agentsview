@@ -790,7 +790,7 @@ func (db *DB) searchContentRegex(
 		defer release()
 	}
 
-	lit := RequiredLiteral(f.Pattern)
+	lit := requiredLiteral(f.Pattern)
 	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, lit, candidates)
@@ -1154,9 +1154,9 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	return i, true
 }
 
-// RequiredLiteral returns the longest safe fixed text every regex match contains.
+// requiredLiteral returns the longest safe fixed text every regex match contains.
 // SQLite lower folds ASCII only, while Go also folds K and S to non-ASCII.
-func RequiredLiteral(pattern string) string {
+func requiredLiteral(pattern string) string {
 	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
 		return ""

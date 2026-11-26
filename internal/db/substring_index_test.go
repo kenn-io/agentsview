@@ -321,7 +321,7 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 			}
 			re, err := regexp.Compile(f.Pattern)
 			require.NoError(t, err)
-			lit := RequiredLiteral(f.Pattern)
+			lit := requiredLiteral(f.Pattern)
 
 			var usedIndex []bool
 			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
@@ -479,7 +479,7 @@ func TestRequiredLiteral(t *testing.T) {
 		{`(?:abc){2,3}`, "abc"}, {`(?i)kelvin`, "ELVIN"}, {`(?i)sk`, ""},
 		{`ab\x00cdef`, "cdef"}, {`[`, ""},
 	} {
-		t.Run(tc.pattern, func(t *testing.T) { assert.Equal(t, tc.want, RequiredLiteral(tc.pattern)) })
+		t.Run(tc.pattern, func(t *testing.T) { assert.Equal(t, tc.want, requiredLiteral(tc.pattern)) })
 	}
 }
 
@@ -499,7 +499,7 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 	require.NoError(t, err)
 	countMessagesForSubstringIndex(t, d, "s1")
 	pattern := `\bdeploy-window(?: and| again)`
-	candidates, err := d.substringCandidates(ctx, ContentSearchFilter{Pattern: pattern}, RequiredLiteral(pattern))
+	candidates, err := d.substringCandidates(ctx, ContentSearchFilter{Pattern: pattern}, requiredLiteral(pattern))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	require.NotEmpty(t, candidates.thinking.sql)
@@ -531,7 +531,7 @@ func TestRegexIndexRepeatedTrigramsKeepRareSuffix(t *testing.T) {
 	pattern := strings.Repeat("0", 40) + "needle"
 	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", pattern}, {"user", strings.Repeat("0", 80)}})
 	countMessagesForSubstringIndex(t, d, "s1")
-	lit := RequiredLiteral(pattern)
+	lit := requiredLiteral(pattern)
 	assert.Equal(t, pattern, lit)
 	query, ok := substringIndexQuery(lit)
 	require.True(t, ok)
@@ -587,11 +587,11 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	}
 	f := ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
 	countMessagesForSubstringIndex(t, d, "s1")
-	candidates, err := d.substringCandidates(ctx, f, RequiredLiteral(f.Pattern))
+	candidates, err := d.substringCandidates(ctx, f, requiredLiteral(f.Pattern))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	re := regexp.MustCompile(f.Pattern)
-	lit := RequiredLiteral(f.Pattern)
+	lit := requiredLiteral(f.Pattern)
 	require.Equal(t, "rare-needle", lit)
 	snapshot, err := d.BeginMessageSnapshot(ctx)
 	require.NoError(t, err)
