@@ -781,7 +781,7 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 // per-call counters and response ID, while token_count events dedupe by their
 // full info object unless they are the pending record's mirror.
 func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string, record bool) {
-	duplicate := false
+	var duplicate bool
 	if record {
 		duplicate = b.observeTokenUsageRecord(raw, responseID)
 	} else {
