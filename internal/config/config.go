@@ -4323,7 +4323,7 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 	if apiKeyFile != "" {
 		server["api_key_file"] = apiKeyFile
 	}
-	existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
+	existing, candidate, err := c.vectorSetupCandidateFrom(c.readConfigMapOrLegacy, func(section map[string]any) {
 		embeddings, _ := section["embeddings"].(map[string]any)
 		oldModel, _ := embeddings["model"].(string)
 		_, hasServers := embeddings["servers"]
@@ -4455,10 +4455,39 @@ func (c *Config) SaveVectorSetup() error {
 	})
 }
 
+// readConfigMapOrLegacy reads config.toml, or an unmigrated config.json when
+// config.toml is absent, without changing either file.
+func (c *Config) readConfigMapOrLegacy() (map[string]any, error) {
+	if _, err := os.Stat(c.configPath()); !os.IsNotExist(err) {
+		return c.readConfigMap()
+	}
+	existing := make(map[string]any)
+	data, err := os.ReadFile(c.jsonConfigPath())
+	if os.IsNotExist(err) {
+		return existing, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config.json: %w", err)
+	}
+	converted, err := legacyJSONToTOML(data)
+	if err != nil {
+		return nil, err
+	}
+	_, err = toml.Decode(converted, &existing)
+	return existing, err
+}
+
 func (c *Config) vectorSetupCandidate(
 	mutate func(section map[string]any),
 ) (map[string]any, Config, error) {
-	existing, err := c.readConfigMap()
+	return c.vectorSetupCandidateFrom(c.readConfigMap, mutate)
+}
+
+func (c *Config) vectorSetupCandidateFrom(
+	read func() (map[string]any, error),
+	mutate func(section map[string]any),
+) (map[string]any, Config, error) {
+	existing, err := read()
 	if err != nil {
 		if _, ok := errors.AsType[toml.ParseError](err); ok {
 			err = invalidVectorSetupError{err}

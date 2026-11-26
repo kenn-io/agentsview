@@ -26,12 +26,14 @@ import (
 	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/safefileio"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -1659,9 +1661,61 @@ func TestEmbeddingsSwitchMigratesLegacyConfigBeforeSaving(t *testing.T) {
 
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/legacy/codex"}, cfg.AgentDirs["codex"])
+	legacyDir, err := filepath.Abs("/legacy/codex")
+	require.NoError(t, err)
+	assert.Equal(t, []string{legacyDir}, cfg.AgentDirs["codex"])
 	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
 	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+}
+
+func TestEmbeddingsSwitchLegacyRequestedDimensions(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(strconv.FormatBool(reject), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			legacy := `{"vector":{"enabled":true,"embeddings":{"model":"test-model","dimension":3,"request_dimensions":true,"input_suffix":"suffix","servers":{"local":{"endpoint":"http://127.0.0.1:1/v1","timeout":"5s"}}}}}`
+			path := filepath.Join(dataDir, "config.json")
+			require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+			var dimensions int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Dimensions int `json:"dimensions"`
+				}
+				assert.NoError(t, json.UnmarshalRead(r.Body, &req))
+				dimensions = req.Dimensions
+				if reject {
+					http.Error(w, "unavailable", http.StatusBadRequest)
+					return
+				}
+				if req.Dimensions == 3 {
+					writeEmbeddingsResponse(t, w, 1, 3)
+				} else {
+					writeEmbeddingsResponse(t, w, 1, 5)
+				}
+			}))
+			t.Cleanup(server.Close)
+			oldRestart := restartEmbeddingsDaemon
+			t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+			restartErr := errors.New("restart unavailable")
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+			err := runEmbeddingsSwitch(t.Context(), io.Discard, server.URL+"/v1", "test-model", 3, "")
+			assert.Equal(t, 3, dimensions)
+			if reject {
+				require.ErrorContains(t, err, "testing embedding server")
+				data, readErr := os.ReadFile(path)
+				require.NoError(t, readErr)
+				assert.Equal(t, legacy, string(data))
+				assert.NoFileExists(t, filepath.Join(dataDir, "config.toml"))
+				return
+			}
+			require.ErrorIs(t, err, restartErr)
+			cfg, loadErr := config.LoadReadOnly()
+			require.NoError(t, loadErr)
+			assert.True(t, cfg.Vector.Embeddings.RequestDimensions)
+			assert.Equal(t, "suffix", cfg.Vector.Embeddings.InputSuffix)
+			assert.Equal(t, "5s", cfg.Vector.Embeddings.Servers["default"].Timeout)
+		})
+	}
 }
 
 func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
@@ -1841,7 +1895,7 @@ func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 }
 
 func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
-	home := t.TempDir()
+	home := testutil.PrivateTempDir(t)
 	require.NoError(t, os.Chmod(home, 0o700))
 	setTestHome(t, home)
 	dataDir := testDataDir(t)
@@ -1854,12 +1908,16 @@ func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	endpoint := server.URL + "/v1"
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	require.NoError(t, os.Chmod(dir, 0o700))
 	dir, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
 	key := filepath.Join(dir, "key")
-	require.NoError(t, os.WriteFile(key, []byte("test-key"), 0o600))
+	file, err := safefileio.CreatePrivateFile(key)
+	require.NoError(t, err)
+	_, err = file.WriteString("test-key")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
 	t.Chdir(dir)
 	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
@@ -1878,7 +1936,11 @@ func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, key, cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
 
-	require.NoError(t, os.WriteFile(filepath.Join(home, "key"), []byte("test-key"), 0o600))
+	file, err = safefileio.CreatePrivateFile(filepath.Join(home, "key"))
+	require.NoError(t, err)
+	_, err = file.WriteString("test-key")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
 	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "~/key"))
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)

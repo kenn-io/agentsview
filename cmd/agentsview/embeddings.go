@@ -28,7 +28,6 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -1307,27 +1306,22 @@ type embeddingsDaemonClient struct {
 
 func (c embeddingsDaemonClient) pauseBuilds(ctx context.Context, out io.Writer, waiting *bool) (func(), error) {
 	ctx, cancel := context.WithCancel(ctx)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(c.baseURL, "/")+"/api/v1/embeddings/switch-drain", nil)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	origin, err := url.Parse(c.baseURL)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	origin.Path, origin.RawPath, origin.RawQuery, origin.Fragment = "", "", "", ""
-	req.Header.Set("Origin", origin.String())
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	client, err := requestsign.ClientFromEnvironment(c.baseURL, embeddingsSwitchDrainHTTPClient)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	response, err := client.Do(req)
+	response, err := apiclient.RawRequest(c.baseURL, embeddingsSwitchDrainHTTPClient, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1EmbeddingsSwitchDrainWithResponse(ctx)
+		return err
+	}, func(_ context.Context, req *http.Request) error {
+		req.Header.Set("Origin", origin.String())
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		return nil
+	})
 	if err != nil {
 		cancel()
 		return nil, err

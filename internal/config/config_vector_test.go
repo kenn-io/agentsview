@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -422,8 +423,10 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 			},
 		},
 	})
-	keyPath := filepath.Join(secretDir(t), "embedding-api-key")
-	require.NoError(t, os.WriteFile(keyPath, []byte("private test key"), 0o600))
+	keyDir := testutil.PrivateTempDir(t)
+	require.NoError(t, os.Chmod(keyDir, 0o700))
+	keyPath := filepath.Join(keyDir, "embedding-api-key")
+	writePrivateFile(t, keyPath, "private test key")
 	cfg := f.LoadFile(t)
 	require.NoError(t, cfg.SaveVectorEmbeddingsServer(
 		"https://embed.example/v1", "embeddinggemma", 768, keyPath,
