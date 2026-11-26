@@ -75,17 +75,24 @@ type shellFlow struct {
 	dirs       []string
 	unknown    bool
 	cwdChanged bool
+	exited     bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
-	for _, dir := range b.dirs {
-		if !slices.Contains(a.dirs, dir) {
-			a.dirs = append(a.dirs, dir)
-		}
-	}
-	a.unknown = a.unknown || b.unknown
+	a.dirs = appendLaunchDirs(a.dirs, b.dirs)
+	a.unknown = a.unknown || b.unknown || a.exited != b.exited
+	a.exited = a.exited && b.exited
 	a.cwdChanged = a.cwdChanged || b.cwdChanged
 	return a
+}
+
+func appendLaunchDirs(dirs, more []string) []string {
+	for _, dir := range more {
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }
 
 // LaunchesFromCommand reads launch and directory evidence from shell syntax.
@@ -107,12 +114,17 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 		initial.dirs = []string{baseDir}
 	}
 	var out []LaunchCommand
-	var run func(*syntax.Stmt, shellFlow) shellFlow
+	var run, runCmd func(*syntax.Stmt, shellFlow) shellFlow
 	list := func(stmts []*syntax.Stmt, f shellFlow) shellFlow {
 		for _, stmt := range stmts {
 			f = run(stmt, f)
 		}
 		return f
+	}
+	subst := func(n syntax.Node, f shellFlow) {
+		for _, stmts := range substitutions(n) {
+			list(stmts, f)
+		}
 	}
 	emit := func(agent string, f shellFlow, uncertain bool) {
 		if uncertain {
@@ -121,7 +133,16 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 		}
 		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown})
 	}
-	run = func(stmt *syntax.Stmt, f shellFlow) (result shellFlow) {
+	run = func(stmt *syntax.Stmt, f shellFlow) shellFlow {
+		if f.exited {
+			return f
+		}
+		for _, redirect := range stmt.Redirs {
+			subst(redirect, f)
+		}
+		return runCmd(stmt, f)
+	}
+	runCmd = func(stmt *syntax.Stmt, f shellFlow) (result shellFlow) {
 		f.dirs = slices.Clone(f.dirs)
 		before := f
 		before.dirs = slices.Clone(f.dirs)
@@ -163,13 +184,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			return mergeShellFlows(yes, no)
 		case *syntax.CallExpr:
 			for _, assign := range c.Assigns {
-				syntax.Walk(assign, func(n syntax.Node) bool {
-					if sub, ok := n.(*syntax.CmdSubst); ok {
-						list(sub.Stmts, f)
-						return false
-					}
-					return true
-				})
+				subst(assign, f)
 			}
 			args := make([]string, len(c.Args))
 			dynamic := make([]bool, len(c.Args))
@@ -183,13 +198,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					}
 				}
 				if !ok {
-					syntax.Walk(w, func(n syntax.Node) bool {
-						if sub, yes := n.(*syntax.CmdSubst); yes {
-							list(sub.Stmts, f)
-							return false
-						}
-						return true
-					})
+					subst(w, f)
 				}
 			}
 			if len(args) == 0 {
@@ -204,6 +213,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			program := launchProgram(args[0])
 			switch program {
+			case "exit":
+				f.exited = true
+				return f
 			case "source", ".", "pushd", "popd":
 				f.unknown = true
 				f.cwdChanged = true
@@ -218,11 +230,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				if len(targets) == 0 {
 					f.unknown = true
 				}
-				for _, target := range targets {
-					if !slices.Contains(f.dirs, target) {
-						f.dirs = append(f.dirs, target)
-					}
-				}
+				f.dirs = appendLaunchDirs(f.dirs, targets)
 				return f
 			}
 			commandAt := shellCommandArgument(program, args)
@@ -332,7 +340,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					nested.unknown = true
 					nested.dirs = nil
 					after := run(st, nested)
-					cwdChanged = cwdChanged || after.cwdChanged
+					cwdChanged = cwdChanged || after.cwdChanged || after.exited
 					return false
 				}
 				return true
@@ -345,6 +353,24 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 		return f
 	}
 	list(file.Stmts, initial)
+	return out
+}
+
+// substitutions returns the command and process substitutions found in n.
+// Nested substitutions are left to the statements that contain them.
+func substitutions(n syntax.Node) [][]*syntax.Stmt {
+	var out [][]*syntax.Stmt
+	syntax.Walk(n, func(n syntax.Node) bool {
+		switch sub := n.(type) {
+		case *syntax.CmdSubst:
+			out = append(out, sub.Stmts)
+			return false
+		case *syntax.ProcSubst:
+			out = append(out, sub.Stmts)
+			return false
+		}
+		return true
+	})
 	return out
 }
 
