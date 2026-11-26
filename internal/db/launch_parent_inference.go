@@ -155,7 +155,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 					continue
 				}
 				matches[id] = true
-				if !trashed && matched && !launch.Unknown && len(launch.Dirs) == 1 && strings.TrimSpace(machine) != "" {
+				if !trashed && matched && !launch.Unknown && !launch.Possible && !call.possible && len(launch.Dirs) == 1 && strings.TrimSpace(machine) != "" {
 					runs, err := launchRuns(ctx, tx, child, at)
 					if err != nil {
 						rows.Close()

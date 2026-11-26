@@ -55,14 +55,18 @@ func launchOptionValue(agent, arg string) bool {
 
 // LaunchCommand describes one possible agent launch.
 type LaunchCommand struct {
-	Agent   string
-	Dirs    []string
-	Unknown bool
+	Agent    string
+	Dirs     []string
+	Unknown  bool
+	Possible bool
 }
 type shellFlow struct {
 	dirs       []string
 	unknown    bool
 	cwdChanged bool
+	possible   bool
+	stopped    bool
+	guarded    bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
@@ -98,6 +102,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	var run func(*syntax.Stmt, shellFlow) shellFlow
 	list := func(stmts []*syntax.Stmt, f shellFlow) shellFlow {
 		for _, stmt := range stmts {
+			if f.stopped {
+				break
+			}
 			f = run(stmt, f)
 		}
 		return f
@@ -107,7 +114,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			f.unknown = true
 			f.dirs = nil
 		}
-		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown})
+		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown, Possible: f.possible})
 	}
 	run = func(stmt *syntax.Stmt, f shellFlow) (result shellFlow) {
 		f.dirs = slices.Clone(f.dirs)
@@ -121,14 +128,31 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			switch c.Op {
 			case syntax.AndStmt, syntax.OrStmt:
 				left := run(c.X, f)
+				if left.stopped {
+					return left
+				}
+				truth := shellCondition(c.X)
+				if c.Op == syntax.AndStmt && truth < 0 || c.Op == syntax.OrStmt && truth > 0 {
+					return left
+				}
 				rhs := left
 				if c.Op == syntax.AndStmt {
 					if narrowed, ok := guardedLaunchDir(c.X, before); ok {
 						rhs = narrowed
+						rhs.guarded = true
+					} else if truth == 0 {
+						rhs.possible = true
 					}
+				} else if truth == 0 {
+					rhs.possible = true
 				}
 				right := run(c.Y, rhs)
-				return mergeShellFlows(left, right)
+				if c.Op == syntax.AndStmt && truth > 0 || c.Op == syntax.OrStmt && truth < 0 {
+					return right
+				}
+				merged := mergeShellFlows(left, right)
+				merged.possible = merged.possible || right.stopped
+				return merged
 			case syntax.Pipe, syntax.PipeAll:
 				run(c.X, f)
 				run(c.Y, f)
@@ -139,11 +163,34 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			return f
 		case *syntax.IfClause:
 			cond := list(c.Cond, f)
-			yes := list(c.Then, cond)
-			no := cond
-			if c.Else != nil {
-				no = run(&syntax.Stmt{Cmd: c.Else}, cond)
+			if cond.stopped {
+				return cond
 			}
+			truth := 0
+			if len(c.Cond) == 1 {
+				truth = shellCondition(c.Cond[0])
+			}
+			yes := cond
+			if truth >= 0 {
+				branch := cond
+				branch.possible = branch.possible || truth == 0
+				yes = list(c.Then, branch)
+			}
+			no := cond
+			if c.Else != nil && truth <= 0 {
+				branch := cond
+				branch.possible = branch.possible || truth == 0
+				no = run(&syntax.Stmt{Cmd: c.Else}, branch)
+			}
+			if truth > 0 {
+				return yes
+			}
+			if truth < 0 {
+				return no
+			}
+			cond.possible = cond.possible || yes.stopped || no.stopped
+			yes.possible, no.possible = cond.possible, cond.possible
+			yes.stopped, no.stopped = false, false
 			return mergeShellFlows(yes, no)
 		case *syntax.CallExpr:
 			for _, assign := range c.Assigns {
@@ -182,6 +229,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			program := launchProgram(args[0])
 			switch program {
+			case "exit":
+				f.stopped = true
+				return f
 			case "source", ".":
 				fallthrough
 			case "pushd", "popd":
@@ -271,7 +321,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 						launch.dirs = nil
 						launch.unknown = true
 					} else {
+						beforeDir := slices.Clone(launch.dirs)
 						launch = setLaunchDir(launch, args[i])
+						launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
 					}
 					continue
 				}
@@ -280,7 +332,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 						launch.dirs = nil
 						launch.unknown = true
 					} else {
+						beforeDir := slices.Clone(launch.dirs)
 						launch = setLaunchDir(launch, strings.TrimPrefix(args[i], "--cd="))
+						launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
 					}
 					continue
 				}
@@ -342,6 +396,31 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	return out
 }
 
+func shellCondition(stmt *syntax.Stmt) int {
+	if decl, ok := stmt.Cmd.(*syntax.DeclClause); ok && decl.Variant.Value == "export" && !stmt.Negated {
+		return 1
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return 0
+	}
+	word, ok := launchWord(call.Args[0].Parts)
+	if !ok {
+		return 0
+	}
+	value := 0
+	switch word {
+	case "true", ":":
+		value = 1
+	case "false":
+		value = -1
+	}
+	if stmt.Negated {
+		return -value
+	}
+	return value
+}
+
 func setLaunchDir(f shellFlow, dir string) shellFlow {
 	resolved := resolveLaunchDirs(f.dirs, dir)
 	absolute := len(resolveLaunchDirs(nil, dir)) > 0
@@ -369,10 +448,11 @@ func resolveLaunchDirs(bases []string, dir string) []string {
 
 func guardedLaunchDir(stmt *syntax.Stmt, f shellFlow) (shellFlow, bool) {
 	if binary, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && binary.Op == syntax.AndStmt {
-		if prior, ok := guardedLaunchDir(binary.X, f); ok {
-			f = prior
+		prior, ok := guardedLaunchDir(binary.X, f)
+		if !ok {
+			return f, false
 		}
-		return guardedLaunchDir(binary.Y, f)
+		return guardedLaunchDir(binary.Y, prior)
 	}
 	if !isLiteralCD(stmt) {
 		return f, false

@@ -40,7 +40,7 @@ func TestLaunchCommands(t *testing.T) {
 		{`echo $(exit); codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`if test -d /x; then echo hi; fi; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`if test -d /x; then if test -d /y; then exit; fi; fi; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
-		{`test -d x && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`test -d x && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Possible: true}}},
 		{`echo 'codex exec'`, nil},
 		{`git commit -m 'codex notes'`, nil},
 		{`codex resume "$ID"`, nil},

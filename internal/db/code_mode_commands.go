@@ -10,11 +10,13 @@ import (
 type shellCall struct {
 	command, workdir        string
 	unknownWorkdir, unknown bool
+	possible                bool
 }
 
 type codeModeReader struct {
-	calls  []shellCall
-	locals map[string]string
+	calls             []shellCall
+	locals            map[string]string
+	possible, stopped bool
 }
 
 func codeModeLiteral(expr js.IExpr) (string, bool) {
@@ -37,6 +39,9 @@ func codeModeCalls(input string) ([]shellCall, bool) {
 	r := codeModeReader{locals: make(map[string]string)}
 	js.Walk(localFunctionVisitor(r.locals), ast)
 	for _, stmt := range ast.List {
+		if r.stopped {
+			break
+		}
 		r.stmt(stmt)
 	}
 	return r.calls, true
@@ -61,6 +66,9 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 	switch n := stmt.(type) {
 	case *js.BlockStmt:
 		for _, s := range n.List {
+			if r.stopped {
+				break
+			}
 			r.stmt(s)
 		}
 	case *js.EmptyStmt, *js.FuncDecl:
@@ -88,10 +96,26 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 		}
 	case *js.ThrowStmt:
 		r.expr(n.Value)
+		r.stopped = true
 	case *js.IfStmt:
 		r.expr(n.Cond)
-		r.stmt(n.Body)
-		r.stmt(n.Else)
+		if r.stopped {
+			return
+		}
+		value, known := codeModeCondition(n.Cond)
+		old := r.possible
+		r.possible = old || !known
+		if !known || value {
+			r.stmt(n.Body)
+		}
+		stopped := r.stopped
+		r.stopped = false
+		if !known || !value {
+			r.stmt(n.Else)
+		}
+		stopped = stopped || r.stopped
+		r.stopped = known && stopped
+		r.possible = old || !known && stopped
 	default:
 		r.unsupported(stmt)
 	}
@@ -113,12 +137,28 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 	case *js.BinaryExpr:
 		if n.Op == js.AndToken || n.Op == js.OrToken {
 			r.expr(n.X)
-			r.expr(n.Y)
+			if r.stopped {
+				return
+			}
+			value, known := codeModeCondition(n.X)
+			if !known || n.Op == js.AndToken && value || n.Op == js.OrToken && !value {
+				old := r.possible
+				r.possible = old || !known
+				r.expr(n.Y)
+				r.possible = old || !known && r.stopped
+				if !known {
+					r.stopped = false
+				}
+			}
 		} else {
 			r.unsupported(n)
 		}
 	case *js.CallExpr:
 		if name, ok := n.X.(*js.Var); ok {
+			if string(name.Name()) == "exit" {
+				r.stopped = true
+				return
+			}
 			if body, exists := r.locals[string(name.Name())]; exists {
 				r.calls = append(r.calls, shellCall{command: body + " " + n.String(), unknown: true})
 				return
@@ -131,7 +171,9 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			}
 		}
 		if isCodeModeExec(n.X) {
-			r.calls = append(r.calls, codeModeCall(n))
+			call := codeModeCall(n)
+			call.possible = r.possible
+			r.calls = append(r.calls, call)
 			return
 		}
 		if isEagerBatch(n.X) {
@@ -174,6 +216,16 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 	default:
 		r.unsupported(expr)
 	}
+}
+
+func codeModeCondition(expr js.IExpr) (bool, bool) {
+	switch expr.String() {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	}
+	return false, false
 }
 
 func isCodeModeFunction(expr js.IExpr) bool {

@@ -58,6 +58,106 @@ func TestLaunchParentInference(t *testing.T) {
 	assert.Equal(t, "other", parent.ParentSessionID)
 }
 
+func TestLaunchParentConditionalExecution(t *testing.T) {
+	for _, input := range []string{
+		`{"command":"false && codex exec hi"}`,
+		`false && tools.exec_command({cmd: "codex exec hi"})`,
+		`{"command":"test -d /repo && codex exec hi"}`,
+		`flag && tools.exec_command({cmd: "codex exec hi"})`,
+		`{"command":"exit; codex exec hi"}`,
+		`exit(); tools.exec_command({cmd: "codex exec hi"})`,
+		`{"command":"true && exit; codex exec hi"}`,
+		`{"command":"if true; then exit; fi; codex exec hi"}`,
+		`{"command":"exit && codex exec hi"}`,
+		`exit() && tools.exec_command({cmd: "codex exec hi"})`,
+		`{"command":"if exit; then codex exec hi; fi"}`,
+		`if (exit()) { tools.exec_command({cmd: "codex exec hi"}) }`,
+		`if (flag) { exit() }; tools.exec_command({cmd: "codex exec hi"})`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: input}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(t.Context(), "child")
+			require.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
+}
+
+func TestLaunchParentConditionalCompetitor(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		blocked bool
+		raw     bool
+	}{
+		{`false && codex exec hi`, false, false},
+		{`exit && codex exec hi`, false, false},
+		{`if exit; then codex exec hi; fi`, false, false},
+		{`exit() && tools.exec_command({cmd: "codex exec hi"})`, false, true},
+		{`if (exit()) { tools.exec_command({cmd: "codex exec hi"}) }`, false, true},
+		{`test -d /repo && codex exec hi`, true, false},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			d := testDB(t)
+			for _, parent := range []struct{ id, command string }{{"actual", "codex exec hi"}, {"conditional", tc.command}} {
+				insertSession(t, d, parent.id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+				input, err := json.Marshal(map[string]string{"command": parent.command})
+				require.NoError(t, err)
+				if parent.id == "conditional" && tc.raw {
+					input = []byte(parent.command)
+				}
+				insertMessages(t, d, Message{SessionID: parent.id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: parent.id, ToolName: "Bash", Category: "Bash", InputJSON: string(input)}}})
+			}
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			require.NoError(t, err)
+			parent, err := d.GetSessionExternalParent(t.Context(), "child")
+			if tc.blocked {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, "actual", parent.ParentSessionID)
+			}
+		})
+	}
+}
+
+func TestLaunchParentHookVersionGuard(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "inferred", "project")
+	insertSession(t, d, "hook", "project")
+	insertSession(t, d, "child", "project")
+	_, err := d.SetSessionExternalParent(t.Context(), "child", "inferred")
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE session_external_parents SET inferred=1 WHERE session_id='child'`)
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "child", "hook")
+	require.NoError(t, err)
+	var parent string
+	var inferred bool
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT parent_session_id,inferred FROM session_external_parents WHERE session_id='child'`).Scan(&parent, &inferred))
+	assert.Equal(t, "hook", parent)
+	assert.False(t, inferred)
+	var version int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Greater(t, version, 189, "a version-189 binary must reject this archive before it can write a hook link")
+}
+
 func TestLaunchParentBackfillPages(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
@@ -651,7 +751,7 @@ func TestLaunchParentShellOrAndCodeMode(t *testing.T) {
 		name, input string
 		linked      bool
 	}{
-		{"short circuit JavaScript", `false && await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})`, true},
+		{"short circuit JavaScript", `false && await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})`, false},
 		{"uncalled function", `function f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) }`, false},
 		{"uncalled method", `const x = { f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) } }`, false},
 		{"multiple JavaScript calls", `await Promise.all([tools.exec_command({cmd:"echo hello"}), tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})])`, true},
@@ -794,8 +894,8 @@ func TestLaunchParentCDGuard(t *testing.T) {
 		{"matching guarded directory", `cd /repo && codex exec hi`, "/repo", false, true},
 		{"other directory", `cd /repo && codex exec hi`, "/other", false, false},
 		{"other directory is not blocked", `cd /repo && codex exec hi`, "/other", true, true},
-		{"outer unknown guard", `test -d /repo && cd /repo && codex exec hi`, "/repo", false, true},
-		{"changed codex directory", `cd /repo && codex -C /other exec hi`, "/other", false, true},
+		{"outer unknown guard", `test -d /repo && cd /repo && codex exec hi`, "/repo", false, false},
+		{"changed codex directory", `cd /repo && codex -C /other exec hi`, "/other", false, false},
 		{"unchecked directory", `cd /repo; codex exec hi`, "/repo", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
