@@ -1784,7 +1784,7 @@ func (db *DB) settleUpsertedSessionTx(ctx context.Context, tx *sql.Tx, s Session
 // linkInsertedLaunchChildTx links a newly inserted launched run to its parent
 // in the transaction that wrote it.
 func linkInsertedLaunchChildTx(ctx context.Context, tx *sql.Tx, s Session, result sessionUpsertResult) error {
-	if !result.inserted || !(s.Agent == "codex" && s.SessionKind == "non-interactive" || s.Agent == "claude" && s.Entrypoint == "sdk-cli") {
+	if !result.inserted || (s.Agent != "codex" || s.SessionKind != "non-interactive") && (s.Agent != "claude" || s.Entrypoint != "sdk-cli") {
 		return nil
 	}
 	_, err := linkLaunchParentsChangedTx(ctx, tx, []string{s.ID}, map[string]int{})
