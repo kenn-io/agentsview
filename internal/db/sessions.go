@@ -1756,7 +1756,7 @@ func (db *DB) upsertSession(ctx context.Context,
 		return result, err
 	}
 	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
 			return result, err
 		}
 	}

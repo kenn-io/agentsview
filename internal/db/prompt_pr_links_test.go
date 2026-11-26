@@ -324,3 +324,73 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, pending)
 }
+
+func TestToolPRLinksArchiveUpgrade(t *testing.T) {
+	for _, tc := range []struct {
+		name, category, field string
+		prompt, command       string
+		want                  []string
+	}{
+		{"tool upgrade", "Bash", "command", "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
+		{"task pull", "Task", "prompt", "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d, err := OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if d != nil {
+					_ = d.Close()
+				}
+			})
+			s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			messages := []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.category, Category: tc.category, InputJSON: `{"` + tc.field + `":"` + tc.command + `"}`}}}}
+			if tc.prompt != "" {
+				messages = append(messages, Message{SessionID: s.ID, Ordinal: 0, Role: "user", Content: tc.prompt})
+			}
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				promptLinks := ""
+				if tc.prompt != "" {
+					promptLinks = EncodePRLinks(PromptPRLinks(messages))
+				}
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, promptLinks, s.ID); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+			}))
+			require.NoError(t, d.Close())
+			d, err = OpenIsolatedWithArchiveContent(t.Context(), path, config.ArchiveContentFull)
+			require.NoError(t, err)
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			var urls []string
+			for _, link := range got.PRLinks {
+				urls = append(urls, link.URL)
+			}
+			assert.Equal(t, tc.want, urls)
+		})
+	}
+}
+
+func TestToolPRLinksStoredMessages(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "tool-links", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	message := func(ordinal int, category, input string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: category, Category: category, InputJSON: input}}}
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{message(0, "Bash", `{"command":"gh pr view 42 -R example/repo"}`)}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "Task", `{"prompt":"Review https://github.com/example/repo/pull/43"}`)}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, 42, got.PRLinks[0].Number)
+	assert.Equal(t, 43, got.PRLinks[1].Number)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{message(0, "Bash", `{"command":"gh pr view 44 -R example/repo"}`)}))
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, 44, got.PRLinks[0].Number)
+}

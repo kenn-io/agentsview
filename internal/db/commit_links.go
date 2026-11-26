@@ -210,24 +210,40 @@ func commitCommandText(input string) string {
 		return signals.CommandText(input)
 	}
 	// A batch's output and process IDs do not identify which new call owns them.
-	matches := commitCommandRE.FindAllStringSubmatch(input, -1)
-	if len(commitToolCallRE.FindAllStringIndex(input, -1)) != 1 || len(matches) != 1 {
+	if len(commitToolCallRE.FindAllStringIndex(input, -1)) != 1 || len(commitCommandRE.FindAllStringIndex(input, -1)) != 1 {
 		return ""
 	}
-	literal := matches[0][1]
-	if strings.Contains(literal, "${") {
+	commands := literalCommands(input)
+	if len(commands) != 1 {
 		return ""
 	}
-	var decoded strings.Builder
-	for rest := literal[1 : len(literal)-1]; rest != ""; {
-		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-		if err != nil {
-			return ""
+	return commands[0]
+}
+
+func literalCommands(input string) []string {
+	var commands []string
+	for _, match := range commitCommandRE.FindAllStringSubmatchIndex(input, -1) {
+		after := strings.TrimLeft(input[match[1]:], " \t\r\n")
+		literal := input[match[2]:match[3]]
+		if len(after) == 0 || (after[0] != ',' && after[0] != '}') || strings.Contains(literal, "${") {
+			continue
 		}
-		decoded.WriteRune(r)
-		rest = tail
+		var decoded strings.Builder
+		valid := true
+		for rest := literal[1 : len(literal)-1]; rest != ""; {
+			r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+			if err != nil {
+				valid = false
+				break
+			}
+			decoded.WriteRune(r)
+			rest = tail
+		}
+		if valid {
+			commands = append(commands, decoded.String())
+		}
 	}
-	return decoded.String()
+	return commands
 }
 
 type commitCall struct {
@@ -392,7 +408,7 @@ func commitLinkCandidate(input, tool, category string) bool {
 		(invokesGitCommit(commitCommandText(input)) || len(commitPollIDs(input, tool)) > 0)
 }
 
-func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate, usageOnly bool) error {
+func bumpIncrementalTranscriptRevisionTx(ctx context.Context, tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate, usageOnly bool) error {
 	// Replacements can remove evidence. Appends only affect links through
 	// commit commands and polls, including late results for existing calls.
 	refresh := update.ReplaceFromOrdinal != nil
@@ -446,10 +462,10 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 	}
 	if !usageOnly {
 		if update.ReplaceFromOrdinal != nil {
-			if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 				return err
 			}
-		} else if err := appendSessionPromptPRLinksTx(tx, sessionID, msgs); err != nil {
+		} else if err := appendSessionPromptPRLinksTx(ctx, tx, sessionID, msgs); err != nil {
 			return err
 		}
 	}

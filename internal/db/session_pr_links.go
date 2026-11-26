@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 // PRLink is a pull or merge request named in a structured record or retained
@@ -250,7 +252,7 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
-func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
+func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
 	var stored, structured string
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
@@ -267,11 +269,27 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	links := parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools)
+	return writeSessionPromptPRLinksTx(tx, id, stored, links)
 }
 
-func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
-	derived := PromptPRLinks(messages)
+func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string, messages []Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	prompts, err := PromptPRLinksContext(ctx, messages)
+	if err != nil {
+		return err
+	}
+	tools, err := ToolCallPRLinks(ctx, messages)
+	if err != nil {
+		return err
+	}
+	derived := parser.CombinePRLinks(prompts, tools)
 	if len(derived) == 0 {
 		return nil
 	}
@@ -295,30 +313,171 @@ func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRL
 // links found in retained prompts.
 const promptPRLinksDataVersion = 184
 
-// upgradePromptPRLinksTx indexes stored prompts in the transaction that raises
-// the archive to promptPRLinksDataVersion. An older binary may have rewritten
-// pr_links without structured_pr_links since the column was added, so the
-// structured column is refreshed first. Doing both with the version change
-// means an archive an older binary still accepts never holds prompt links.
-func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
+// upgradePRLinksTx copies legacy structured links and refreshes each candidate once.
+// Older binaries may have rewritten pr_links without updating structured_pr_links.
+// Copy and refresh in the version transaction so old archives never hold derived links.
+func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
-	if err != nil || version >= promptPRLinksDataVersion {
+	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
-		return fmt.Errorf("copying structured PR links: %w", err)
+	if version < promptPRLinksDataVersion {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
+			return fmt.Errorf("copying structured PR links: %w", err)
+		}
 	}
 	if db.usageOnlyStorage() {
 		return nil
 	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
+	candidate := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
+	if version < promptPRLinksDataVersion {
+		candidate += " OR id IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
+	}
+	ids, err := sessionIDsTx(ctx, tx, candidate)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
-			return fmt.Errorf("backfilling prompt PR links: %w", err)
+		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return fmt.Errorf("backfilling PR links: %w", err)
 		}
 	}
 	return nil
 }
+
+const maxPRCommandInputBytes = 256 * 1024
+
+func callPRLinks(ctx context.Context, category, input string) ([]PRLink, error) {
+	if category == "Task" {
+		return taskPRLinks(ctx, input)
+	}
+	if category != "Bash" || len(input) > maxPRCommandInputBytes {
+		return nil, ctx.Err()
+	}
+	commands, ok := shellInputCommands(input)
+	if !ok {
+		return nil, ctx.Err()
+	}
+	var lists [][]PRLink
+	for _, command := range commands {
+		links, err := parser.AnalyzePRCommand(ctx, command)
+		if err != nil {
+			return nil, err
+		}
+		lists = append(lists, links)
+	}
+	return parser.CombinePRLinks(lists...), nil
+}
+
+// taskPRLinks finds links in the prompt fields of a delegated task, including
+// each agent a spawn names, and ignores its descriptions.
+func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
+	var payload struct {
+		Prompt  string         `json:"prompt"`
+		Task    string         `json:"task"`
+		Message string         `json:"message"`
+		Content jsontext.Value `json:"content"`
+		Agents  []struct {
+			Prompt string `json:"prompt"`
+		} `json:"agents"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil {
+		return nil, ctx.Err()
+	}
+	var content string
+	_ = json.Unmarshal(payload.Content, &content)
+	text := []string{payload.Prompt, payload.Message, payload.Task, content}
+	for _, agent := range payload.Agents {
+		text = append(text, agent.Prompt)
+	}
+	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
+}
+
+// shellInputCommands lists literal commands in a shell tool input.
+func shellInputCommands(input string) ([]string, bool) {
+	if !jsontext.Value(input).IsValid() {
+		if commitToolCallRE.MatchString(input) {
+			return literalCommands(input), true
+		}
+		text := strings.TrimSpace(input)
+		return []string{input}, text != ""
+	}
+	var payload struct {
+		Command     jsontext.Value `json:"command"`
+		CommandLine string         `json:"CommandLine"`
+		Cmd         string         `json:"cmd"`
+		Commands    []string       `json:"commands"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil {
+		return nil, false
+	}
+	if len(payload.Command) > 0 && string(payload.Command) != "null" {
+		command, ok := commandValue(payload.Command)
+		return []string{command}, ok
+	}
+	if payload.CommandLine != "" {
+		return []string{payload.CommandLine}, true
+	}
+	if payload.Commands != nil {
+		return payload.Commands, true
+	}
+	return []string{payload.Cmd}, true
+}
+
+// commandValue decodes a command given as shell text or as an argv list.
+func commandValue(raw jsontext.Value) (string, bool) {
+	var command string
+	if json.Unmarshal(raw, &command) == nil {
+		return command, true
+	}
+	var argv []string
+	if json.Unmarshal(raw, &argv) != nil || len(argv) == 0 {
+		return "", false
+	}
+	for i, arg := range argv {
+		argv[i] = shellquote.POSIX(arg)
+	}
+	return strings.Join(argv, " "), true
+}
+
+// ToolCallPRLinks derives links from each independent tool call.
+func ToolCallPRLinks(ctx context.Context, messages []Message) ([]PRLink, error) {
+	var lists [][]PRLink
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			links, err := callPRLinks(ctx, call.Category, call.InputJSON)
+			if err != nil {
+				return nil, err
+			}
+			lists = append(lists, links)
+		}
+	}
+	return parser.CombinePRLinks(lists...), nil
+}
+
+func storedToolCallsTx(tx transactionQueries, id string) ([]ToolCall, error) {
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL ORDER BY m.ordinal, t.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var calls []ToolCall
+	for rows.Next() {
+		var call ToolCall
+		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {
+			return nil, err
+		}
+		calls = append(calls, call)
+	}
+	return calls, rows.Err()
+}
+
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id string) ([]PRLink, error) {
+	calls, err := storedToolCallsTx(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	return ToolCallPRLinks(ctx, []Message{{ToolCalls: calls}})
+}
+
+const toolPRLinksDataVersion = 190

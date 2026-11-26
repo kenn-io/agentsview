@@ -493,6 +493,9 @@ combinable filter options:
 
 ![Label and pull request filters](/docs/assets/generated/screenshots/session-label-filters.png)
 
+Pull-request filters also match supported `gh pr` commands and child-agent
+prompts; see [pull request links](/docs/session-api/#pull-request-links).
+
 Label and pull-request filters can find child and automated sessions. The
 sidebar displays the containing tree, and an explicit single-turn exclusion
 still applies. Use [launcher links](/docs/session-api/#agentsview-session-parent)

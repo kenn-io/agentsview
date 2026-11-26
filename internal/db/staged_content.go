@@ -345,7 +345,7 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 	// and prior failed post-processing may still have changed; refresh every
 	// derived projection in one transaction with the checkpoint.
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -516,7 +516,7 @@ func (db *DB) replaceSessionContentStaged(
 		return err
 	}
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}

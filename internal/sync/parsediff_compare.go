@@ -58,7 +58,11 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, db.PromptPRLinks(msgs))
+	toolLinks, err := db.ToolCallPRLinks(ctx, msgs)
+	if err != nil {
+		return nil, err
+	}
+	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, toolLinks, db.PromptPRLinks(msgs))
 	diffs := compareSessionFields(stored, prepared)
 
 	// Tier 1: three exact ordered fingerprints over the stored
@@ -296,10 +300,9 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
-	// Pull request links are never incremental-append history: an appended
-	// record that would change them forces a full parse, so any difference
-	// is real drift.
-	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
+	// Incremental writes can store links in a different order from a full parse.
+	if len(stored.PRLinks) != len(prepared.PRLinks) || len(parser.CombinePRLinks(stored.PRLinks, prepared.PRLinks)) != len(stored.PRLinks) {
+		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),

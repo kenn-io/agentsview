@@ -233,3 +233,28 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	assert.Equal(t, future, version)
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}, db.DecodePRLinks(links))
 }
+
+func TestRawProjectionCommandPRLinks(t *testing.T) {
+	f := newProjectionFixture(t)
+	outcome := projectionOutcome("start")
+	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	m, _ := f.accept(t, "device-a", "initial", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	want := []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}
+	assert.Equal(t, want, db.DecodePRLinks(links))
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', data_version=189 WHERE id=$1`, resolved.SessionID)
+	require.NoError(t, err)
+	rollout, err := f.sink.ScheduleCurrentHeads(t.Context(), "tool-links", "parser-2", 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollout.Selected)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "tool-links-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], m, outcome))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	assert.Equal(t, want, db.DecodePRLinks(links))
+}

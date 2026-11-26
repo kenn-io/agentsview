@@ -682,7 +682,15 @@ ______________________________________________________________________
 ### Pull request links
 
 Each session's `pr_links` field lists pull requests found in retained user
-prompts or structured transcript records:
+prompts, literal `gh pr` commands in shell tool calls, full PR URLs in
+child-agent prompts, or structured transcript records. Supported actions are
+`view`, `checkout` (including `co`), `edit`, `diff`, `checks`, `comment`,
+`review`, `ready`, `merge`, `close`, `reopen`, `update-branch`, `lock`,
+`unlock`, and `revert`. A command names its pull request by URL or number,
+with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`.
+AgentsView recognizes supported command flags and literal commands wrapped by
+`command`, `env`, `timeout`, or a shell. A selector or repository from a
+variable or substitution is not indexed.
 
 ```json
 "pr_links": [
@@ -701,6 +709,12 @@ worked on it. Claude Code also includes `pr-link` entries in its transcripts.
 Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
+
+A number requires an explicit repository. `-R owner/repo` uses `github.com`,
+including on GitHub Enterprise installations. Use a full URL or `-R
+host/owner/repo` for another host. A command containing `GH_HOST` does not
+produce a hostless `-R` link. Transcript-only and usage-only archives do not
+retain tool inputs, so they cannot recover command or child-agent prompt links.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for

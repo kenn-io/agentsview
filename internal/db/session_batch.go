@@ -649,10 +649,10 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	if !usageOnly {
 		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
-			if err := refreshSessionPromptPRLinksTx(queries, write.Session.ID); err != nil {
+			if err := refreshSessionPromptPRLinksTx(ctx, queries, write.Session.ID); err != nil {
 				return 0, err
 			}
-		} else if err := appendSessionPromptPRLinksTx(queries, write.Session.ID, msgs); err != nil {
+		} else if err := appendSessionPromptPRLinksTx(ctx, queries, write.Session.ID, msgs); err != nil {
 			return 0, err
 		}
 	}
