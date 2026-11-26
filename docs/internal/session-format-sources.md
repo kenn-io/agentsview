@@ -282,6 +282,21 @@ evidence; they do not establish whether a tool helped the task.
   identity and content revisions. Parser changes to other fields, such as Pi
   reasoning text, still produce a new revision.
 
+- **Bash call working directory (checked 2026-11-26):** A metadata-only
+  inspection found assistant Bash entries with a `cwd` different from the
+  first session `cwd` in 10 of 39 recent local Claude transcripts. Anthropic's
+  [Bash tool reference](https://code.claude.com/docs/en/tools-reference#what-persists-between-commands)
+  says a successful foreground `cd` can carry over within approved working
+  directories in the main session; subagent sessions do not carry it over.
+  `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` disables that carry-over.
+  AgentsView retains the assistant entry's `cwd` on each Bash call during full
+  and incremental Claude parsing. Launch inference uses that call directory;
+  a missing directory remains unknown rather than falling back to the session's
+  first user directory. Data version 191 reparses Claude and Codex sources to
+  recover call directories. A missing launcher transcript cannot supply a
+  previously unrecorded directory. The transcript field is an observation of
+  the local producer, not a public persistence schema.
+
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
