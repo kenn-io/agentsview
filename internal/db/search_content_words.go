@@ -194,7 +194,7 @@ func explicitFTSExpression(pattern string) bool {
 // buildContentWordHits fills a temporary table with every message that holds
 // a query word and the number of words it holds. A query with quoted phrases
 // keeps only the messages FTS finds holding every phrase.
-func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error {
+func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords, filter contentWordFilter) error {
 	terms, err := json.Marshal(q.terms)
 	if err != nil {
 		return err
@@ -203,9 +203,11 @@ func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error
 		id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("collecting word matches: %w", err)
 	}
+	args := append([]any{string(terms)}, filter.scopeArgs...)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO content_word_hits
 		SELECT f.rowid, count(*) FROM json_each(?) t
-		CROSS JOIN messages_fts f WHERE f.content MATCH t.value GROUP BY f.rowid`, string(terms)); err != nil {
+		CROSS JOIN messages_fts f CROSS JOIN messages m ON m.id = f.rowid
+		WHERE f.content MATCH t.value AND m.`+filter.scope+` GROUP BY f.rowid`, args...); err != nil {
 		return fmt.Errorf("collecting word matches: %w", err)
 	}
 	if q.match == "" {
@@ -273,7 +275,7 @@ func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilte
 	floor, total := all, 0
 	for {
 		if floor == all-1 {
-			if err := buildContentWordHits(ctx, tx, q); err != nil {
+			if err := buildContentWordHits(ctx, tx, q, filter); err != nil {
 				return nil, err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO content_word_scope
