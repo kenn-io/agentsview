@@ -972,39 +972,6 @@ func writeSessionProjectIdentitySnapshotExec(
 	)
 }
 
-// CorrectRecordedProjectSnapshots applies fresh parser labels after rebuild metadata is copied.
-func (db *DB) CorrectRecordedProjectSnapshots(ctx context.Context, projects map[string]string) error {
-	ids := make([]string, 0, len(projects))
-	for id := range projects {
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	for chunk := range slices.Chunk(ids, 500) {
-		snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, chunk)
-		if err != nil {
-			return err
-		}
-		for id, snapshot := range snapshots {
-			snapshot.Project = projects[id]
-			if err := upsertSessionProjectIdentitySnapshotExec(ctx, tx, func(ctx context.Context, query string, args ...any) rowScanner {
-				return tx.QueryRowContext(ctx, query, args...)
-			}, snapshot, true); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
-}
-
 // RestoreSessionProjectsFromIdentitySnapshots resets current project labels to
 // resolved Git-backed parser-source snapshots. Full resync calls this after
 // copying snapshots from the old archive and before reapplying active worktree
@@ -1029,6 +996,26 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// Metadata copy may have replaced fresh labels with older snapshots.
+	ids := make([]string, 0, len(recordedProjects))
+	for id := range recordedProjects {
+		ids = append(ids, id)
+	}
+	for chunk := range slices.Chunk(ids, 500) {
+		snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, chunk)
+		if err != nil {
+			return 0, err
+		}
+		for id, snapshot := range snapshots {
+			snapshot.Project = recordedProjects[id]
+			if err := upsertSessionProjectIdentitySnapshotExec(ctx, tx, func(ctx context.Context, query string, args ...any) rowScanner {
+				return tx.QueryRowContext(ctx, query, args...)
+			}, snapshot, true); err != nil {
+				return 0, err
+			}
+		}
+	}
 
 	type projectRestore struct {
 		sessionID       string

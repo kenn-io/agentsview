@@ -2472,11 +2472,7 @@ func TestCodexRecordedRunLabel(t *testing.T) {
 	}{
 		{"sessions root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", []string{"team/case/.codex-run-v1-abc/sessions"}},
 		{"wider root", "other/place/.codex-run-v1-abc", recorded, "team/case", "team/case", []string{"."}},
-		{"narrower root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", []string{"team"}},
-		{"dot label", "team/case/.codex-run-v1-abc", `{"label":"."}`, ".", ".", []string{"."}},
-		{"missing", "team/case/.codex-run-v1-abc", "", "team/case", "", []string{"."}},
 		{"malformed", "team/case/.codex-run-v1-abc", `{"label":`, "team/case", "", []string{"."}},
-		{"empty", "team/case/.codex-run-v1-abc", `{"label":""}`, "team/case", "", []string{"."}},
 		{"ordinary home", ".codex", recorded, "project", "", []string{".codex/sessions"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

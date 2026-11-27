@@ -882,9 +882,6 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	if err := newDB.CorrectRecordedProjectSnapshots(ctx, recordedProjects.projects); err != nil {
-		return abortPreserved(fmt.Errorf("correct recorded project snapshots: %w", err))
-	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
 		ctx, recordedProjects.projects,
 	); err != nil {

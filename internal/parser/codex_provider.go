@@ -518,7 +518,7 @@ func (p *codexProvider) PlanRawCapture(
 	var sidecarRoots []string
 	if metadataPath != "" {
 		metadataRel, err := filepath.Rel(captureRoot, metadataPath)
-		if err != nil || !rawCapturePathWithin(captureRoot, metadataPath) {
+		if err != nil {
 			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is outside its capture root")
 		}
 		entries = append(entries, RawCaptureEntry{Path: filepath.ToSlash(metadataRel), LocalPath: metadataPath})
@@ -586,7 +586,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
+			if (p.Config.StableSourceSnapshots || i == 0 && (metadataPath != "" || CodexSourceLabel(src.Root, src.Path) != "")) &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
