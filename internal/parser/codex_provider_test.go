@@ -2403,6 +2403,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		{"nested", "experiment/case/.codex-run-v1-abc", `{"label":`, "experiment/case", SessionKindRoborev, false, []string{"."}},
 		{"root", ".codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"."}},
 		{"parent root missing", "team/case/.codex-run-v1-abc", "", "project", SessionKindRoborev, false, []string{"team/case"}},
+		{"sessions root missing", "team/case/.codex-run-v1-abc", "", "project", SessionKindRoborev, false, []string{"team/case/.codex-run-v1-abc/sessions"}},
 		{"sessions root malformed", "team/case/.codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"team/case/.codex-run-v1-abc/sessions"}},
 		{"outer root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{".", "team"}},
 		{"inner root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{"team", "."}},
@@ -2449,9 +2450,10 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 func TestCodexDirectRunRootPreferredOverOrdinaryCopy(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
-	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly), testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
 	runRoot := filepath.Join(root, "z", ".codex-run-v1-abc", "sessions")
 	run := writeCodexProviderSessionContent(t, runRoot, id, content)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(runRoot), CodexRunMetadataFilename), []byte(`{"label":"team/case"}`), 0o600))
 	ordinary := writeCodexProviderSessionContent(t, filepath.Join(root, "ordinary"), id, content)
 	now := time.Now().Add(time.Hour)
 	require.NoError(t, os.Chtimes(ordinary, now, now))
@@ -2465,6 +2467,11 @@ func TestCodexDirectRunRootPreferredOverOrdinaryCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, run, source.DisplayPath)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
+	assert.True(t, outcome.Results[0].Result.Session.RecordedProject)
 }
 
 func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
