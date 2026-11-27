@@ -12539,7 +12539,6 @@ func (e *Engine) writeSessionFullWithResolver(
 		log.Printf("clear source-missing state for session %s: %v", s.ID, err)
 		return err
 	}
-	e.recordRebuildProject(s, pw)
 	return nil
 }
 

@@ -2463,17 +2463,19 @@ func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
 	require.NoError(t, os.Chtimes(newer, now, now))
 	check(newer)
 }
+
 func TestCodexRecordedRunLabel(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	const recorded = `{"label":"team/case"}`
 	for _, tc := range []struct {
 		name, homeDir, metadata, project, recorded string
+		kind                                       string
 		roots                                      []string
 	}{
-		{"sessions root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", []string{"team/case/.codex-run-v1-abc/sessions"}},
-		{"wider root", "other/place/.codex-run-v1-abc", recorded, "team/case", "team/case", []string{"."}},
-		{"malformed", "team/case/.codex-run-v1-abc", `{"label":`, "team/case", "", []string{"."}},
-		{"ordinary home", ".codex", recorded, "project", "", []string{".codex/sessions"}},
+		{"sessions root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"wider root", "other/place/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"."}},
+		{"malformed", "team/case/.codex-run-v1-abc", `{"label":`, "team/case", "", SessionKindRoborev, []string{"."}},
+		{"ordinary home", ".codex", recorded, "project", "", SessionKindNonInteractive, []string{".codex/sessions"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2498,34 +2500,39 @@ func TestCodexRecordedRunLabel(t *testing.T) {
 			sess := outcome.Results[0].Result.Session
 			assert.Equal(t, tc.project, sess.Project)
 			assert.Equal(t, tc.recorded != "", sess.RecordedProject)
-			wantKind := SessionKindRoborev
-			if tc.project == "project" {
-				wantKind = SessionKindNonInteractive
-			}
-			assert.Equal(t, wantKind, sess.SessionKind)
+			assert.Equal(t, tc.kind, sess.SessionKind)
 		})
 	}
 }
 
 func TestCodexRecordedLabelReadErrorRetries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file read permissions are not enforced on Windows")
+	}
 	root := t.TempDir()
 	home := filepath.Join(root, "team", ".codex-run-v1-test")
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e2"
 	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
 	writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
 	metadataPath := filepath.Join(home, CodexRunMetadataFilename)
-	require.NoError(t, os.Mkdir(metadataPath, 0o700))
+	require.NoError(t, os.WriteFile(metadataPath, []byte(`{"label":"team/case"}`), 0o600))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(metadataPath, 0o600)) })
+	require.NoError(t, os.Chmod(metadataPath, 0o000))
+	_, err := os.ReadFile(metadataPath)
+	if err == nil {
+		t.Skip("the current user bypasses file permissions")
+	}
+	require.ErrorIs(t, err, os.ErrPermission)
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	for _, sourceErr := range outcome.SourceErrors {
-		err = errors.Join(err, sourceErr.Err)
-	}
+	require.ErrorIs(t, err, os.ErrPermission)
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr)
 	assert.Equal(t, metadataPath, pathErr.Path)
+	assert.Empty(t, outcome.SourceErrors)
 	assert.Empty(t, outcome.Results)
 }
