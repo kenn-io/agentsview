@@ -1787,8 +1787,9 @@ Because each test owns a database, the tests run in parallel:
 
 - Start a new `pgtest` test with `t.Parallel()` and get its database from
   `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
-  Subtests share their top-level test's database. `isolatedPGDatabase(t)`
-  returns another, separate database.
+  Subtests inherit an ancestor test's database when one already exists; sibling
+  subtests whose parent did not create a database each get their own.
+  `isolatedPGDatabase(t)` returns another, separate database.
 - A test that only needs a schema to exist before it starts gets its database
   from `testPGSchemaURL(t, schema)`. On PostgreSQL that database is a copy of
   a template in which `EnsureSchema` already created `schema`. Copying and the
@@ -1816,8 +1817,9 @@ Because each test owns a database, the tests run in parallel:
 - Roles are server-wide. Give each role a name no other test uses.
 - Concurrent tests share the server's connections and lock table. Hosted schema
   creation and cleanup can exhaust lock memory (SQLSTATE 53200) with 12
-  concurrent tests on a default 100-connection server. Each top-level test
-  holds a slot while its databases exist. PostgreSQL permits the smaller of
+  concurrent tests on a default 100-connection server. Each database-owning test
+  holds a slot while its databases exist, and subtests inherit an ancestor's
+  held slot. PostgreSQL permits the smaller of
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
   tests, with at least one slot. The default settings permit three tests, so
   the CI service and `docker-compose.test.yml` set
