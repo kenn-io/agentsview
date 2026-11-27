@@ -120,9 +120,10 @@ func (p *devinProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	if sess == nil {
+		// An empty message-node fallback leaves the source row present.
+		// Skip it without treating any archived transcript as missing.
 		return ParseOutcome{
 			ResultSetComplete: true,
-			ForceReplace:      true,
 			SkipReason:        SkipNoSession,
 		}, nil
 	}

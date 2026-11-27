@@ -862,77 +862,69 @@ func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 	assert.Equal(t, "Transcript answer", msgs[1].Content)
 }
 
-func TestParseDevinSessionMissingTranscriptWithoutDBMessagesReturnsRedactedError(t *testing.T) {
-	const sessionID = "session-db-only-empty"
-	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:               sessionID,
-		Title:            "DB only session",
-		WorkingDirectory: "/tmp/db-only-project",
-		Model:            "db-only-model",
-		CreatedAt:        new(int64(1704103200)),
-		LastActivityAt:   new(int64(1704103209)),
-	})
-
-	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
-	require.Nil(t, sess)
-	assert.Nil(t, msgs)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "missing devin transcript")
-	require.ErrorContains(t, err, devinRedactedTranscriptPath())
-	require.ErrorContains(t, err, devinRedactedSessionID())
-	assert.NotContains(t, err.Error(), sessionID)
-}
-
-func TestParseDevinSessionFallbackErrorsStayRedacted(t *testing.T) {
+func TestParseDevinSessionSourceErrors(t *testing.T) {
 	const (
 		sessionID      = "secret-session"
 		secretSentinel = "oauth-token-SYNTHETIC-SECRET-SENTINEL"
 	)
-	fixture := newDevinTestFixture(t, devinSessionRow{
-		ID:               sessionID,
-		Title:            "DB only session",
-		WorkingDirectory: "/tmp/db-only-project",
-		Model:            "db-only-model",
-		CreatedAt:        new(int64(1704103200)),
-		LastActivityAt:   new(int64(1704103209)),
-	})
-	fixture.insertMessageNodes(t,
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"content":"` + secretSentinel, CreatedAt: 1704103201},
-	)
+	tests := []struct {
+		name          string
+		prepare       func(t *testing.T, fixture *devinTestFixture)
+		wantError     string
+		wantPathError bool
+	}{
+		{
+			name: "corrupt transcript",
+			prepare: func(t *testing.T, fixture *devinTestFixture) {
+				t.Helper()
+				fixture.writeTranscript(t, sessionID, `{"content":"`+secretSentinel)
+			},
+			wantError: "invalid devin transcript",
+		},
+		{
+			name: "unreadable transcript",
+			prepare: func(t *testing.T, fixture *devinTestFixture) {
+				t.Helper()
+				path := filepath.Join(fixture.Root, "cli", "transcripts", sessionID+".json")
+				require.NoError(t, os.MkdirAll(path, 0o755))
+			},
+			wantError:     "read devin transcript",
+			wantPathError: true,
+		},
+		{
+			name: "corrupt message node",
+			prepare: func(t *testing.T, fixture *devinTestFixture) {
+				t.Helper()
+				fixture.insertMessageNodes(t, devinSyntheticMessageNodeRow{
+					SessionID: sessionID, NodeID: 1, ChatMessage: `{"content":"` + secretSentinel, CreatedAt: 1_704_103_201,
+				})
+			},
+			wantError: "invalid devin message_nodes chat_message",
+		},
+		{
+			name: "message node query fails",
+			prepare: func(t *testing.T, fixture *devinTestFixture) {
+				t.Helper()
+				execDevinTestSQL(t, fixture.DBPath, `DROP TABLE message_nodes`)
+			},
+			wantError: "no such table: message_nodes",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newDevinTestFixture(t, devinSessionRow{ID: sessionID})
+			tc.prepare(t, fixture)
 
-	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
-	require.Nil(t, sess)
-	assert.Nil(t, msgs)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "missing devin transcript")
-	require.ErrorContains(t, err, devinRedactedTranscriptPath())
-	require.ErrorContains(t, err, devinRedactedSessionID())
-	assert.NotContains(t, err.Error(), sessionID)
-	assert.NotContains(t, err.Error(), secretSentinel)
-}
-
-func TestParseDevinSessionCorruptTranscriptReturnsRedactedError(t *testing.T) {
-	const sessionID = "secret-session"
-	dbPath, transcriptPath := newDevinSessionFixture(t, devinSessionRow{
-		ID:               sessionID,
-		Title:            "Corrupt transcript",
-		WorkingDirectory: "/tmp/app",
-		Model:            "db-model",
-		CreatedAt:        new(int64(1704103199)),
-		LastActivityAt:   new(int64(1704103265)),
-	}, `{"steps":[]}`)
-	require.NoError(t, os.WriteFile(transcriptPath, []byte(`{"apiKey":"secret-value","steps":[`), 0o644))
-
-	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
-	require.Nil(t, sess)
-	assert.Nil(t, msgs)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "invalid devin transcript")
-	require.ErrorContains(t, err, devinRedactedTranscriptPath())
-	require.ErrorContains(t, err, devinRedactedSessionID())
-	assert.NotContains(t, err.Error(), transcriptPath)
-	assert.NotContains(t, err.Error(), sessionID)
-	assert.NotContains(t, err.Error(), "secret-value")
+			sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
+			require.ErrorContains(t, err, tc.wantError)
+			assert.Nil(t, sess)
+			assert.Nil(t, msgs)
+			if tc.wantPathError {
+				require.ErrorAs(t, err, new(*os.PathError))
+			}
+			assertDevinErrorRedacted(t, err, fixture.Root, sessionID, secretSentinel)
+		})
+	}
 }
 
 func TestDevinTranscriptPathErrorStaysRedacted(t *testing.T) {

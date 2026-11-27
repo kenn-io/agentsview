@@ -27,40 +27,12 @@ func writeDevinMessageNodeOnlyFixture(
 ) string {
 	t.Helper()
 
-	cliDir := filepath.Join(root, "cli")
-	require.NoError(t, os.MkdirAll(cliDir, 0o755))
-	dbPath := filepath.Join(cliDir, "sessions.db")
-
-	database, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
+	dbPath, database := openDevinSyncFixture(t, root)
 	defer func() { require.NoError(t, database.Close()) }()
-
-	_, err = database.ExecContext(t.Context(), `
-		CREATE TABLE sessions (
-			id TEXT PRIMARY KEY,
-			title TEXT,
-			working_directory TEXT,
-			model TEXT,
-			created_at INTEGER,
-			last_activity_at INTEGER,
-			main_chain_id INTEGER,
-			hidden INTEGER NOT NULL DEFAULT 0
-		);
-		CREATE TABLE message_nodes (
-			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			node_id INTEGER NOT NULL,
-			parent_node_id INTEGER,
-			chat_message TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			metadata TEXT
-		);
-	`)
-	require.NoError(t, err)
 
 	// created_at and last_activity_at stay NULL: this session's only timestamp
 	// source is message_nodes.created_at.
-	_, err = database.ExecContext(t.Context(),
+	_, err := database.ExecContext(t.Context(),
 		`INSERT INTO sessions (id, title, working_directory, model, hidden)
 		 VALUES (?, ?, ?, ?, 0)`,
 		sessionID, "Devin node-only fixture", "/src/agentsview", "devin-1",
@@ -87,6 +59,39 @@ func writeDevinMessageNodeOnlyFixture(
 		require.NoError(t, err)
 	}
 	return dbPath
+}
+
+func openDevinSyncFixture(t *testing.T, root string) (string, *sql.DB) {
+	t.Helper()
+	cliDir := filepath.Join(root, "cli")
+	require.NoError(t, os.MkdirAll(cliDir, 0o755))
+	dbPath := filepath.Join(cliDir, "sessions.db")
+	database, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(t.Context(), `
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			title TEXT,
+			working_directory TEXT,
+			model TEXT,
+			created_at INTEGER,
+			last_activity_at INTEGER,
+			main_chain_id INTEGER,
+			hidden INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE message_nodes (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			node_id INTEGER NOT NULL,
+			parent_node_id INTEGER,
+			chat_message TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			metadata TEXT
+		);
+	`)
+	require.NoError(t, err)
+	return dbPath, database
 }
 
 // devinSourceFingerprint returns the provider fingerprint for the single Devin

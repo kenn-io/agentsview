@@ -320,15 +320,7 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 		if !os.IsNotExist(err) {
 			return nil, nil, newDevinTranscriptError("stat", err)
 		}
-		fallbackErr := newDevinTranscriptError("missing", nil)
-		sess, msgs, ok, err := parseDevinSessionFromMessageNodes(ctx, dbPath, rawSessionID, machine, meta)
-		if err == nil && ok {
-			return sess, msgs, nil
-		}
-		if err != nil {
-			return nil, nil, fallbackErr
-		}
-		return nil, nil, fallbackErr
+		return parseDevinSessionFromMessageNodes(ctx, dbPath, rawSessionID, machine, meta)
 	}
 
 	data, err := os.ReadFile(transcriptPath)
@@ -410,13 +402,13 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 func parseDevinSessionFromMessageNodes(ctx context.Context,
 	dbPath, rawSessionID, machine string,
 	meta *DevinSessionMeta,
-) (*ParsedSession, []ParsedMessage, bool, error) {
+) (*ParsedSession, []ParsedMessage, error) {
 	rows, err := listDevinMessageNodes(ctx, dbPath, rawSessionID)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	if len(rows) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil
 	}
 
 	model := metaValue(meta, func(m *DevinSessionMeta) string { return m.Model })
@@ -434,7 +426,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 	for _, row := range chain {
 		msg, ok, err := parseDevinDBMessageNode(ctx, rawSessionID, row, len(messages), model)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, err
 		}
 		if !ok {
 			continue
@@ -454,7 +446,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 		}
 	}
 	if len(messages) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil
 	}
 
 	startedAt := firstNonZeroTime(
@@ -471,7 +463,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 	devinApplyFileInfoTimes(&fileInfo, meta, endedAt)
 	sess := buildDevinParsedSession(ctx, meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
 	accumulateMessageTokenUsage(sess, messages)
-	return sess, messages, true, nil
+	return sess, messages, nil
 }
 
 // devinMainChainRows returns the message-node rows along the session's main

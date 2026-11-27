@@ -239,26 +239,38 @@ func TestDevinProviderMissingTranscriptUsesMessageNodeFallback(t *testing.T) {
 	assert.Equal(t, "fallback user", outcome.Results[0].Result.Messages[0].Content)
 }
 
-func TestDevinProviderMissingTranscriptWithoutDBMessagesReturnsProviderError(t *testing.T) {
+func TestDevinProviderSkipsEmptyMessageNodeFallback(t *testing.T) {
 	const sessionID = "session-db-only-empty"
-	fixture := newDevinTestFixture(t,
-		devinSessionRow{ID: sessionID, Title: "DB only session", WorkingDirectory: "/tmp/db-only-project", Model: "db-only-model", CreatedAt: new(int64(1704103200)), LastActivityAt: new(int64(1704103209))},
-	)
-	root := fixture.Root
+	tests := []struct {
+		name        string
+		chatMessage string
+	}{
+		{name: "no nodes"},
+		{name: "content-free node", chatMessage: `{"role":"assistant","content":""}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newDevinTestFixture(t, devinSessionRow{ID: sessionID})
+			if tc.chatMessage != "" {
+				fixture.insertMessageNodes(t, devinSyntheticMessageNodeRow{
+					SessionID: sessionID, NodeID: 1, ChatMessage: tc.chatMessage, CreatedAt: 1_704_103_201,
+				})
+			}
+			provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{fixture.Root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: sessionID})
+			require.NoError(t, err)
+			require.True(t, ok)
 
-	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
-	require.True(t, ok)
-
-	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: sessionID})
-	require.NoError(t, err)
-	require.True(t, ok)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-	require.Error(t, err)
-	assert.Empty(t, outcome.Results)
-	assert.Empty(t, outcome.SourceErrors)
-	require.ErrorContains(t, err, "missing devin transcript")
-	assert.NotContains(t, err.Error(), source.DisplayPath)
-	assert.NotContains(t, err.Error(), sessionID)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			assert.True(t, outcome.ResultSetComplete)
+			assert.False(t, outcome.ForceReplace)
+			assert.Equal(t, SkipNoSession, outcome.SkipReason)
+			assert.Empty(t, outcome.Results)
+			assert.Empty(t, outcome.SourceErrors)
+		})
+	}
 }
 
 func TestDevinProviderCompositeFingerprintStableAndRedacted(t *testing.T) {

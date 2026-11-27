@@ -5073,6 +5073,10 @@ schemas keep their existing ordering behavior.
   the nanosecond-representable epoch-second range instead of converting them,
   so a future unit change surfaces as missing timestamps rather than as a
   silently overflowed far-future mtime that would wedge resync.
+- **Empty sessions:** Devin Desktop can create a session row before it writes
+  any message nodes or a transcript (see [issue #3419](https://github.com/kenn-io/agentsview/issues/3419)).
+  Verified with synthetic SQLite fixtures: AgentsView skips such rows until
+  a node yields a message or a transcript is exported.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Cognition's first-party
   [Devin documentation](https://docs.devin.ai/) and public repositories were
