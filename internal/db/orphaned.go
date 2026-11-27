@@ -1536,6 +1536,20 @@ func (d *DB) CopySessionMetadataFrom(
 			return err
 		}
 	}
+	// A reparsed worker whose spawner is gone has no spawn edge left to link
+	// it, so it keeps the spawn record and subagent role the old archive held.
+	if oldDBHasColumn(ctx, tx, "sessions", "spawn_linked") {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET spawn_linked = 1,
+				relationship_type = IIF(COALESCE(relationship_type, '') = ''
+					AND COALESCE(parent_session_id, '') = ''
+					AND parser_relationship_type = 'subagent', 'subagent', relationship_type)
+			WHERE spawn_linked = 0
+			  AND id IN (SELECT id FROM old_db.sessions WHERE spawn_linked = 1)`); err != nil {
+			return fmt.Errorf("copying session spawn records: %w", err)
+		}
+	}
 
 	// Copy pinned messages (table may not exist in older DBs).
 	// Auto-increment message IDs differ between DBs, so old
@@ -2244,8 +2258,10 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
 		cols = append(cols, "parser_parent_session_id")
 	}
-	if oldDBHasColumn(ctx, tx, "sessions", "parser_relationship_type") {
-		cols = append(cols, "parser_relationship_type")
+	for _, c := range []string{"parser_relationship_type", "relationship_inferred", "spawn_linked"} {
+		if oldDBHasColumn(ctx, tx, "sessions", c) {
+			cols = append(cols, c)
+		}
 	}
 	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {

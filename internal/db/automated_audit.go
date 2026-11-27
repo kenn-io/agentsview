@@ -17,19 +17,55 @@ const parentlessRelationshipSQL = `IIF(sessions.session_kind = 'non-interactive'
 // parserRelationshipSQL restores parser provenance, falling back to kind for legacy rows.
 const parserRelationshipSQL = `COALESCE(sessions.parser_relationship_type, ` + parentlessRelationshipSQL + `)`
 
-const parentlessHeadlessWorkerConditionSQL = `COALESCE(sessions.parser_parent_session_id, '') = ''
- AND sessions.id NOT LIKE 'agent-%'
- AND (sessions.session_kind = 'non-interactive' OR sessions.entrypoint = 'sdk-cli')`
+// legacyRelationshipInferredSQL backfills relationship_inferred for rows
+// written before the column existed, mirroring relationshipInferred. Stored
+// rows do not keep the parser's relationship from before parentless
+// promotion, so a Grok child that its summary marked as a subagent cannot be
+// told apart from a promoted headless run. Grok rows count as explicit
+// children: re-deriving them would need a parser data version bump to reparse
+// every Grok source, and a legacy Grok worker stays a subagent as it did
+// before automated headless runs were cleared.
+const legacyRelationshipInferredSQL = `COALESCE(parser_parent_session_id, '') = ''
+ AND substr(id, 1, 6) <> 'agent-'
+ AND COALESCE(parser_relationship_type,
+	IIF(COALESCE(relationship_type, '') = '' AND session_kind = 'non-interactive', 'subagent', relationship_type)) = 'subagent'
+ AND (entrypoint = 'sdk-cli' OR (session_kind = 'non-interactive' AND agent <> 'grok'))`
 
-// effectiveParentlessRelationshipSQL restores a parentless session's effective
-// relationship when no external launcher parent applies. Automated parentless
-// headless runs stay un-delegated so they count as Automated.
-const effectiveParentlessRelationshipSQL = `IIF(sessions.is_automated = 1 AND ` + parentlessHeadlessWorkerConditionSQL + `, '', ` + parserRelationshipSQL + `)`
+// legacySpawnLinkedSQL backfills spawn_linked for rows that a spawn edge or an
+// applied launcher link already gives a parent.
+var legacySpawnLinkedSQL = spawnEdgeExistsSQL("sessions") + `
+ OR (COALESCE(parser_parent_session_id, '') = ''
+	AND EXISTS (SELECT 1 FROM session_external_parents ep
+		WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id))`
+
+// clearableHeadlessWorkerSQL reports whether a parentless session counts as
+// Automated instead of as a subagent: automated is an SQL boolean for the
+// automation verdict, the parser marked it subagent only from its headless
+// shape, and no spawn edge or launcher link has ever given it a parent.
+func clearableHeadlessWorkerSQL(automated string) string {
+	return `(` + automated + `)
+	 AND sessions.relationship_inferred = 1
+	 AND COALESCE(sessions.parent_session_id, '') = ''
+	 AND sessions.spawn_linked = 0
+	 AND NOT ` + spawnEdgeExistsSQL("sessions")
+}
+
+// unlinkedRelationshipSQL is the relationship a session takes when a launcher
+// link stops applying to it and spawnLinked is its spawn record afterwards.
+// Callers guarantee there is no spawn edge.
+func unlinkedRelationshipSQL(spawnLinked string) string {
+	return `IIF(sessions.is_automated = 1 AND sessions.relationship_inferred = 1 AND (` + spawnLinked + `) = 0, '', ` + parserRelationshipSQL + `)`
+}
+
+// effectiveParentlessRelationshipSQL is unlinkedRelationshipSQL for a session
+// whose spawn record stays as stored.
+var effectiveParentlessRelationshipSQL = unlinkedRelationshipSQL("sessions.spawn_linked")
 
 func reconcileParentlessWorkers(ctx context.Context, w *writerHandle, onlyAudited bool) error {
+	clearable := clearableHeadlessWorkerSQL("sessions.is_automated = 1")
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE `+ParentlessWorkerSQL+` AND is_automated = 0`); err != nil {
+		WHERE `+ParentlessWorkerSQL+` AND NOT (`+clearable+`)`); err != nil {
 		return fmt.Errorf("promoting parentless workers: %w", err)
 	}
 	auditFilter := ""
@@ -41,20 +77,16 @@ func reconcileParentlessWorkers(ctx context.Context, w *writerHandle, onlyAudite
 			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE relationship_type = 'subagent'
-		  AND is_automated = 1
-		  AND COALESCE(parent_session_id, '') = ''
-		  AND `+parentlessHeadlessWorkerConditionSQL+`
-		  AND NOT `+spawnEdgeExistsSQL("sessions")+auditFilter); err != nil {
+		  AND `+clearable+auditFilter); err != nil {
 		return fmt.Errorf("clearing automated parentless workers: %w", err)
 	}
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE is_automated = 0
+		WHERE COALESCE(relationship_type, '') = ''
 		  AND COALESCE(parent_session_id, '') = ''
-		  AND COALESCE(relationship_type, '') = ''
-		  AND entrypoint = 'sdk-cli'
-		  AND parser_relationship_type = 'subagent'`+auditFilter); err != nil {
-		return fmt.Errorf("restoring parentless sdk-cli workers: %w", err)
+		  AND parser_relationship_type = 'subagent'
+		  AND NOT (`+clearable+`)`+auditFilter); err != nil {
+		return fmt.Errorf("restoring parentless workers: %w", err)
 	}
 	return nil
 }

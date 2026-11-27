@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -100,7 +101,16 @@ func normalizeSession(s db.Session) db.Session {
 	s.CreatedAt = ""
 	s.LocalModifiedAt = nil
 	s.TranscriptRevision = nil
-	return s
+	// SQLite reads also fill unexported relationship provenance, which
+	// PostgreSQL reads do not load. Compare the exported fields.
+	var exported db.Session
+	from, to := reflect.ValueOf(s), reflect.ValueOf(&exported).Elem()
+	for i := range from.NumField() {
+		if from.Type().Field(i).IsExported() {
+			to.Field(i).Set(from.Field(i))
+		}
+	}
+	return exported
 }
 
 func normalizeMessages(t *testing.T, messages []db.Message) []db.Message {

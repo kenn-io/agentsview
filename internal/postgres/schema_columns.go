@@ -67,6 +67,17 @@ func schemaColumnMigrations() []columnMigration {
 			`parser_parent_session_id TEXT`,
 			"adding sessions.parser_parent_session_id",
 		},
+		{"sessions", "parser_relationship_type", `parser_relationship_type TEXT`, "adding sessions.parser_relationship_type"},
+		{
+			"sessions", "relationship_inferred",
+			`relationship_inferred BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.relationship_inferred",
+		},
+		{
+			"sessions", "spawn_linked",
+			`spawn_linked BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.spawn_linked",
+		},
 		{
 			"sessions", "total_output_tokens",
 			`total_output_tokens INT NOT NULL DEFAULT 0`,

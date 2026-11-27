@@ -20,7 +20,7 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 		parent                                            *string
 	}{
 		{"plain", "codex", "", "Explain this function.", "non-interactive", "", nil},
-		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "subagent", nil},
+		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
 		{"claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil},
 		{"child", "codex", "", "Explain this function.", "non-interactive", "", Ptr("plain")},
 		{"fork", "codex", "", "Explain this function.", "non-interactive", "fork", nil},
@@ -1172,6 +1172,72 @@ func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, stored)
 			assert.Equal(t, automated, stored.IsAutomated, "audit classification")
+		})
+	}
+}
+
+func TestSpawnedHeadlessWorkerStaysSubagentAfterParentDeletion(t *testing.T) {
+	for _, link := range []string{"spawn edge", "launcher"} {
+		t.Run(link, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			worker := func(s *Session) {
+				s.Agent = "codex"
+				s.SessionKind = parser.SessionKindNonInteractive
+				s.FirstMessage = Ptr(`Read the complete task prompt from "/tmp/prompt.md" and carry out its instructions.`)
+				s.UserMessageCount = 1
+			}
+			insertSession(t, d, "worker", "project-a", worker)
+			stored, err := d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.True(t, stored.IsAutomated)
+			require.Empty(t, stored.RelationshipType, "an unlinked automated headless run counts as Automated")
+
+			if link == "spawn edge" {
+				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+					Session:         Session{ID: "parent", Project: "project-a", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+					ReplaceMessages: true,
+					Messages: []Message{{
+						SessionID: "parent", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+						ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
+					}},
+				}})
+				require.NoError(t, err)
+				_, err = d.LinkSubagentSessionsContext(ctx)
+				require.NoError(t, err)
+			} else {
+				insertSession(t, d, "parent", "project-a")
+				_, err = d.SetSessionExternalParent(ctx, "worker", "parent")
+				require.NoError(t, err)
+			}
+			stored, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.Equal(t, Ptr("parent"), stored.ParentSessionID)
+			require.Equal(t, "subagent", stored.RelationshipType)
+
+			require.NoError(t, d.DeleteSession(ctx, "parent"))
+			if link == "spawn edge" {
+				_, err = d.getWriter().Exec(ctx, clearDanglingSubagentParentQuery("(?)"), "worker")
+				require.NoError(t, err)
+			}
+			// A later sync rewrites the worker from its source, which has no parent.
+			insertSession(t, d, "worker", "project-a", worker)
+			stored, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, stored.ParentSessionID)
+			assert.Equal(t, "subagent", stored.RelationshipType, "rewrite after parent deletion")
+
+			_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+			require.NoError(t, err)
+			path := d.Path()
+			require.NoError(t, d.Close())
+			reopened, err := Open(ctx, path)
+			require.NoError(t, err)
+			defer reopened.Close()
+			stored, err = reopened.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.True(t, stored.IsAutomated)
+			assert.Equal(t, "subagent", stored.RelationshipType, "classifier change after parent deletion")
 		})
 	}
 }

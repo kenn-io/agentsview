@@ -115,7 +115,10 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 				s.Entrypoint = "sdk-cli"
 			}
 			if tc.id == "worker" {
+				// A parentless headless run has no parser relationship; the
+				// write promotes it from its shape.
 				s.SessionKind = "non-interactive"
+				s.RelationshipType = ""
 			}
 			s.FirstMessage = Ptr("You are a code reviewer. Review this change.")
 			s.UserMessageCount = 1

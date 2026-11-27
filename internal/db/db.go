@@ -3136,6 +3136,19 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"session_project_identity_snapshots", "recorded_git_remote",
 			"ALTER TABLE session_project_identity_snapshots ADD COLUMN recorded_git_remote TEXT NOT NULL DEFAULT ''",
 		},
+		{
+			// These follow the columns their backfills read. Backfill once
+			// when the column is added; later writes compute it.
+			"sessions", "relationship_inferred",
+			"ALTER TABLE sessions ADD COLUMN relationship_inferred INTEGER NOT NULL DEFAULT 0;" +
+				" UPDATE sessions SET relationship_inferred = 1 WHERE " + legacyRelationshipInferredSQL,
+		},
+		{
+			// Backfill once from current links; later linking sets it.
+			"sessions", "spawn_linked",
+			"ALTER TABLE sessions ADD COLUMN spawn_linked INTEGER NOT NULL DEFAULT 0;" +
+				" UPDATE sessions SET spawn_linked = 1 WHERE " + legacySpawnLinkedSQL,
+		},
 	}
 }
 

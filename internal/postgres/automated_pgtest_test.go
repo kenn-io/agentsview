@@ -139,6 +139,12 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 			tc.id, tc.agent, tc.entrypoint, tc.prompt, tc.kind, tc.relationship, tc.parent, tc.parserParent, tc.userCount)
 		require.NoError(t, err)
 	}
+	// Current pushers send the parser provenance; older ones leave it NULL,
+	// which only the non-interactive fallback can reconcile.
+	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions
+		SET parser_relationship_type = 'subagent', relationship_inferred = TRUE
+		WHERE id = 'claude-panel'`)
+	require.NoError(t, err)
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	for _, tc := range []struct {
 		id, relationship string
@@ -433,4 +439,107 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 		).Scan(&got))
 		assert.Equal(t, want, got, id)
 	}
+}
+
+func TestAutomationAuditPGRestoresClaudeSDKWorker(t *testing.T) {
+	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
+	pgURL := testPGSchemaURL(t, "agentsview")
+	local := testDB(t)
+	// The pusher has no rule for this prompt, so the run stays a subagent.
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "panel", Machine: "local", Project: "project", Agent: "claude",
+		Entrypoint: "sdk-cli", RelationshipType: "subagent",
+		FirstMessage: new("# UX review\nCheck the CLI output."), UserMessageCount: 1, MessageCount: 1,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}))
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "panel-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	stored := func() (string, bool) {
+		t.Helper()
+		var relationship string
+		var automated bool
+		require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+			`SELECT relationship_type, is_automated FROM sessions WHERE id = 'panel'`,
+		).Scan(&relationship, &automated))
+		return relationship, automated
+	}
+
+	// A server audit with a matching rule counts the run as Automated.
+	db.SetUserAutomationPrefixes([]string{"# UX review"})
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	relationship, automated := stored()
+	assert.True(t, automated)
+	assert.Empty(t, relationship)
+
+	// Without the rule, the audit restores the parser's subagent role.
+	db.SetUserAutomationPrefixes(nil)
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	relationship, automated = stored()
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
+}
+
+// reconcileClearTracer runs after when the audit's statement that clears
+// automated parentless workers finishes.
+type reconcileClearTracer struct{ after func() }
+
+func (tracer *reconcileClearTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SET relationship_type = ''") {
+		return context.WithValue(ctx, tracer, true)
+	}
+	return ctx
+}
+
+func (tracer *reconcileClearTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+	if ctx.Value(tracer) == true && tracer.after != nil {
+		after := tracer.after
+		tracer.after = nil
+		after()
+	}
+}
+
+func TestAutomationAuditPGLeavesConcurrentPushUnstamped(t *testing.T) {
+	t.Parallel()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(t.Context(), url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.DB().ExecContext(t.Context(), `INSERT INTO sessions
+		(id, machine, project, agent, session_kind, relationship_type, first_message, user_message_count)
+		VALUES ('race', 'host', 'project', 'codex', 'non-interactive', 'subagent', 'You are a code reviewer. Review this change.', 1)`)
+	require.NoError(t, err)
+	cfg, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	cfg.RuntimeParams["search_path"] = "agentsview"
+	// A push lands between the audit's clear and its stamp, replacing the
+	// prompt the audit classified.
+	tracer := &reconcileClearTracer{after: func() {
+		_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
+			SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
+		require.NoError(t, err)
+	}}
+	cfg.Tracer = tracer
+	audit := stdlib.OpenDB(*cfg)
+	defer audit.Close()
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), audit))
+	require.Nil(t, tracer.after, "the audit cleared the worker")
+
+	var hash *string
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT automation_audit_hash FROM sessions WHERE id = 'race'`).Scan(&hash))
+	assert.Nil(t, hash, "the pushed version was never audited")
+	progress, err := backfillIsAutomatedPGWithProgress(t.Context(), audit)
+	require.NoError(t, err)
+	assert.Equal(t, 1, progress.RowsPrefetched)
+	var relationship string
+	var automated bool
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'race'`).Scan(&relationship, &automated))
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
 }

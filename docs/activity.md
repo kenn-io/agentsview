@@ -69,12 +69,15 @@ records `turnOrigin=sdk`, and a human origin wins over conflicting markers. A
 queued first prompt, missing or unknown origin, SDK library entrypoints, or an
 explicit provider kind blocks this inference. Human SDK conversations stay
 Interactive unless their prompts match an automation pattern. Real subagents
-(sessions with a parent, spawn link, or native subagent identity) keep the
-Subagents category even when scripted or their parent disappears. Parentless
-headless runs whose prompts match built-in or user `[automated]` patterns, or
-sessions tagged with `roborev` metadata (Codex `thread_source=roborev` or Claude
-`entrypoint=roborev`), count as Automated; prompt matching requires one or fewer
-real user messages.
+keep the Subagents category even when scripted or their parent disappears:
+sessions with a parent, native subagent identities, Grok runs that their
+summary marks as subagents, and runs that a spawning session or launcher link
+ever gave a parent. A spawned run stays a subagent after its spawner is
+deleted; removing its launcher link with no spawn record left returns it to
+its own category. Other parentless headless runs whose prompts match built-in
+or user `[automated]` patterns, or sessions tagged with `roborev` metadata
+(Codex `thread_source=roborev` or Claude `entrypoint=roborev`), count as
+Automated; prompt matching requires one or fewer real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and

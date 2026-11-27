@@ -94,7 +94,7 @@ func backfillIsAutomatedPGWithProgress(
 	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, ""); err != nil {
 		return progress, err
 	}
-	if err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, fullReconcile, candidateIDs); err != nil {
+	if err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, column, fullReconcile, candidateIDs); err != nil {
 		return progress, err
 	}
 
@@ -112,86 +112,110 @@ func backfillIsAutomatedPGWithProgress(
 	return progress, nil
 }
 
-const repairParentlessWorkersSQL = `UPDATE sessions
-		SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT is_automated
-		RETURNING id`
-
-const clearAutomatedParentlessWorkersPGWhere = `relationship_type = 'subagent'
-		  AND is_automated
+// clearableHeadlessWorkerPG mirrors the SQLite rule: an automated parentless
+// session counts as Automated only when its subagent role was inferred from
+// headless shape and nothing ever spawned or launched it. Rows pushed by
+// older binaries carry no parser relationship; they keep the non-interactive
+// fallback and treat Grok rows as explicit children, as SQLite's legacy
+// backfill does.
+const clearableHeadlessWorkerPG = `is_automated
 		  AND COALESCE(parent_session_id, '') = ''
-		  AND COALESCE(parser_parent_session_id, '') = ''
 		  AND COALESCE(external_parent_session_id, '') = ''
-		  AND id NOT LIKE 'agent-%'
-		  AND (session_kind = 'non-interactive' OR entrypoint = 'sdk-cli')
+		  AND NOT spawn_linked
+		  AND CASE WHEN parser_relationship_type IS NULL
+			THEN session_kind = 'non-interactive' AND agent <> 'grok'
+				AND COALESCE(parser_parent_session_id, '') = ''
+				AND left(id, 6) <> 'agent-'
+			ELSE relationship_inferred END
 		  AND NOT EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = sessions.id
 			  AND tc.session_id IS DISTINCT FROM tc.subagent_session_id
 		  )`
 
-const clearAutomatedParentlessWorkersPGSQL = `UPDATE sessions
-		SET relationship_type = '', updated_at = NOW()
-		WHERE ` + clearAutomatedParentlessWorkersPGWhere + `
-		RETURNING id`
+// repairParentlessWorkersSQL promotes legacy parentless non-interactive rows.
+// idx_sessions_parentless_workers bounds it, so it covers the whole table on
+// every audit.
+const repairParentlessWorkersSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
+		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT (` + clearableHeadlessWorkerPG + `)`
 
+const clearAutomatedParentlessWorkersSQL = `UPDATE sessions SET relationship_type = '', updated_at = NOW()
+		WHERE relationship_type = 'subagent' AND ` + clearableHeadlessWorkerPG
+
+const restoreParentlessWorkersSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
+		WHERE COALESCE(relationship_type, '') = ''
+		  AND COALESCE(parent_session_id, '') = ''
+		  AND parser_relationship_type = 'subagent'
+		  AND NOT (` + clearableHeadlessWorkerPG + `)`
+
+// parentlessWorkerReconcilePG lists the reconcile UPDATEs. With audit
+// tracking and an unchanged classifier, the unbounded ones cover only the
+// audited candidates.
+var parentlessWorkerReconcilePG = []struct {
+	query, action string
+	bounded       bool
+}{
+	{repairParentlessWorkersSQL, "promoting PG parentless workers", true},
+	{clearAutomatedParentlessWorkersSQL, "clearing PG automated parentless workers", false},
+	{restoreParentlessWorkersSQL, "restoring PG parentless workers", false},
+}
+
+// reconcileParentlessWorkersPG applies relationship changes that follow the
+// automation verdicts. With audit tracking it touches only rows whose current
+// version the audit verified (automation_audit_hash = hash), and restamps the
+// rows it changed through their new row versions, so a push that lands in
+// between leaves its row unstamped for the next audit.
 func reconcileParentlessWorkersPG(
-	ctx context.Context, pg *sql.DB, tracking bool, hash string, fullReconcile bool, candidateIDs []string,
+	ctx context.Context, pg *sql.DB, tracking bool, hash, column string, fullReconcile bool, candidateIDs []string,
 ) error {
-	changed, err := queryReturnedIDsPG(ctx, pg, repairParentlessWorkersSQL)
-	if err != nil {
-		return fmt.Errorf("promoting PG parentless workers: %w", err)
-	}
-	if fullReconcile || !tracking {
-		cleared, err := queryReturnedIDsPG(ctx, pg, clearAutomatedParentlessWorkersPGSQL)
-		if err != nil {
-			return fmt.Errorf("clearing PG automated parentless workers: %w", err)
-		}
-		changed = append(changed, cleared...)
-	} else if len(candidateIDs) > 0 {
-		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
-			cleared, err := queryReturnedIDsPG(ctx, pg,
-				`UPDATE sessions SET relationship_type = '', updated_at = NOW()
-				 WHERE id = ANY($1) AND `+clearAutomatedParentlessWorkersPGWhere+`
-				 RETURNING id`,
-				chunk,
-			)
-			if err != nil {
-				return fmt.Errorf("clearing PG automated parentless workers: %w", err)
+	var verdicts []automationVerdictPG
+	for _, step := range parentlessWorkerReconcilePG {
+		query := step.query
+		if !tracking {
+			if _, err := pg.ExecContext(ctx, query); err != nil {
+				return fmt.Errorf("%s: %w", step.action, err)
 			}
-			changed = append(changed, cleared...)
+			continue
+		}
+		query += ` AND automation_audit_hash = $1`
+		returning := ` RETURNING id, ` + column + `::text, is_automated`
+		if step.bounded || fullReconcile {
+			changed, err := queryAutomationVerdictsPG(ctx, pg, query+returning, hash)
+			if err != nil {
+				return fmt.Errorf("%s: %w", step.action, err)
+			}
+			verdicts = append(verdicts, changed...)
+			continue
+		}
+		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
+			changed, err := queryAutomationVerdictsPG(ctx, pg, query+` AND id = ANY($2)`+returning, hash, chunk)
+			if err != nil {
+				return fmt.Errorf("%s: %w", step.action, err)
+			}
+			verdicts = append(verdicts, changed...)
 			return nil
 		}); err != nil {
 			return err
 		}
 	}
-	if !tracking || len(changed) == 0 {
-		return nil
-	}
-	return pgQueryChunked(changed, func(chunk []string) error {
-		_, err := pg.ExecContext(ctx,
-			`UPDATE sessions SET automation_audit_hash = $1 WHERE id = ANY($2) AND automation_audit_hash IS NULL`,
-			hash, chunk,
-		)
-		return err
-	})
+	return writeAutomationVerdictsPG(ctx, pg, verdicts, column, hash)
 }
 
-func queryReturnedIDsPG(ctx context.Context, pg *sql.DB, query string, args ...any) ([]string, error) {
+func queryAutomationVerdictsPG(ctx context.Context, pg *sql.DB, query string, args ...any) ([]automationVerdictPG, error) {
 	rows, err := pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	var verdicts []automationVerdictPG
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var v automationVerdictPG
+		if err := rows.Scan(&v.id, &v.version, &v.automated); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		verdicts = append(verdicts, v)
 	}
-	return ids, errors.Join(rows.Err(), rows.Close())
+	return verdicts, errors.Join(rows.Err(), rows.Close())
 }
 
 func auditAutomatedFullPG(

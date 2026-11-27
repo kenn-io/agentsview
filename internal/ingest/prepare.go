@@ -155,7 +155,7 @@ func finalize(
 		return PreparedSession{}, err
 	}
 	validation = addValidationStats(validation, usageValidation)
-	session.SetParserRelationshipType(db.ParserSessionRelationship(session))
+	session.RecordParserRelationship()
 	session.RelationshipType = db.SessionRelationship(session)
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,

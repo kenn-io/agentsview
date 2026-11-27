@@ -2806,30 +2806,22 @@ func sessionAutomationStateTx(
 func setSessionAutomationTx(
 	tx transactionQueries, sessionID string, isAutomated bool,
 ) error {
+	clearable := clearableHeadlessWorkerSQL("? = 1")
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		   SET is_automated = ?,
 		       relationship_type = CASE
-		           WHEN ? = 1
-		            AND relationship_type = 'subagent'
-		            AND COALESCE(parent_session_id, '') = ''
-		            AND `+parentlessHeadlessWorkerConditionSQL+`
-		            AND NOT `+spawnEdgeExistsSQL("sessions")+`
+		           WHEN relationship_type = 'subagent' AND `+clearable+`
 		           THEN ''
-		           WHEN ? = 0
-		            AND COALESCE(relationship_type, '') = ''
+		           WHEN COALESCE(relationship_type, '') = ''
 		            AND COALESCE(parent_session_id, '') = ''
-		            AND (session_kind = 'non-interactive'
-		                 OR (entrypoint = 'sdk-cli' AND parser_relationship_type = 'subagent'))
+		            AND `+parserRelationshipSQL+` = 'subagent'
+		            AND NOT (`+clearable+`)
 		           THEN 'subagent'
 		           ELSE relationship_type
 		       END,
 		       parser_relationship_type = CASE
-		           WHEN ? = 1
-		            AND relationship_type = 'subagent'
-		            AND COALESCE(parent_session_id, '') = ''
-		            AND `+parentlessHeadlessWorkerConditionSQL+`
-		            AND NOT `+spawnEdgeExistsSQL("sessions")+`
+		           WHEN relationship_type = 'subagent' AND `+clearable+`
 		           THEN COALESCE(parser_relationship_type, 'subagent')
 		           ELSE parser_relationship_type
 		       END,

@@ -3175,6 +3175,9 @@ func TestGetSessionFull(t *testing.T) {
 			Outcome:            "unknown",
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
+			// Reads carry the stored relationship provenance.
+			relationshipInferred:         new(false),
+			storedParserRelationshipType: new(""),
 		}
 		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)
@@ -3199,6 +3202,9 @@ func TestGetSessionFull(t *testing.T) {
 			Outcome:            "unknown",
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
+			// Reads carry the stored relationship provenance.
+			relationshipInferred:         new(false),
+			storedParserRelationshipType: new(""),
 		}
 		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)

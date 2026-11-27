@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     parser_relationship_type TEXT,
+    -- 1 when the parser marked the session subagent only because it is a
+    -- parentless headless run, not because of an explicit child marker.
+    relationship_inferred INTEGER NOT NULL DEFAULT 0,
+    -- 1 once a spawn edge or launcher link has given the session a parent.
+    -- It survives the deletion of that parent.
+    spawn_linked INTEGER NOT NULL DEFAULT 0,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,

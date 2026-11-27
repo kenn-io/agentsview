@@ -60,6 +60,51 @@ func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 	}
 }
 
+func TestArtifactImportReappliesAutomationToHeadlessRuns(t *testing.T) {
+	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
+	// The seeded transcript opens with "hello", so this prefix makes both
+	// headless runs automated on the exporter and, at first, the importer.
+	db.SetUserAutomationPrefixes([]string{"hello"})
+	source := testExportDB(t)
+	seedSession(t, source, "claude-panel", "project", func(s *db.Session) {
+		s.Entrypoint, s.RelationshipType = "sdk-cli", "subagent"
+	})
+	seedSession(t, source, "codex-exec", "project", func(s *db.Session) {
+		s.Agent, s.SessionKind = "codex", "non-interactive"
+	})
+	store := newTestArtifactStore(t)
+	_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "importer.db")
+	destination, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+	recordAllImportEntries(t, coordinator, store, contractOrigin)
+	_, err = coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assertImported := func(d *db.DB, automated bool, relationship string) {
+		t.Helper()
+		for _, id := range []string{"claude-panel", "codex-exec"} {
+			imported, err := d.GetSessionFull(t.Context(), contractOrigin+"~"+id)
+			require.NoError(t, err)
+			require.NotNil(t, imported, id)
+			assert.Equal(t, automated, imported.IsAutomated, id)
+			assert.Equal(t, relationship, imported.RelationshipType, id)
+		}
+	}
+	assertImported(destination, true, "")
+
+	// The importer drops the rule, so its next audit counts both runs as
+	// subagents again.
+	db.SetUserAutomationPrefixes(nil)
+	require.NoError(t, destination.Close())
+	destination, err = db.Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { destination.Close() })
+	assertImported(destination, false, "subagent")
+}
+
 func TestArtifactImportPreservesNativeParents(t *testing.T) {
 	source := testExportDB(t)
 	parent := "manager"
