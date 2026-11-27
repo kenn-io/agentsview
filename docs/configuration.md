@@ -782,9 +782,10 @@ AgentsView reads without writing to or migrating the database.
 **Codex.** A configured Codex sessions directory can contain Roborev logs at
 `<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. Roborev can
 record the run's label in `roborev.json` inside the run home. AgentsView uses
-that label as the project when it parses the run. Older runs and runs without a
-valid label use the label path. If the file cannot be read, sync retries the
-session. A worktree mapping or an assigned project takes precedence.
+that label as the project on a full parse. A later incremental sync or
+repository project repair can replace it. Older runs and runs without a valid
+label use the label path. If the file cannot be read, sync retries the session.
+A worktree mapping or an assigned project takes precedence.
 
 **Augure Code.** Augure Code reads Codex-format JSONL from
 `~/.augure/sessions/` and appears under the separate `augure-code` agent ID. To

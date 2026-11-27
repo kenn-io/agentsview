@@ -1357,7 +1357,9 @@ fixtures retain this field; missing identities remain source-local.
   change](https://github.com/kenn-io/roborev/pull/1865) makes `CodexSandbox.prepare` in
   `internal/agent/codex_sandbox.go` write `roborev.json` in the retained
   `.codex-run-v1-*` home before the run starts, with a `label` string.
-  AgentsView reads it from the parent of the rollout's `sessions` directory.
+  AgentsView reads it from the parent of the rollout's `sessions` directory on
+  a full parse. A later incremental sync or repository project repair can
+  replace the label.
   A missing, malformed, or empty label falls back to the path-derived label;
   a read error fails the parse for retry. `TestCodexRecordedRunLabel` covers
   both forms.
