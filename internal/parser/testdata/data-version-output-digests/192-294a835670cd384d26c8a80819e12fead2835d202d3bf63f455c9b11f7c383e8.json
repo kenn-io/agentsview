@@ -1,0 +1,10 @@
+{
+  "version": 192,
+  "digest": "294a835670cd384d26c8a80819e12fead2835d202d3bf63f455c9b11f7c383e8",
+  "providers": {
+    "claude": {
+      "project/recorded_fork.jsonl": "1b3b061dd0cc6273f99a329fc47d9c97c72cd230510545f47eb8fa47c34bc983",
+      "project/recorded_fork_parent.jsonl": "0f66cd887dabd9e95f84adeab02e4122a5611d4115f8215a91c899cae2836a0e"
+    }
+  }
+}
