@@ -214,9 +214,6 @@ func materializedProviderRoots(
 	for _, entry := range manifest.Manifest.Entries {
 		local := filepath.Join(root, filepath.FromSlash(entry.Path))
 		candidate := root
-		if home, rest, ok := strings.Cut(entry.Path, "/"); ok && strings.HasPrefix(home, ".codex-run-v1-") && strings.HasPrefix(rest, "sessions/") {
-			candidate = filepath.Join(root, home, "sessions")
-		}
 		_, id, valid := parser.CodexSessionPathInfo(candidate, local)
 		// Configured replay-parent roots may be nested anywhere inside
 		// the captured home. Find the first recognized flat or dated layout.
@@ -270,11 +267,16 @@ func materializedProviderMetadataDirs(
 		dir   string
 	}
 	var aliases []aliasHome
+	var homeDirs []string
 	for _, entry := range manifest.Manifest.Entries {
 		if path.Base(entry.Path) != parser.CodexSessionIndexFilename {
 			continue
 		}
 		ordinal, ok := strings.CutPrefix(path.Dir(entry.Path), "alias-homes/")
+		if !ok {
+			homeDirs = append(homeDirs, filepath.Join(materialized.Root(), filepath.FromSlash(path.Dir(entry.Path))))
+			continue
+		}
 		index, err := strconv.Atoi(ordinal)
 		if !ok || err != nil || index <= 0 || strconv.Itoa(index) != ordinal {
 			continue
@@ -284,12 +286,6 @@ func materializedProviderMetadataDirs(
 		})
 	}
 	slices.SortFunc(aliases, func(a, b aliasHome) int { return cmp.Compare(a.index, b.index) })
-	indexDirs := make(map[string]bool)
-	for _, entry := range manifest.Manifest.Entries {
-		if path.Base(entry.Path) == parser.CodexSessionIndexFilename {
-			indexDirs[filepath.Join(materialized.Root(), filepath.FromSlash(path.Dir(entry.Path)))] = true
-		}
-	}
 	for _, entry := range manifest.Manifest.Entries {
 		local := filepath.Join(materialized.Root(), filepath.FromSlash(entry.Path))
 		for dir := filepath.Dir(local); dir != materialized.Root() && filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
@@ -304,11 +300,9 @@ func materializedProviderMetadataDirs(
 	metadata := make(map[string][]string, len(roots))
 	for _, root := range roots {
 		primary := materialized.Root()
-		if filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions" {
-			home := filepath.Dir(root)
-			if indexDirs[home] || !indexDirs[materialized.Root()] {
-				primary = home
-			}
+		// Capture stores only the first index outside alias-homes.
+		if (filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions") && len(homeDirs) == 1 {
+			primary = homeDirs[0]
 		}
 		dirs := []string{primary}
 		for _, alias := range aliases {
