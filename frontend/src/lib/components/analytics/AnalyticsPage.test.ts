@@ -55,6 +55,7 @@ afterEach(() => {
   localStorage.clear();
   gettingStarted.done = new Set();
   sessions.sessions = [];
+  sessions.archiveEmpty = false;
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
@@ -1024,6 +1025,7 @@ describe("getting started checklist", () => {
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = true;
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
@@ -1044,6 +1046,7 @@ describe("getting started checklist", () => {
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = true;
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")).not.toBeNull();
@@ -1052,7 +1055,7 @@ describe("getting started checklist", () => {
     expect(document.querySelector(".getting-started")).toBeNull();
   });
 
-  it("stays hidden after a session was opened", async () => {
+  it("hides the checklist while inventory is unknown or a filter leaves no rows", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -1062,8 +1065,14 @@ describe("getting started checklist", () => {
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
-    gettingStarted.done = new Set(["session"]);
     component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
+    sessions.archiveEmpty = true;
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).not.toBeNull();
+    sessions.filters.machine = "another-machine";
+    sessions.archiveEmpty = false;
     await flushEffects();
     expect(document.querySelector(".getting-started")).toBeNull();
   });

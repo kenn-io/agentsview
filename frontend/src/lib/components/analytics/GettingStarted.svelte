@@ -9,9 +9,7 @@
 
   const uid = $props.id();
   const visible = $derived(
-    gettingStarted.visible &&
-      sessions.sessions.length === 0 &&
-      !gettingStarted.done.has("session"),
+    gettingStarted.visible && sessions.archiveEmpty && sessions.sessions.length === 0,
   );
 
   function openFirstSession() {

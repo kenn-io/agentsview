@@ -7,10 +7,12 @@ const key = "agentsview-getting-started";
 afterEach(() => localStorage.clear());
 
 describe("getting started", () => {
-  it("persists completed items and hides the checklist when all are done or dismissed", () => {
+  it("persists completed items and hides the checklist when a session is opened or dismissed", () => {
     const store = new GettingStartedStore(new ReadProgressStore());
     expect(store.visible).toBe(true);
     store.complete("session");
+    expect(store.visible).toBe(false);
+    expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
     store.complete("search");
     store.complete("usage");
     store.complete("insights");

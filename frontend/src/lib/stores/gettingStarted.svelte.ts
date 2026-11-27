@@ -21,7 +21,7 @@ export class GettingStartedStore {
   }
 
   get visible(): boolean {
-    return !this.done.has("dismissed") && !items.every((item) => this.done.has(item));
+    return !this.done.has("dismissed") && !this.done.has("session");
   }
 
   complete(item: Item | "dismissed") {
