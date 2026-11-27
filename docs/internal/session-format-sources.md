@@ -1360,6 +1360,8 @@ fixtures retain this field; missing identities remain source-local.
   AgentsView reads it from the parent of the rollout's `sessions` directory on
   a full parse. A later incremental sync, repository project repair, or
   archive rebuild can replace the label until the next full parse.
+  In rare cases, another session without checkout data can inherit the recorded
+  label until its next full parse.
   A missing, malformed, or empty label leaves the project derived from the
   configured folder or the session's working directory; a read error fails the
   parse for retry. `TestCodexRecordedRunLabel` covers both forms.

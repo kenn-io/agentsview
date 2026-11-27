@@ -214,6 +214,9 @@ func materializedProviderRoots(
 	for _, entry := range manifest.Manifest.Entries {
 		local := filepath.Join(root, filepath.FromSlash(entry.Path))
 		candidate := root
+		if home, rest, ok := strings.Cut(entry.Path, "/"); ok && strings.HasPrefix(home, ".codex-run-v1-") && strings.HasPrefix(rest, "sessions/") {
+			candidate = filepath.Join(root, home, "sessions")
+		}
 		_, id, valid := parser.CodexSessionPathInfo(candidate, local)
 		// Configured replay-parent roots may be nested anywhere inside
 		// the captured home. Find the first recognized flat or dated layout.
@@ -281,12 +284,16 @@ func materializedProviderMetadataDirs(
 		})
 	}
 	slices.SortFunc(aliases, func(a, b aliasHome) int { return cmp.Compare(a.index, b.index) })
-	dirs := []string{materialized.Root()}
-	for _, alias := range aliases {
-		dirs = append(dirs, alias.dir)
-	}
 	metadata := make(map[string][]string, len(roots))
 	for _, root := range roots {
+		primary := materialized.Root()
+		if filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions" {
+			primary = filepath.Dir(root)
+		}
+		dirs := []string{primary}
+		for _, alias := range aliases {
+			dirs = append(dirs, alias.dir)
+		}
 		metadata[root] = dirs
 	}
 	return metadata
