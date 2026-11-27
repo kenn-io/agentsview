@@ -3267,11 +3267,5 @@
   "session_toc_search": "Search prompts",
   "session_toc_no_match": "No prompts match",
   "shortcuts_toggle_session_toc": "Jump to a prompt",
-  "getting_started_title": "Get started",
-  "getting_started_dismiss": "Dismiss",
-  "getting_started_open_session": "Open a session",
-  "getting_started_search": "Search your history",
-  "getting_started_usage": "See your token use",
-  "getting_started_insights": "Read your insights",
   "session_diagnostics_hide": "Hide diagnostics"
 }

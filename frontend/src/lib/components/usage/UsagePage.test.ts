@@ -3,7 +3,6 @@ import { mount, tick, unmount } from "svelte";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
-import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { events } from "../../stores/events.svelte.js";
@@ -160,7 +159,6 @@ afterEach(() => {
   sessions.projects = [];
   yokedDates.setEnabled(false);
   localStorage.clear();
-  gettingStarted.done = new Set();
 });
 
 describe("UsagePage refresh behavior", () => {
@@ -699,7 +697,7 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.excludedProjects).toBe("");
   });
 
-  it("hydrates token mode from the URL and completes the checklist after the summary loads", async () => {
+  it("hydrates token mode from the URL", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -718,16 +716,10 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(usage.mode).toBe("cost");
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    usage.summary = null;
     router.params = { view: "tokens", project: "demo" };
     await flushEffects();
 
     expect(usage.mode).toBe("token");
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    usage.summary = usageSummaryWithUnsupported();
-    await flushEffects();
-    expect(gettingStarted.done.has("usage")).toBe(true);
     expect(
       document
         .querySelector(

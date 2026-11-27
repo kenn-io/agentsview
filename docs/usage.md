@@ -14,10 +14,7 @@ Session providers**, where you can configure those sources.
 
 Once your archive has sessions and none is selected, AgentsView shows the
 analytics dashboard. It gives you an overview of your agent activity across all
-projects, even when sidebar filters hide every session. First-time users with
-session history also see a **Get started** checklist for opening a session,
-searching history, viewing token use, and exploring insights; it disappears once
-completed or dismissed.
+projects, even when sidebar filters hide every session.
 
 ![Analytics dashboard](/docs/assets/generated/screenshots/dashboard.png)
 

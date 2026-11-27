@@ -104,10 +104,6 @@ export class ReadProgressStore {
     this.markers = $state(readStoredMarkers(maxEntries));
   }
 
-  get hasMarkers(): boolean {
-    return Object.keys(this.markers).length > 0;
-  }
-
   get(sessionId: string): ReadProgressMarker | null {
     return this.markers[sessionId] ?? null;
   }

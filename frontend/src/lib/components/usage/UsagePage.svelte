@@ -3,7 +3,6 @@
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { usage, type UsageMode } from "../../stores/usage.svelte.js";
-  import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import {
     buildUsageUrlParams,
     mergeUsageAndSessionUrlParams,
@@ -303,10 +302,6 @@
     ));
     void usage.fetchTopSessions();
   }
-
-  $effect(() => {
-    if (usage.mode === "token" && usage.summary) untrack(() => gettingStarted.complete("usage"));
-  });
 
   $effect(() => {
     const route = router.route;

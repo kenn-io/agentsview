@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { ApiError } from "../../api/runtime.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
-import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 
 const {
   mockUi,
@@ -190,7 +189,6 @@ describe("CommandPalette", () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
     mockSessions.activeSessionId = null;
-    gettingStarted.done = new Set();
     mockSessions.deselectSession.mockImplementation(() => {
       mockSessions.activeSessionId = null;
     });
@@ -574,7 +572,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("filters CJK queries and completes the checklist for nonblank search", async () => {
+  it("filters CJK queries", async () => {
     mockSessions.sessions = [
       { ...makeSession("s1", "codex"), first_message: "消融实验的结果" },
       { ...makeSession("s2", "codex"), first_message: "unrelated" },
@@ -582,14 +580,11 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await tick();
 
-    await enterSearchQuery("   ");
-    expect(gettingStarted.done.has("search")).toBe(false);
     await enterSearchQuery("消");
 
     const items = document.querySelectorAll(".palette-item");
     expect(items).toHaveLength(1);
     expect(items[0]?.textContent).toContain("消融实验的结果");
-    expect(gettingStarted.done.has("search")).toBe(true);
 
     unmount(component);
   });

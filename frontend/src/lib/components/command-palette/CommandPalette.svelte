@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import { m } from "../../i18n/index.js";
   import {
     Button,
@@ -129,7 +128,6 @@
   function handleInput(e: Event) {
     const target = e.target as HTMLInputElement;
     inputValue = target.value;
-    if (inputValue.trim()) gettingStarted.complete("search");
     selectedIndex = 0;
 
     if (isServerSearchQuery(inputValue)) {

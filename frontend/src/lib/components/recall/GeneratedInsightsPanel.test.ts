@@ -112,14 +112,12 @@ vi.mock("../../utils/markdown.js", () => ({
 
 // @ts-ignore
 import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
-import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 
 describe("GeneratedInsightsPanel", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    gettingStarted.done = new Set();
     state.serverVersion.insight_generation_available = true;
     state.serverVersion.read_only = false;
     router.route = "recall";
@@ -189,23 +187,6 @@ describe("GeneratedInsightsPanel", () => {
       state.store.items = items;
       state.store.error = null;
     }
-  });
-
-  it("completes the checklist for a selected report or an empty archive", async () => {
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    expect(gettingStarted.done.has("insights")).toBe(true);
-    await unmount(component);
-    component = undefined;
-    gettingStarted.done = new Set();
-    state.store.items = [];
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await mocks.load.mock.results.at(-1)!.value;
-
-    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("shows every input that scopes a generated report", async () => {
