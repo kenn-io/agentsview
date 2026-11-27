@@ -7,7 +7,7 @@
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
-  import { ALL_BLOCK_TYPES, ui, type ScrollCall } from "../../stores/ui.svelte.js";
+  import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -38,7 +38,6 @@
   import { settleVirtualScroll } from "./staged-scroll.js";
   import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "../../utils/transcript-mode.js";
-  import { hasVisibleSegments } from "../../utils/content-parser.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -97,11 +96,19 @@
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
 
+  let revealedOrdinal: number | undefined = $state(undefined);
+  let revealNormalMode = $state(false);
+  $effect(() => {
+    void messages.sessionId;
+    untrack(() => { revealedOrdinal = undefined; revealNormalMode = false; });
+  });
+
   // Share transcript row visibility and searchable block filters with the index.
   let sessionScope = $derived(
     projectSessionScope({
       messages: messages.messages,
-      transcriptMode: ui.transcriptMode,
+      transcriptMode: revealNormalMode ? "normal" : ui.transcriptMode,
+      revealOrdinal: revealedOrdinal,
       visibleBlocks: ui.visibleBlocks,
       hasBlockFilters: ui.hasBlockFilters,
       keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(
@@ -605,11 +612,10 @@
     return item.ordinals.includes(ordinal) ? ordinal : undefined;
   }
 
-  // Distance from the top of a display row to the card of `ordinal` inside an
-  // open empty row, so a jump lands on that card instead of the row's top.
-  function emptyMemberOffset(index: number, ordinal: number): number {
+  // Distance from a grouped row to the selected message within it.
+  function getMemberOffset(index: number, ordinal: number): number {
     const item = itemAt(index);
-    if (!containerRef || item?.kind !== "empty-group") return 0;
+    if (!containerRef || (item?.kind !== "empty-group" && item?.kind !== "tool-group")) return 0;
     const row = containerRef.querySelector<HTMLElement>(`.virtual-row[data-index="${index}"]`);
     const card = row?.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`);
     if (!row || !card) return 0;
@@ -677,7 +683,7 @@
     instance.getTotalSize();
     const rowOffset = instance.getOffsetForIndex(index, "start")?.[0];
     if (rowOffset === undefined) return;
-    const memberOffset = emptyMemberOffset(index, jump.ordinal);
+    const memberOffset = getMemberOffset(index, jump.ordinal);
     const offset = rowOffset + memberOffset;
     const previousOffset = untrack(() => jump.offset);
     jump.offset = offset;
@@ -735,26 +741,15 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
-    if (revealFiltered && !normalDisplayItemsAsc.some((item) => item.ordinals.includes(ordinal))) {
-      const message = messages.messages.find((item) => item.ordinal === ordinal);
-      const hiddenBlock = message && !hasVisibleSegments(message, (type) =>
-        type === "code" || ui.isBlockVisible(type),
-      ) && ALL_BLOCK_TYPES.find((block) =>
-        !ui.isBlockVisible(block) && hasVisibleSegments(message, (type) =>
-          type === "code" || type === block || ui.isBlockVisible(type),
-        ),
-      );
-      if (hiddenBlock) {
-        ui.setBlockVisible(hiddenBlock, true);
+    if (revealFiltered) {
+      revealedOrdinal = ordinal;
+      await tick();
+      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+      if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
+        revealNormalMode = true;
         await tick();
         if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
       }
-    }
-
-    if (revealFiltered && shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
-      ui.setTranscriptMode("normal");
-      await tick();
-      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
     // A message inside a collapsed empty row has no card until the row opens.
@@ -1112,6 +1107,7 @@
               <EmptyMessagesRow
                 messages={item.messages}
                 open={emptyGroupOpen(item)}
+                {revealedOrdinal}
                 onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
               />
             {:else if item.message.is_compact_boundary}
@@ -1125,6 +1121,7 @@
             {:else}
               <MessageContent
                 message={item.message}
+                revealFiltered={item.ordinals.includes(revealedOrdinal ?? -1)}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
               />

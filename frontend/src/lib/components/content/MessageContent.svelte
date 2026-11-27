@@ -38,6 +38,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 
   interface Props {
     message: Message;
+    revealFiltered?: boolean;
     /** Skill expansion that preceded this user message, shown as a disclosure. */
     skillMessage?: Message;
     session?: Session | null;
@@ -46,7 +47,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     compact?: boolean;
     allowMutations?: boolean;
   }
-  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let { message, revealFiltered = false, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   /** A skill row holds one opaque body, so read it from the outer envelope. */
   function skillSegments(msg: Message) {
     if (!isSkillInvocationMessage(msg)) return null;
@@ -128,7 +129,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       : m.message_content_code_collapsed();
   }
 
-  let showText = $derived(ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
+  let showText = $derived(revealFiltered || ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
   let accentColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let accentForeground = $derived(isSkillInvocation ? "var(--accent-teal-foreground)" : isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isSkillInvocation ? "var(--accent-teal-ink)" : isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
@@ -257,7 +258,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     </div>
   </div>
   <div class="message-body">
-    {#if attachedSkill && ui.isBlockVisible("system")}
+    {#if attachedSkill && (revealFiltered || ui.isBlockVisible("system"))}
       <div class="markdown attached-skill">
         <SkillBlock content={attachedSkill.content} name={attachedSkill.label} />
       </div>
@@ -266,7 +267,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {@const searchKey = activeSearchOrdinal === undefined || segment.type === "tool"
         ? undefined : blockKey(activeSearchOrdinal, segment.type, segmentIndex)}
       {#if segment.type === "thinking"}
-        {#if ui.isBlockVisible("thinking")}
+        {#if revealFiltered || ui.isBlockVisible("thinking")}
           <ThinkingBlock content={segment.content} {searchKey} />
         {/if}
       {:else if segment.type === "tool"}
@@ -274,7 +275,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {:else if segment.type === "code"}
         {@const codeLabel = segment.label?.trim().toLowerCase()}
         {@const language = segment.label?.trim() ?? ""}
-        {#if ui.isBlockVisible("code")}
+        {#if revealFiltered || ui.isBlockVisible("code")}
           {#if codeLabel === "mermaid" && !hasSearchQuery}
             <MermaidBlock content={segment.content} />
           {:else}
@@ -331,7 +332,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {/if}
     {/each}
     <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
-    {#if ui.isBlockVisible("tool")}
+    {#if revealFiltered || ui.isBlockVisible("tool")}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}

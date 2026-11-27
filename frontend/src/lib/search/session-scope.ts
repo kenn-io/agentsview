@@ -23,6 +23,7 @@ export interface SessionScopeInput {
   visibleBlocks?: ReadonlySet<BlockType>;
   /** Whether any block type is hidden; absent means no filters. */
   hasBlockFilters?: boolean;
+  revealOrdinal?: number;
   /** Provider rule that keeps an answer before its trailing tool calls. */
   keepAnswerBeforeTrailingTools?: boolean;
 }
@@ -87,7 +88,7 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     skipToolGrouping: !isVisible("tool"),
   });
   const messageVisible = (message: Message): boolean =>
-    hasVisibleSegments(message, isTranscriptBlockVisible);
+    message.ordinal === input.revealOrdinal || hasVisibleSegments(message, isTranscriptBlockVisible);
   // An empty group keeps the members whose role is still shown, so hiding an
   // unrelated block type does not hide an empty prompt.
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>

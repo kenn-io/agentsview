@@ -9,6 +9,7 @@ import { router } from "../../stores/router.svelte.js";
 import MessageContent from "./MessageContent.svelte";
 
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const writeText = vi.fn().mockResolvedValue(undefined);
 const mermaidMock = vi.hoisted(() => vi.fn(() => ({ renderNow: vi.fn(), disconnect: vi.fn() })));
 const forkMock = vi.hoisted(() => vi.fn());
 const pinMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
@@ -150,6 +151,7 @@ async function click(selector: string) {
 const text = (selector: string) => document.querySelector(selector)?.textContent?.trim() ?? "";
 beforeEach(() => {
   forkMock.mockReset();
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   setLocale("en");
 });
 
@@ -158,7 +160,7 @@ it("copies a link to the message and confirms the copy", async () => {
   try {
     await render(message({ session_id: "session-1", ordinal: 7 }));
     await click('[aria-label="Copy link to message"]');
-    expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
     expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
   } finally {
     window.history.replaceState(null, "", "/");
@@ -169,12 +171,12 @@ it("copies a link to the message and confirms the copy", async () => {
 it("offers the message link where mutations are disabled", async () => {
   await render(message({ session_id: "session-1", ordinal: 7 }), { allowMutations: false });
   await click('[aria-label="Copy link to message"]');
-  expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+  expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
   expect(document.querySelector('[aria-label="Copied!"]')?.getAttribute("title")).toBe("Copied!");
 });
 
 it("does not confirm a failed message link copy", async () => {
-  copyMock.mockResolvedValueOnce(false);
+  writeText.mockRejectedValueOnce(new Error("denied"));
   await render(message({ ordinal: 7 }));
   await click('[aria-label="Copy link to message"]');
   expect(document.querySelector('[aria-label="Copy link to message"]')).not.toBeNull();
@@ -186,14 +188,14 @@ it("copies a link to the selected remote server", async () => {
   localStorage.setItem("agentsview-server-url", "https://example.org/archive");
   await render(message({ session_id: "session-1", ordinal: 7 }));
   await click('[aria-label="Copy link to message"]');
-  expect(copyMock).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
+  expect(writeText).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
 });
 
 it("copies a desktop deep link instead of the temporary backend port", async () => {
   state.isDesktop = true;
   await render(message({ session_id: "codex:session-1", ordinal: 7 }));
   await click('[aria-label="Copy link to message"]');
-  expect(copyMock).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
+  expect(writeText).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
 });
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);

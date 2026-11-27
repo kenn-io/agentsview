@@ -330,6 +330,25 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it.each([false, true])("lands on a grouped tool message with newestFirst=%s", async (newestFirst) => {
+    ui.followLatest = false;
+    ui.sortNewestFirst = newestFirst;
+    messages.messages = [1, 2, 3].map((ordinal) => ({
+      ...makeMessage(ordinal), role: "assistant", content: "", content_length: 0, has_tool_use: true,
+      tool_calls: [{ call_index: 0, tool_name: "Read", category: "Read", tool_use_id: String(ordinal), input_json: "{}" }],
+    }));
+    setVirtualRows(1);
+    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const top = this.matches('[data-message-ordinal="3"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
+      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    component.scrollToOrdinal(3, undefined, true);
+    await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
+  });
+
   it("refreshes Docbank when the same transcript is remounted", async () => {
     const { fileReferences } = await import("../../stores/file-references.svelte.js");
     fileReferences.enabled = true;
@@ -676,7 +695,8 @@ describe("MessageList follow cancellation", () => {
     await tick();
     ui.setFollowLatest(false);
     (component as JumpList).scrollToOrdinal(1, undefined, true);
-    await vi.waitFor(() => expect(ui.transcriptMode).toBe("normal"));
+    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalled());
+    expect(ui.transcriptMode).toBe("focused");
     await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
   });
 
@@ -696,9 +716,25 @@ describe("MessageList follow cancellation", () => {
     await tick();
     ui.setFollowLatest(false);
     (component as JumpList).scrollToOrdinal(ordinal, undefined, true);
-    await vi.waitFor(() => expect(ui.isBlockVisible(block)).toBe(true));
+    await vi.waitFor(() => expect(document.body.textContent).toContain(thinking ? "Thinking" : `msg ${ordinal}`));
+    expect(ui.isBlockVisible(block)).toBe(false);
     expect(ui.isBlockVisible("hook")).toBe(false);
     await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
+  });
+
+  it("restores the filtered view in another session", async () => {
+    ui.setBlockVisible("assistant", false);
+    messages.messages = [makeMessage(1)];
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    component.scrollToOrdinal(1, undefined, true);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("msg 1"));
+    messages.sessionId = "s2";
+    sessions.activeSessionId = "s2";
+    messages.messages = [{ ...makeMessage(1), session_id: "s2", content: "other session" }];
+    await tick();
+    expect(document.body.textContent).not.toContain("other session");
+    expect(ui.isBlockVisible("assistant")).toBe(false);
   });
 
   it("keeps block filters unchanged for an ordinary jump", async () => {
