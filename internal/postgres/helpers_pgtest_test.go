@@ -348,11 +348,7 @@ func acquirePGTestSlot(tb testing.TB, server *pgTestServer) *pgTestSlot {
 	if server.slots == 0 {
 		return nil
 	}
-	return waitPGTestSlot(tb, server, tb.Name())
-}
-
-func waitPGTestSlot(tb testing.TB, server *pgTestServer, name string) *pgTestSlot {
-	tb.Helper()
+	name := tb.Name()
 	for {
 		pgTestSlots.Lock()
 		if slot := findPGTestSlotLocked(name); slot != nil {
