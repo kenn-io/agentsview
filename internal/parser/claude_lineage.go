@@ -47,7 +47,8 @@ import (
 // derived-from record ahead of the replayed chain names the original
 // session with via:"fork". That record replaces the sibling election:
 // the named session is the parent, and the trim runs against that one
-// transcript.
+// transcript, which can sit in another project directory when the fork
+// runs from a different working directory.
 
 const (
 	// claudeLineageSniffMaxLines bounds how many leading lines are
@@ -271,11 +272,15 @@ func claudeSniffHeadLines(
 	return claudeHeadSniff{forkParentID: forkParentID}, lr.bytesRead, nil
 }
 
-// claudeDerivedFromForkParent returns the session a derived-from
-// record names as forked from. The record lists inherited links before
-// its own, so the last via:"fork" entry is the nearest ancestor. Other
-// via values (compact, resume, clear, subprocess) are not fork parents.
+// claudeDerivedFromForkParent returns the session a version 1
+// derived-from record names as forked from. The record lists inherited
+// links before its own, so the last via:"fork" entry is the nearest
+// ancestor. Other via values (compact, resume, clear, subprocess) are
+// not fork parents.
 func claudeDerivedFromForkParent(line []byte) string {
+	if gjson.GetBytes(line, "v").Raw != "1" {
+		return ""
+	}
 	self := gjson.GetBytes(line, "sessionId").Str
 	var parent string
 	gjson.GetBytes(line, "sessions").ForEach(func(_, s gjson.Result) bool {
@@ -289,14 +294,49 @@ func claudeDerivedFromForkParent(line []byte) string {
 	return parent
 }
 
-// claudeRecordedForkParentPath returns the transcript path of the fork
-// parent the head of path records, or "" when it records none.
-func claudeRecordedForkParentPath(path string, self claudeHeadSniff) string {
-	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if self.forkParentID == "" || self.forkParentID == stem {
+// claudeRecordedForkParent returns the fork parent the head of path
+// records, or "" when it records none.
+func claudeRecordedForkParent(path string, self claudeHeadSniff) string {
+	if self.forkParentID == strings.TrimSuffix(filepath.Base(path), ".jsonl") {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(path), self.forkParentID+".jsonl")
+	return self.forkParentID
+}
+
+// claudeFindForkParentTranscript returns the top-level transcript of
+// session parentID, looking first beside the fork at path and then in
+// the root's other project directories. It returns "" when none exists.
+func claudeFindForkParentTranscript(
+	ctx context.Context, path, parentID string,
+) (string, error) {
+	name := parentID + ".jsonl"
+	projectDir := filepath.Dir(path)
+	if claudeIsRegularFile(filepath.Join(projectDir, name)) {
+		return filepath.Join(projectDir, name), nil
+	}
+	root := filepath.Dir(projectDir)
+	dirEntries, err := os.ReadDir(root)
+	if err != nil {
+		return "", nil //nolint:nilerr // Unavailable optional lineage metadata yields no lineage hint.
+	}
+	for _, entry := range dirEntries {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		dir := filepath.Join(root, entry.Name())
+		if !entry.IsDir() || dir == projectDir {
+			continue
+		}
+		if candidate := filepath.Join(dir, name); claudeIsRegularFile(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", nil
+}
+
+func claudeIsRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // claudeForkLine is one uuid-bearing line of a fork transcript.
@@ -360,11 +400,12 @@ func claudeLineageCaptureSiblings(ctx context.Context, path string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	if parentPath := claudeRecordedForkParentPath(path, self); parentPath != "" {
-		if info, err := os.Stat(parentPath); err == nil && info.Mode().IsRegular() {
-			return []string{parentPath}, nil
+	if parentID := claudeRecordedForkParent(path, self); parentID != "" {
+		parentPath, err := claudeFindForkParentTranscript(ctx, path, parentID)
+		if err != nil || parentPath == "" {
+			return nil, err
 		}
-		return nil, nil
+		return []string{parentPath}, nil
 	}
 	if !self.ok || !self.rootIsBG {
 		return nil, nil
@@ -413,8 +454,8 @@ func claudeResolveSiblingLineage(
 	if err != nil {
 		return nil, err
 	}
-	if parentPath := claudeRecordedForkParentPath(path, self); parentPath != "" {
-		return claudeResolveRecordedForkLineage(ctx, path, self.forkParentID, parentPath)
+	if parentID := claudeRecordedForkParent(path, self); parentID != "" {
+		return claudeResolveRecordedForkLineage(ctx, path, parentID)
 	}
 	if !self.ok || !self.rootIsBG {
 		return nil, nil
@@ -552,9 +593,16 @@ func claudeResolveSiblingLineage(
 // parent transcript is absent or the trim fails open: the record, not
 // content overlap, establishes it.
 func claudeResolveRecordedForkLineage(
-	ctx context.Context, path, parentID, parentPath string,
+	ctx context.Context, path, parentID string,
 ) (*claudeLineagePlan, error) {
 	plan := &claudeLineagePlan{parentSessionID: parentID}
+	parentPath, err := claudeFindForkParentTranscript(ctx, path, parentID)
+	if err != nil {
+		return nil, err
+	}
+	if parentPath == "" {
+		return plan, nil
+	}
 	parentUUIDs := make(map[string]struct{})
 	complete, err := claudeScanUUIDs(ctx, parentPath, func(line claudeForkLine) {
 		parentUUIDs[line.uuid] = struct{}{}

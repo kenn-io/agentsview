@@ -647,10 +647,19 @@ fixtures retain this field; missing identities remain source-local.
   replayed chain entries are byte-identical to the originals (same `uuid`,
   `parentUuid`, `timestamp`, `requestId`, `message.id`, and usage) except for
   a rewritten `sessionId` and, when spawned by the background launcher, an
-  injected `sessionKind:"bg"` on every chain entry. The new transcript carries
-  no pointer back to the original session (no Codex-style `forked_from_id`),
-  so `internal/parser/claude_lineage.go` establishes lineage from sibling
-  content overlap anchored on the asymmetric `bg` stamp. Reverified 2026-08-09
+  injected `sessionKind:"bg"` on every chain entry. Older Claude Code versions
+  write no pointer back to the original session (no Codex-style
+  `forked_from_id`) into the new transcript, so `internal/parser/claude_lineage.go`
+  establishes lineage from sibling content overlap anchored on the asymmetric
+  `bg` stamp. Verified 2026-11-27 against Claude Code 2.1.332 by forking a
+  transcript with `--resume <session> --fork-session`: ahead of the replayed
+  chain, the fork writes a uuid-less
+  `{"type":"derived-from","v":1,"sessionId":...,"sessions":[...]}` record whose
+  entries list inherited links first and end with
+  `{"id":"<original>","via":"fork"}`. The parser takes the last `fork` entry
+  in a version 1 record before the first chain entry as the parent, finds its
+  transcript in the fork's project directory or another one under the same
+  root, and skips the sibling election. Reverified 2026-08-09
   by fork-resuming a transcript containing a uuid-less `queued_command`
   attachment: only uuid-bearing chain entries are replayed into the fork;
   uuid-less records (queued commands, queue-operations, ai-title, mode) never

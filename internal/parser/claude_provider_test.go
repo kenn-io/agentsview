@@ -896,9 +896,11 @@ func TestClaudeToolResultChangeSelectsSourcesByConsumer(t *testing.T) {
 func TestClaudePlanRawCaptureCarriesRecordedForkParent(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo-project")
+	worktreeDir := filepath.Join(root, "demo-project-worktree")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(worktreeDir, 0o755))
 	origPath := filepath.Join(projectDir, "orig-1111.jsonl")
-	forkPath := filepath.Join(projectDir, "fork-2222.jsonl")
+	forkPath := filepath.Join(worktreeDir, "fork-2222.jsonl")
 	require.NoError(t, os.WriteFile(origPath, []byte(compactedOriginalContent()), 0o644))
 	fork := compactedForkContent(lineageDerivedFromLine("fork-2222", "fork:orig-1111"))
 	require.NoError(t, os.WriteFile(forkPath, []byte(fork), 0o644))
@@ -915,8 +917,9 @@ func TestClaudePlanRawCaptureCarriesRecordedForkParent(t *testing.T) {
 	}
 	require.NotEmpty(t, forkSource.Key)
 
-	// The fork's root is not the original's, so only the recorded link
-	// names the transcript the parser trims against.
+	// The fork's root is not the original's and it sits in another
+	// project directory, so only the recorded link names the transcript
+	// the parser trims against.
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, forkSource)
 	require.NoError(t, err)
 	require.True(t, supported)

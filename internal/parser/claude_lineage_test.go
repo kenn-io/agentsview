@@ -1074,6 +1074,7 @@ func TestClaudeRecordedForkWithoutBackgroundStampLinksNearestParent(t *testing.T
 	fork := strings.ReplaceAll(lineageForkContent(), `"sessionKind":"bg",`, "")
 	fork = lineageDerivedFromLine("fork-2222",
 		"subprocess:launcher-0000", "fork:grand-0000", "fork:orig-1111",
+		"subprocess:launcher-0000",
 	) + "\n" + fork
 	_, forkPath := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
@@ -1137,4 +1138,50 @@ func TestClaudeDerivedFromWithoutForkLinkKeepsSiblingBehavior(t *testing.T) {
 			assert.Len(t, results[0].Messages, 4)
 		})
 	}
+}
+
+func TestClaudeRecordedForkFindsParentInAnotherProjectDir(t *testing.T) {
+	t.Parallel()
+	// A fork started from a worktree lands in that worktree's project
+	// directory, apart from the original's.
+	root := t.TempDir()
+	origDir := filepath.Join(root, "-home-user-proj")
+	forkDir := filepath.Join(root, "-home-user-proj-worktree")
+	require.NoError(t, os.MkdirAll(origDir, 0o755))
+	require.NoError(t, os.MkdirAll(forkDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(origDir, "orig-1111.jsonl"),
+		[]byte(compactedOriginalContent()), 0o644))
+	forkPath := filepath.Join(forkDir, "fork-2222.jsonl")
+	require.NoError(t, os.WriteFile(forkPath, []byte(compactedForkContent(
+		lineageDerivedFromLine("fork-2222", "fork:orig-1111"),
+	)), 0o644))
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "fork question", results[0].Messages[0].Content)
+}
+
+func TestClaudeDerivedFromNewerVersionIgnored(t *testing.T) {
+	t.Parallel()
+	record := strings.Replace(
+		lineageDerivedFromLine("fork-2222", "fork:orig-1111"), `"v":1`, `"v":2`, 1)
+	_, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", compactedOriginalContent(),
+		"fork-2222.jsonl", compactedForkContent(record),
+	)
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	assert.Len(t, results[0].Messages, 4)
 }
