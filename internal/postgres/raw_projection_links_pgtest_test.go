@@ -460,4 +460,37 @@ func TestHostedRawSpawnLinkReconcilesAutomatedWorker(t *testing.T) {
 	got, err = h.GetSessionFull(ctx, "codex:worker")
 	require.NoError(t, err)
 	assert.Equal(t, "subagent", got.RelationshipType, "same-scope launcher moves worker to Subagents during projection")
+
+	// Permanently deleting the launcher through trash must return the worker
+	// to Automated immediately without waiting for another projection.
+	require.NoError(t, f.sink.SetCuration(ctx, "codex:real-launcher", "trashed", true))
+	excluded, err := f.sink.ExcludeTrashedSession(ctx, "codex:real-launcher")
+	require.NoError(t, err)
+	assert.True(t, excluded)
+
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Empty(t, got.RelationshipType, "permanently deleting launcher via ExcludeTrashedSession returns worker to Automated")
+
+	// EmptyTrash must also reconcile worker roles when it removes a launcher.
+	secondLauncher, _ := f.acceptScoped(t, "device-a", "second-launcher", "", parser.AgentCodex, "root-a", "launcher-2.jsonl")
+	secondOutcome := projectionOutcome("second launcher")
+	secondOutcome.Outcome.Results[0].Result.Session.ID = "codex:second-launcher"
+	secondOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "second-launcher"
+	secondOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+	secondOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, secondLauncher), secondLauncher, secondOutcome))
+
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Equal(t, "subagent", got.RelationshipType)
+
+	require.NoError(t, f.sink.SetCuration(ctx, "codex:second-launcher", "trashed", true))
+	removed, err := f.sink.EmptyTrash(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Empty(t, got.RelationshipType, "permanently deleting launcher via EmptyTrash returns worker to Automated")
 }

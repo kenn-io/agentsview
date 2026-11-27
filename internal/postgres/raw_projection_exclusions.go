@@ -45,6 +45,9 @@ func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias st
 	if err != nil {
 		return false, err
 	}
+	if _, err = reconcileRawSpawnLinks(ctx, tx); err != nil {
+		return false, err
+	}
 	if err = publishRawRevision(ctx, tx, true, changes); err != nil {
 		return false, err
 	}
@@ -112,6 +115,11 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 				return 0, err
 			}
 			excluded = append(excluded, changes)
+		}
+	}
+	if count > 0 {
+		if _, err = reconcileRawSpawnLinks(ctx, tx); err != nil {
+			return 0, err
 		}
 	}
 	for _, changes := range excluded {

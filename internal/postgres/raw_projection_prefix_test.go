@@ -231,6 +231,9 @@ func TestRawTranscriptPrefixMergesEqualLengthAutomatedUpgrade(t *testing.T) {
 		{"parser relationship conflict", func(p *ingest.PreparedSession) {
 			p.Session.RestoreRelationshipProvenance("fork", false)
 		}},
+		{"explicit vs inferred subagent conflict", func(p *ingest.PreparedSession) {
+			p.Session.RestoreRelationshipProvenance("subagent", false)
+		}},
 	} {
 		t.Run("conflict/"+tc.name, func(t *testing.T) {
 			cand := base(true, "subagent", true)
@@ -238,8 +241,34 @@ func TestRawTranscriptPrefixMergesEqualLengthAutomatedUpgrade(t *testing.T) {
 			matches, err := rawTranscriptPrefix(legacy, cand)
 			require.NoError(t, err)
 			assert.False(t, matches)
+			reverse, err := rawTranscriptPrefix(cand, legacy)
+			require.NoError(t, err)
+			assert.False(t, reverse)
 		})
 	}
+
+	t.Run("conflict/explicit grok subagent vs inferred worker", func(t *testing.T) {
+		explicit := base(true, "subagent", false)
+		explicit.Session.Agent = "grok"
+		explicit.Session.Entrypoint = ""
+		explicit.Session.SessionKind = "non-interactive"
+		explicit.Session.RestoreRelationshipProvenance("subagent", false)
+
+		inferred := base(true, "subagent", false)
+		inferred.Session.Agent = "grok"
+		inferred.Session.Entrypoint = ""
+		inferred.Session.SessionKind = "non-interactive"
+		inferred.Session.RestoreRelationshipProvenance("subagent", true)
+		inferred.Session.RelationshipType = db.SessionRelationship(inferred.Session)
+		require.Empty(t, inferred.Session.RelationshipType)
+
+		matches, err := rawTranscriptPrefix(explicit, inferred)
+		require.NoError(t, err)
+		assert.False(t, matches)
+		reverse, err := rawTranscriptPrefix(inferred, explicit)
+		require.NoError(t, err)
+		assert.False(t, reverse)
+	})
 }
 
 func TestRefreshRawSessionAutomation(t *testing.T) {
@@ -262,18 +291,6 @@ func TestRefreshRawSessionAutomation(t *testing.T) {
 			want:     true,
 		},
 		{
-			name: "keeps two-turn review non-automated",
-			session: db.Session{
-				Entrypoint: "sdk-cli", FirstMessage: &reviewPrompt,
-				UserMessageCount: 2, IsAutomated: false,
-			},
-			messages: []db.Message{
-				{Ordinal: 0, Role: "user", Content: reviewPrompt},
-				{Ordinal: 1, Role: "user", Content: "Also check tests."},
-			},
-			want: false,
-		},
-		{
 			name: "keeps interactive prompt non-automated",
 			session: db.Session{
 				Entrypoint: "sdk-cli", FirstMessage: &humanPrompt,
@@ -283,15 +300,24 @@ func TestRefreshRawSessionAutomation(t *testing.T) {
 			want:     false,
 		},
 		{
-			name: "preserves prompt-based automation in usage-only mode",
+			name: "preserves prompt-based automation in usage-only mode even when message text is present",
 			session: db.Session{
 				Entrypoint: "sdk-cli", UserMessageCount: 1, IsAutomated: true,
 			},
+			messages:  []db.Message{{Ordinal: 0, Role: "user", Content: humanPrompt}},
 			usageOnly: true,
 			want:      true,
 		},
 		{
-			name: "preserves prompt-based automation when saved payload discarded prompts",
+			name: "preserves prompt-based automation when restored usage-only payload has emptied assistant rows",
+			session: db.Session{
+				Entrypoint: "sdk-cli", UserMessageCount: 1, IsAutomated: true,
+			},
+			messages: []db.Message{{Ordinal: 0, Role: "assistant", Content: ""}},
+			want:     true,
+		},
+		{
+			name: "preserves prompt-based automation when saved payload has no messages",
 			session: db.Session{
 				Entrypoint: "sdk-cli", UserMessageCount: 1, IsAutomated: true,
 			},

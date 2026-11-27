@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -305,15 +307,17 @@ SELECT (SELECT count(*) FROM upserted)+(SELECT count(*) FROM pruned),
 }
 
 func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, group, revision string, p ingest.PreparedSession) error {
+	// Capture parser provenance while p.Session.ID still holds the original
+	// identifier (such as agent-*), before replacing it with the hosted row ID.
+	if _, _, ok := p.Session.RelationshipProvenance(); !ok {
+		p.Session.RecordParserRelationship()
+	}
 	p.Session.ID = id
 	p.Session.FilePath = nil
 	p.Session.Machine = "hosted"
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
-	if _, _, ok := p.Session.RelationshipProvenance(); !ok {
-		p.Session.RecordParserRelationship()
-	}
 	p.Session.IsAutomated = refreshRawSessionAutomation(
 		p.Session, p.Messages, s.options.Content.ArchiveContent.UsageOnly(),
 	)
@@ -381,10 +385,21 @@ func refreshRawSessionAutomation(s db.Session, messages []db.Message, usageOnly 
 	if db.IsAutomatedSessionMetadata(s.SessionKind, s.Entrypoint) {
 		return true
 	}
-	if usageOnly || (len(messages) == 0 && s.FirstMessage == nil) {
+	if usageOnly || !rawPayloadHasPromptText(s, messages) {
 		return s.IsAutomated
 	}
 	return db.IsAutomatedTranscript(s.UserMessageCount, messages, s.FirstMessage)
+}
+
+func rawPayloadHasPromptText(s db.Session, messages []db.Message) bool {
+	if s.FirstMessage != nil && strings.TrimSpace(*s.FirstMessage) != "" {
+		return true
+	}
+	return slices.ContainsFunc(messages, func(m db.Message) bool {
+		return m.Role == "user" && !m.IsSystem &&
+			m.SourceSubtype != parser.SourceSubtypeToolResult &&
+			strings.TrimSpace(m.Content) != ""
+	})
 }
 
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {
