@@ -296,12 +296,10 @@ func materializedProviderMetadataDirs(
 	}
 	metadata := make(map[string][]string, len(roots))
 	for _, root := range roots {
-		primary := materialized.Root()
-		// Capture stores only the first index outside alias-homes.
-		if (filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions") && len(homeDirs) == 1 {
-			primary = homeDirs[0]
+		dirs := slices.Clone(homeDirs)
+		if len(dirs) == 0 {
+			dirs = append(dirs, materialized.Root())
 		}
-		dirs := []string{primary}
 		for _, alias := range aliases {
 			dirs = append(dirs, alias.dir)
 		}
