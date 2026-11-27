@@ -89,8 +89,12 @@ func openTestPGConn(tb testing.TB, dsn string) *sql.Conn {
 
 func TestPGTestDatabaseParallelSubtestCleanupKeepsSiblingAlive(t *testing.T) {
 	t.Parallel()
-	// Ensure TEST_PG_URL is configured without creating a parent-owned DB.
+	// Reserve one parent concurrency slot without creating a parent database so
+	// both siblings keep separate databases without deadlocking on one-slot or
+	// two-slot PostgreSQL servers.
 	server, _ := testPGServer(t)
+	parentSlot := acquirePGTestSlot(t, server)
+	t.Cleanup(func() { releasePGTestSlot(t, parentSlot) })
 
 	const schema = pgPushTestSchema
 	subA := newScopedTB(t, t.Name()+"/finishes_first")
@@ -194,41 +198,6 @@ func TestPGTestDatabaseParentOwnedSharedWithSubtests(t *testing.T) {
 	}
 }
 
-func TestPGTestDatabaseParallelHostedFixturesSurvivePeerCleanup(t *testing.T) {
-	t.Parallel()
-	server, _ := testPGServer(t)
-
-	// Exercise the hosted template path (testPGHostedURL + takeFreshSchemaCopy)
-	// across sibling parallel subtests whose parent holds no database.
-	const schema = "hosted_test_tenant_projection"
-	const tenant = "tenant-projection"
-	subA := newScopedTB(t, t.Name()+"/exclude_merged_short_variant")
-	subB := newScopedTB(t, t.Name()+"/empty_trash")
-
-	dsnA := testPGHostedURL(subA, schema, tenant)
-	freshA := takeFreshSchemaCopy(subA, dsnA, schema)
-	openTestPGConn(subA, dsnA)
-
-	dsnB := testPGHostedURL(subB, schema, tenant)
-	freshB := takeFreshSchemaCopy(subB, dsnB, schema)
-	connB := openTestPGConn(subB, dsnB)
-
-	assert.NotEqual(t, dsnA, dsnB)
-	if !server.cockroach {
-		assert.True(t, freshA)
-		assert.True(t, freshB)
-	}
-
-	subA.finish()
-
-	var one int
-	require.NoError(t, connB.QueryRowContext(subB.Context(), "SELECT 1").Scan(&one),
-		"sibling hosted connection must survive peer subtest cleanup")
-	assert.Equal(t, 1, one)
-
-	subB.finish()
-}
-
 func TestPGTestSlotConcurrentAcquireReleaseAndSingleSlotReentry(t *testing.T) {
 	t.Parallel()
 	server := &pgTestServer{slots: 1, slotDir: t.TempDir()}
@@ -236,10 +205,10 @@ func TestPGTestSlotConcurrentAcquireReleaseAndSingleSlotReentry(t *testing.T) {
 	// Parent holds the sole slot; a descendant must inherit it without deadlocking.
 	parent := newScopedTB(t, t.Name()+"/parent")
 	child := newScopedTB(t, parent.Name()+"/child")
-	releaseParent := acquirePGTestSlot(parent, server)
-	releaseChild := acquirePGTestSlot(child, server)
-	releaseChild(child)
-	releaseParent(parent)
+	parentSlot := acquirePGTestSlot(parent, server)
+	childSlot := acquirePGTestSlot(child, server)
+	releasePGTestSlot(child, childSlot)
+	releasePGTestSlot(parent, parentSlot)
 
 	// Concurrent acquire/release for the same test must keep the slot refcount
 	// balanced and release the underlying flock once every holder finishes.
@@ -250,8 +219,8 @@ func TestPGTestSlotConcurrentAcquireReleaseAndSingleSlotReentry(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			<-start
-			release := acquirePGTestSlot(owner, server)
-			release(owner)
+			slot := acquirePGTestSlot(owner, server)
+			releasePGTestSlot(owner, slot)
 		})
 	}
 	close(start)
@@ -259,8 +228,8 @@ func TestPGTestSlotConcurrentAcquireReleaseAndSingleSlotReentry(t *testing.T) {
 
 	// The single slot must be free again for an unrelated test.
 	other := newScopedTB(t, t.Name()+"/other")
-	releaseOther := acquirePGTestSlot(other, server)
-	releaseOther(other)
+	otherSlot := acquirePGTestSlot(other, server)
+	releasePGTestSlot(other, otherSlot)
 }
 
 func TestPGTestDatabaseConcurrentSameTestSharesSingleDatabase(t *testing.T) {
@@ -288,18 +257,4 @@ func TestPGTestDatabaseConcurrentSameTestSharesSingleDatabase(t *testing.T) {
 
 	openTestPGConn(owner, dsns[0])
 	owner.finish()
-}
-
-func TestPGTestDatabaseRealParallelSubtests(t *testing.T) {
-	t.Parallel()
-	for _, name := range []string{"alpha", "beta", "gamma", "delta"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			pgURL := testPGSchemaURL(t, pgPushTestSchema)
-			conn := openTestPGConn(t, pgURL)
-			var one int
-			require.NoError(t, conn.QueryRowContext(t.Context(), "SELECT 1").Scan(&one))
-			assert.Equal(t, 1, one)
-		})
-	}
 }

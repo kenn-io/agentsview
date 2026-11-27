@@ -25,9 +25,9 @@ import (
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
-// pgPushTestSchema is the schema push tests write to. Each top-level test has
-// its own database, so tests share this name and start from one template copy
-// in which EnsureSchema already created it.
+// pgPushTestSchema is the schema push tests write to. Each test that asks for
+// a database gets its own or an ancestor's, so tests share this name and start
+// from one template copy in which EnsureSchema already created it.
 const pgPushTestSchema = "agentsview_push_test"
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {

@@ -29,14 +29,14 @@ import (
 // not create a database each get their own. A database is dropped when the
 // last test referencing it finishes.
 type pgTestDB struct {
-	key         string
-	ready       chan struct{}
-	dsn         string
-	name        string
-	server      *pgTestServer
-	releaseSlot func(testing.TB)
-	refs        int
-	failed      bool
+	key    string
+	ready  chan struct{}
+	dsn    string
+	name   string
+	server *pgTestServer
+	slot   *pgTestSlot
+	refs   int
+	failed bool
 }
 
 var pgTestDatabases = struct {
@@ -118,25 +118,11 @@ func findPGTestDBLocked(name string) *pgTestDB {
 // CockroachDB has no database templates.
 func pgTestDatabase(tb testing.TB, tmpl pgTemplate) string {
 	tb.Helper()
+	// Validate server access before publishing an in-flight entry so
+	// skipped tests leave no entry behind.
+	server, baseURL := testPGServer(tb)
 	name := tb.Name()
 	for {
-		pgTestDatabases.Lock()
-		if entry := findPGTestDBLocked(name); entry != nil {
-			entry.refs++
-			pgTestDatabases.Unlock()
-			<-entry.ready
-			if entry.failed {
-				continue
-			}
-			tb.Cleanup(func() { releasePGTestDatabase(tb, entry) })
-			return entry.dsn
-		}
-		pgTestDatabases.Unlock()
-
-		// Validate server access before publishing an in-flight entry so
-		// skipped tests leave no entry behind.
-		server, baseURL := testPGServer(tb)
-
 		pgTestDatabases.Lock()
 		if entry := findPGTestDBLocked(name); entry != nil {
 			entry.refs++
@@ -181,14 +167,14 @@ func finishPGTestDatabase(
 		close(entry.ready)
 	}()
 
-	dsn, dbName, releaseSlot := createPGTestDatabase(tb, server, baseURL, tmpl)
+	dsn, dbName, slot := createPGTestDatabase(tb, server, baseURL, tmpl)
 	if tmpl != (pgTemplate{}) {
 		pgFreshSchemaCopies.Store(dbName, tmpl.schema)
 	}
 	entry.dsn = dsn
 	entry.name = dbName
 	entry.server = server
-	entry.releaseSlot = releaseSlot
+	entry.slot = slot
 	created = true
 	tb.Cleanup(func() { releasePGTestDatabase(tb, entry) })
 	close(entry.ready)
@@ -210,9 +196,7 @@ func releasePGTestDatabase(tb testing.TB, entry *pgTestDB) {
 
 	pgFreshSchemaCopies.Delete(entry.name)
 	dropPGTestDatabase(tb, entry.server, entry.name)
-	if entry.releaseSlot != nil {
-		entry.releaseSlot(tb)
-	}
+	releasePGTestSlot(tb, entry.slot)
 }
 
 // isolatedPGDatabase returns a database separate from testPGURL's, for tests
@@ -220,12 +204,10 @@ func releasePGTestDatabase(tb testing.TB, entry *pgTestDB) {
 func isolatedPGDatabase(t *testing.T) string {
 	t.Helper()
 	server, baseURL := testPGServer(t)
-	dsn, dbName, releaseSlot := createPGTestDatabase(t, server, baseURL, pgTemplate{})
+	dsn, dbName, slot := createPGTestDatabase(t, server, baseURL, pgTemplate{})
 	t.Cleanup(func() {
 		dropPGTestDatabase(t, server, dbName)
-		if releaseSlot != nil {
-			releaseSlot(t)
-		}
+		releasePGTestSlot(t, slot)
 	})
 	return dsn
 }
@@ -247,8 +229,8 @@ func testPGStandbyURL(tb testing.TB) string {
 type pgTestServer struct {
 	admin     *sql.DB
 	cockroach bool
-	// slots is how many top-level tests may hold databases on the server at
-	// once, across every test process; zero means no limit.
+	// slots is how many database-owning tests or subtests may hold databases on
+	// the server at once, across every test process; zero means no limit.
 	slots   int
 	slotDir string
 }
@@ -358,35 +340,27 @@ func findPGTestSlotLocked(name string) *pgTestSlot {
 }
 
 // acquirePGTestSlot takes a server slot for tb (or joins an ancestor's held
-// slot), waiting for one to free up, and returns a release function to call
-// after the database is dropped.
-func acquirePGTestSlot(tb testing.TB, server *pgTestServer) func(testing.TB) {
+// slot), waiting for one to free up, and returns the slot to pass to
+// releasePGTestSlot after the database is dropped. It returns nil when
+// server.slots is zero.
+func acquirePGTestSlot(tb testing.TB, server *pgTestServer) *pgTestSlot {
 	tb.Helper()
 	if server.slots == 0 {
 		return nil
 	}
-	name := tb.Name()
-	pgTestSlots.Lock()
-	if slot := findPGTestSlotLocked(name); slot != nil {
-		slot.databases++
-		pgTestSlots.Unlock()
-		return func(tb testing.TB) {
-			tb.Helper()
-			releasePGTestSlot(tb, slot)
-		}
-	}
-	pgTestSlots.Unlock()
-
-	slot := waitPGTestSlot(tb, server, name)
-	return func(tb testing.TB) {
-		tb.Helper()
-		releasePGTestSlot(tb, slot)
-	}
+	return waitPGTestSlot(tb, server, tb.Name())
 }
 
 func waitPGTestSlot(tb testing.TB, server *pgTestServer, name string) *pgTestSlot {
 	tb.Helper()
 	for {
+		pgTestSlots.Lock()
+		if slot := findPGTestSlotLocked(name); slot != nil {
+			slot.databases++
+			pgTestSlots.Unlock()
+			return slot
+		}
+		pgTestSlots.Unlock()
 		for i := range server.slots {
 			lock := flock.New(filepath.Join(server.slotDir, fmt.Sprintf("slot-%02d.lock", i)))
 			locked, err := lock.TryLock()
@@ -405,15 +379,6 @@ func waitPGTestSlot(tb testing.TB, server *pgTestServer, name string) *pgTestSlo
 				return slot
 			}
 		}
-		// Another goroutine for the same test or an ancestor may have acquired
-		// a slot while all server slots were busy.
-		pgTestSlots.Lock()
-		if slot := findPGTestSlotLocked(name); slot != nil {
-			slot.databases++
-			pgTestSlots.Unlock()
-			return slot
-		}
-		pgTestSlots.Unlock()
 		select {
 		case <-tb.Context().Done():
 			require.FailNow(tb, "test ended while waiting for a PostgreSQL test slot")
@@ -426,6 +391,9 @@ func waitPGTestSlot(tb testing.TB, server *pgTestServer, name string) *pgTestSlo
 
 func releasePGTestSlot(tb testing.TB, slot *pgTestSlot) {
 	tb.Helper()
+	if slot == nil {
+		return
+	}
 	pgTestSlots.Lock()
 	slot.databases--
 	var releaseLock *flock.Flock
@@ -443,18 +411,18 @@ func releasePGTestSlot(tb testing.TB, slot *pgTestSlot) {
 
 // createPGTestDatabase acquires a server slot and creates a database (empty, or
 // a copy of tmpl's template when tmpl is set). The caller owns dropping the
-// database and invoking releaseSlot afterward.
+// database and releasing the returned slot afterward.
 func createPGTestDatabase(
 	tb testing.TB, server *pgTestServer, baseURL string, tmpl pgTemplate,
-) (string, string, func(testing.TB)) {
+) (string, string, *pgTestSlot) {
 	tb.Helper()
 	name := fmt.Sprintf("agentsview_test_%016x", rand.Uint64())
 	dsn := withPGDatabase(tb, baseURL, name)
-	releaseSlot := acquirePGTestSlot(tb, server)
+	slot := acquirePGTestSlot(tb, server)
 	created := false
 	defer func() {
-		if !created && releaseSlot != nil {
-			releaseSlot(tb)
+		if !created {
+			releasePGTestSlot(tb, slot)
 		}
 	}()
 	create := "CREATE DATABASE " + name
@@ -470,7 +438,7 @@ func createPGTestDatabase(
 	_, err := server.admin.ExecContext(tb.Context(), create)
 	require.NoError(tb, err, "creating test database")
 	created = true
-	return dsn, name, releaseSlot
+	return dsn, name, slot
 }
 
 func dropPGTestDatabase(tb testing.TB, server *pgTestServer, name string) {

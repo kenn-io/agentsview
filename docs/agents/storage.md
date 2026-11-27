@@ -1757,9 +1757,10 @@ These tests use the `chtest` build tag. Never point them at a live mirror.
 ## PostgreSQL Integration Tests
 
 Run PostgreSQL integration tests only against a dedicated test server. Each
-top-level test in `internal/postgres` creates its own database on the
-`TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
-ends.
+test in `internal/postgres` that asks for a database creates one on the
+`TEST_PG_URL` server, named `agentsview_test_<hex>`. A subtest reuses an
+ancestor's database if one exists. The database is dropped when the last test
+using it ends.
 
 The `TEST_PG_URL` server must run PostgreSQL 15 or later, because the tests
 create their databases with `STRATEGY FILE_COPY`.
@@ -1821,7 +1822,7 @@ Because each test owns a database, the tests run in parallel:
   holds a slot while its databases exist, and subtests inherit an ancestor's
   held slot. PostgreSQL permits the smaller of
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
-  tests, with at least one slot. The default settings permit three tests, so
+  slots, with at least one slot. The default settings permit three slots, so
   the CI service and `docker-compose.test.yml` set
   `max_locks_per_transaction=256`, which permits 12. Slot files in the system
   temporary directory, keyed by server address, share this limit across test
