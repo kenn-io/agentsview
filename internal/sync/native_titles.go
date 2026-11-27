@@ -68,14 +68,15 @@ var nativeTitleSources = []nativeTitleSource{
 }
 
 // Reconcile after parsing so an older parsed title cannot win.
-func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncStats) {
+func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncStats) map[string]bool {
 	if e.db.ArchiveContent().UsageOnly() {
-		return
+		return nil
 	}
 	sources := e.sources()
 	if e.appliedNativeTitles == nil {
 		e.appliedNativeTitles = make(map[string]appliedNativeTitleStore)
 	}
+	var failedStores map[string]bool
 	for _, source := range nativeTitleSources {
 		if _, enabled := sources.providerFactories[source.agent]; !enabled {
 			continue
@@ -93,7 +94,7 @@ func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncSta
 			}
 			for _, root := range roots {
 				if ctx.Err() != nil {
-					return
+					return failedStores
 				}
 				store, ok := source.storePath(root)
 				if !ok || seen[store] {
@@ -114,6 +115,10 @@ func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncSta
 					stats.TitlesUpdated += n
 				}
 				if err != nil {
+					if failedStores == nil {
+						failedStores = make(map[string]bool)
+					}
+					failedStores[store] = true
 					stats.RecordFailed()
 					// Stores outside watched roots are retried by the next sync.
 					if retry, ok := ctx.Value(nativeTitleRetryContextKey{}).(*WatchBatch); ok && !source.outsideWatchedRoots {
@@ -129,6 +134,7 @@ func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncSta
 			}
 		}
 	}
+	return failedStores
 }
 
 func (e *Engine) invalidateNativeTitleCache(paths []string) {

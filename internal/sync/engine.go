@@ -496,6 +496,9 @@ type Engine struct {
 	// changedPathListedHook is a test seam called after a changed-path
 	// listing and before its re-list check; nil in production.
 	changedPathListedHook func(path string)
+	// antigravitySummaryDigests is a test seam for simulating transient
+	// conversation_summaries.db read failures; nil uses parser.AntigravitySummaryDigests.
+	antigravitySummaryDigests func(context.Context, string) (map[string]string, error)
 	// incrementalCommittedHook is a test seam called after an incremental
 	// session write commits; nil in production.
 	incrementalCommittedHook func(sessionID string)
@@ -1571,10 +1574,11 @@ func (e *Engine) SyncPaths(paths []string) {
 // that ignored SIGTERM would hold shutdown until a service manager's kill
 // timeout instead of aborting between files like every other sync path.
 type preparedChangedPathSync struct {
-	files              []parser.DiscoveredFile
-	missingPaths       []string
-	preContainerStates map[string]parser.SQLiteContainerState
-	classificationErr  error
+	files               []parser.DiscoveredFile
+	missingPaths        []string
+	failedSummaryStores []string
+	preContainerStates  map[string]parser.SQLiteContainerState
+	classificationErr   error
 }
 
 func (p preparedChangedPathSync) empty() bool {
@@ -1595,7 +1599,7 @@ func (e *Engine) prepareChangedPathSync(
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
 	prepared.preContainerStates = e.captureSQLiteContainerStates(paths)
-	prepared.files, prepared.classificationErr = e.classifyPaths(ctx, paths)
+	prepared.files, prepared.failedSummaryStores, prepared.classificationErr = e.classifyPathsWithSummaryFailures(ctx, paths)
 	prepared.missingPaths = omitMissingPersistentContainerPaths(
 		prepared.missingPaths, prepared.files,
 	)
@@ -1659,10 +1663,15 @@ func (e *Engine) syncChangedPathsLocked(
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {
 		var titleStats SyncStats
-		e.reconcileNativeTitlesLocked(ctx, &titleStats)
+		failedTitleStores := e.reconcileNativeTitlesLocked(ctx, &titleStats)
+		e.recordFailedAntigravitySummaryStoresLocked(
+			ctx, prepared.failedSummaryStores, failedTitleStores, &titleStats,
+		)
 		e.recordNativeTitleUpdates(titleStats)
 		stats.TitlesUpdated += titleStats.TitlesUpdated
 		stats.Failed += titleStats.Failed
+	} else {
+		e.queueFailedAntigravitySummaryStoreRetriesLocked(ctx, prepared.failedSummaryStores)
 	}
 	return stats, tombstoned, err
 }
@@ -1909,8 +1918,17 @@ func (e *Engine) classifyPaths(
 	ctx context.Context,
 	paths []string,
 ) ([]parser.DiscoveredFile, error) {
+	files, _, err := e.classifyPathsWithSummaryFailures(ctx, paths)
+	return files, err
+}
+
+func (e *Engine) classifyPathsWithSummaryFailures(
+	ctx context.Context,
+	paths []string,
+) ([]parser.DiscoveredFile, []string, error) {
 	seen := make(map[string]int, len(paths))
 	files := make([]parser.DiscoveredFile, 0, len(paths))
+	var failedSummaryStores []string
 	var classificationErr error
 	for _, p := range paths {
 		// Codex resolved-index events map to potentially several session
@@ -1920,7 +1938,10 @@ func (e *Engine) classifyPaths(
 		// history.jsonl), are owned by each provider-authoritative
 		// SourcesForChangedPath via classifyProviderChangedPath.
 		dfs := e.classifyCodexIndexPath(ctx, p)
-		providerFiles, err := e.classifyProviderChangedPath(ctx, p)
+		providerFiles, failedStores, err := e.classifyProviderChangedPathWithSummaryFailures(ctx, p)
+		for _, store := range failedStores {
+			failedSummaryStores = watchAppendUniqueString(failedSummaryStores, store)
+		}
 		if err != nil {
 			classificationErr = errors.Join(
 				classificationErr,
@@ -1944,7 +1965,7 @@ func (e *Engine) classifyPaths(
 		classificationErr = errors.Join(classificationErr, err)
 	}
 	files = dedupeDiscoveredFiles(files)
-	return e.dedupeClaudeDiscoveredFiles(ctx, files), classificationErr
+	return e.dedupeClaudeDiscoveredFiles(ctx, files), failedSummaryStores, classificationErr
 }
 
 func mergeChangedPathDiscoveredFile(
@@ -1970,8 +1991,17 @@ func (e *Engine) classifyProviderChangedPath(
 	ctx context.Context,
 	path string,
 ) ([]parser.DiscoveredFile, error) {
+	files, _, err := e.classifyProviderChangedPathWithSummaryFailures(ctx, path)
+	return files, err
+}
+
+func (e *Engine) classifyProviderChangedPathWithSummaryFailures(
+	ctx context.Context,
+	path string,
+) ([]parser.DiscoveredFile, []string, error) {
 	eventKind := providerChangedPathEventKind(path)
 	var files []parser.DiscoveredFile
+	var failedSummaryStores []string
 	var classificationErr error
 	seen := map[string]struct{}{}
 
@@ -2045,9 +2075,13 @@ func (e *Engine) classifyProviderChangedPath(
 			// parent changes in conversation_summaries.db select only the
 			// sessions whose stored summary fingerprint digest no longer
 			// matches.
-			summaryFiles, fallbackErr, summaryErr := e.classifyAntigravitySummariesPath(
+			summaryFiles, summaryReadErr, fallbackErr, summaryErr := e.classifyAntigravitySummariesPath(
 				ctx, agentType, provider, roots, path,
 			)
+			if summaryReadErr != nil {
+				store := strings.TrimSuffix(filepath.Clean(path), "-wal")
+				failedSummaryStores = watchAppendUniqueString(failedSummaryStores, store)
+			}
 			if err := errors.Join(summaryErr, fallbackErr); err != nil {
 				classificationErr = errors.Join(
 					classificationErr,
@@ -2222,7 +2256,7 @@ func (e *Engine) classifyProviderChangedPath(
 			}
 		}
 	}
-	return files, classificationErr
+	return files, failedSummaryStores, classificationErr
 }
 
 // expandOmnigentInheritedMetadataSources adds the still-archived descendant

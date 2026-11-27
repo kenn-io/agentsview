@@ -120,7 +120,10 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 		// A title store change alone plans no session files.
 		e.syncMu.Lock()
 		e.invalidateNativeTitleCache(changedPaths)
-		e.reconcileNativeTitlesLocked(ctx, &result.Stats)
+		failedTitleStores := e.reconcileNativeTitlesLocked(ctx, &result.Stats)
+		e.recordFailedAntigravitySummaryStoresLocked(
+			ctx, plan.failedSummaryStores(), failedTitleStores, &result.Stats,
+		)
 		e.recordNativeTitleUpdates(result.Stats)
 		e.syncMu.Unlock()
 		fallback.applyFailures(&result.Stats)
@@ -211,7 +214,10 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 		e.persistSkipCache(ctx)
 	}
 	processingComplete := stats.ProcessingComplete()
-	e.reconcileNativeTitlesLocked(ctx, &stats)
+	failedTitleStores := e.reconcileNativeTitlesLocked(ctx, &stats)
+	e.recordFailedAntigravitySummaryStoresLocked(
+		ctx, plan.failedSummaryStores(), failedTitleStores, &stats,
+	)
 	e.mu.Lock()
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats

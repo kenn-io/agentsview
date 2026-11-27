@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"log"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,19 +21,23 @@ func isAntigravitySummariesEventPath(agent parser.AgentType, path string) bool {
 // change to only the stored sessions under that store whose non-title summary
 // fingerprint digest (workspace or parent) no longer matches. Title-only edits
 // keep every stored digest unchanged and return no files.
+//
+// A non-context summary store read failure is returned separately in
+// summaryReadErr so callers can retry or retain the store without blocking
+// unrelated agents in the same batch.
 func (e *Engine) classifyAntigravitySummariesPath(
 	ctx context.Context,
 	agent parser.AgentType,
 	provider parser.Provider,
 	roots []string,
 	path string,
-) (files []parser.DiscoveredFile, fallbackErr, err error) {
+) (files []parser.DiscoveredFile, summaryReadErr, fallbackErr, err error) {
 	store := strings.TrimSuffix(filepath.Clean(path), "-wal")
 	storeRoot := filepath.Dir(store)
 	if _, ok := parser.SQLiteContainerPathForEvent(
 		storeRoot, path, parser.AntigravitySummariesDBName, true,
 	); !ok {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	owned := false
 	for _, root := range roots {
@@ -47,26 +52,29 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		}
 	}
 	if !owned {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	parser.InvalidateAntigravitySummaries(storeRoot)
-	digests, digestErr := parser.AntigravitySummaryDigests(ctx, storeRoot)
+	readDigests := e.antigravitySummaryDigests
+	if readDigests == nil {
+		readDigests = parser.AntigravitySummaryDigests
+	}
+	digests, digestErr := readDigests(ctx, storeRoot)
 	if digestErr != nil {
 		if errors.Is(digestErr, context.Canceled) ||
 			errors.Is(digestErr, context.DeadlineExceeded) {
-			return nil, nil, digestErr
+			return nil, nil, nil, digestErr
 		}
-		// An unreadable store cannot supply workspace or parent updates;
-		// native-title reconciliation surfaces the store read failure.
-		return nil, nil, nil
+		log.Printf("%s summaries %s: %v", agent, store, digestErr)
+		return nil, digestErr, nil, nil
 	}
 	records, listErr := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(agent)})
 	if listErr != nil {
 		if errors.Is(listErr, context.Canceled) ||
 			errors.Is(listErr, context.DeadlineExceeded) {
-			return nil, nil, listErr
+			return nil, nil, nil, listErr
 		}
-		return nil, listErr, nil
+		return nil, nil, listErr, nil
 	}
 	sessionRoot := parser.AntigravitySessionRoot
 	if agent == parser.AgentAntigravityCLI {
@@ -91,16 +99,16 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		localPaths[rec.ID] = resolved
 	}
 	if len(ids) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	slices.Sort(ids)
 	identities, idErr := e.db.ListSessionWriteIdentitiesByID(ctx, ids)
 	if idErr != nil {
 		if errors.Is(idErr, context.Canceled) ||
 			errors.Is(idErr, context.DeadlineExceeded) {
-			return nil, nil, idErr
+			return nil, nil, nil, idErr
 		}
-		return nil, idErr, nil
+		return nil, nil, idErr, nil
 	}
 	for _, id := range ids {
 		stored, ok := identities[id]
@@ -123,7 +131,7 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		if findErr != nil {
 			if errors.Is(findErr, context.Canceled) ||
 				errors.Is(findErr, context.DeadlineExceeded) {
-				return nil, nil, findErr
+				return nil, nil, nil, findErr
 			}
 			fallbackErr = errors.Join(fallbackErr, findErr)
 			continue
@@ -135,7 +143,43 @@ func (e *Engine) classifyAntigravitySummariesPath(
 			files = append(files, file)
 		}
 	}
-	return files, fallbackErr, nil
+	return files, nil, fallbackErr, nil
+}
+
+// recordFailedAntigravitySummaryStoresLocked ensures a metadata-read failure
+// during changed-path classification is never masked by a subsequent title-read
+// success: the store's applied title state is cleared, watcher retries keep the
+// store path, and stats records a failure so remote imports retain pending work.
+func (e *Engine) recordFailedAntigravitySummaryStoresLocked(
+	ctx context.Context,
+	failedStores []string,
+	failedTitleStores map[string]bool,
+	stats *SyncStats,
+) {
+	if len(failedStores) == 0 {
+		return
+	}
+	e.queueFailedAntigravitySummaryStoreRetriesLocked(ctx, failedStores)
+	for _, store := range failedStores {
+		if !failedTitleStores[store] {
+			stats.RecordFailed()
+		}
+	}
+}
+
+func (e *Engine) queueFailedAntigravitySummaryStoreRetriesLocked(
+	ctx context.Context,
+	failedStores []string,
+) {
+	retry, hasRetry := ctx.Value(nativeTitleRetryContextKey{}).(*WatchBatch)
+	for _, store := range failedStores {
+		delete(e.appliedNativeTitles, store)
+		parser.InvalidateSQLiteTitles(store)
+		parser.InvalidateAntigravitySummaries(filepath.Dir(store))
+		if hasRetry {
+			retry.Paths = watchAppendUniqueString(retry.Paths, store)
+		}
+	}
 }
 
 func antigravityTitleRoots(agent parser.AgentType, configured []string) []string {
