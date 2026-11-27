@@ -22,21 +22,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Each top-level test gets its own database on the TEST_PG_URL server, so
-// tests that use the same fixed schema names, or install database-wide
-// extensions, can run in parallel. Subtests share their top-level test's
-// database. The database is dropped when the test that created it finishes.
+// Each test that asks for a database gets its own database on the TEST_PG_URL
+// server, so tests that use the same fixed schema names, or install
+// database-wide extensions, can run in parallel. Subtests inherit an ancestor
+// test's database when one already exists; sibling subtests whose parent did
+// not create a database each get their own. A database is dropped when the
+// last test referencing it finishes.
+type pgTestDB struct {
+	key    string
+	ready  chan struct{}
+	dsn    string
+	name   string
+	server *pgTestServer
+	slot   *pgTestSlot
+	refs   int
+	failed bool
+}
+
 var pgTestDatabases = struct {
 	sync.Mutex
-	byTest map[string]string
-}{byTest: map[string]string{}}
+	byTest map[string]*pgTestDB
+}{byTest: map[string]*pgTestDB{}}
 
-// testPGURL returns the URL of the calling top-level test's database,
+// testPGURL returns the URL of the calling test's database (or its ancestor's),
 // creating it on first use. It skips the test when TEST_PG_URL is unset.
 func testPGURL(tb testing.TB) string {
 	tb.Helper()
-	dsn, _ := pgTestDatabase(tb, pgTemplate{})
-	return dsn
+	return pgTestDatabase(tb, pgTemplate{})
 }
 
 // testPGSchemaURL is testPGURL for tests that only need schema to exist
@@ -47,23 +59,14 @@ func testPGURL(tb testing.TB) string {
 // schema use testPGURL.
 func testPGSchemaURL(tb testing.TB, schema string) string {
 	tb.Helper()
-	return testPGTemplateURL(tb, pgTemplate{schema: schema})
+	return pgTestDatabase(tb, pgTemplate{schema: schema})
 }
 
 // testPGHostedURL is testPGSchemaURL for a schema that EnsureHostedTenant
 // provisions for tenant.
 func testPGHostedURL(tb testing.TB, schema, tenant string) string {
 	tb.Helper()
-	return testPGTemplateURL(tb, pgTemplate{schema: schema, tenant: tenant})
-}
-
-func testPGTemplateURL(tb testing.TB, tmpl pgTemplate) string {
-	tb.Helper()
-	dsn, cloned := pgTestDatabase(tb, tmpl)
-	if cloned {
-		pgFreshSchemaCopies.Store(pgDatabaseName(tb, dsn), tmpl.schema)
-	}
-	return dsn
+	return pgTestDatabase(tb, pgTemplate{schema: schema, tenant: tenant})
 }
 
 // pgTemplate names what a template database holds: schema as EnsureSchema
@@ -94,42 +97,119 @@ func takeFreshSchemaCopy(tb testing.TB, dsn, schema string) bool {
 	return pgFreshSchemaCopies.CompareAndDelete(pgDatabaseName(tb, dsn), schema)
 }
 
-// pgTestDatabase returns the calling top-level test's database, creating
-// it on first use, and reports whether it created a copy of the template
-// tmpl. It copies a template only when tmpl is set and the server is
-// PostgreSQL; CockroachDB has no database templates.
-func pgTestDatabase(tb testing.TB, tmpl pgTemplate) (string, bool) {
+// findPGTestDBLocked returns the database owned by name or its nearest
+// ancestor test, if one exists. Callers must hold pgTestDatabases.Mutex.
+func findPGTestDBLocked(name string) *pgTestDB {
+	for cur := name; ; {
+		if entry, ok := pgTestDatabases.byTest[cur]; ok {
+			return entry
+		}
+		idx := strings.LastIndexByte(cur, '/')
+		if idx < 0 {
+			return nil
+		}
+		cur = cur[:idx]
+	}
+}
+
+// pgTestDatabase returns the calling test's database (inheriting an ancestor
+// test's database when one already exists), creating it on first use. It
+// copies a template only when tmpl is set and the server is PostgreSQL;
+// CockroachDB has no database templates.
+func pgTestDatabase(tb testing.TB, tmpl pgTemplate) string {
 	tb.Helper()
-	test, _, _ := strings.Cut(tb.Name(), "/")
-	pgTestDatabases.Lock()
-	dsn, ok := pgTestDatabases.byTest[test]
-	pgTestDatabases.Unlock()
-	if ok {
-		return dsn, false
-	}
-	server, _ := testPGServer(tb)
-	if server.cockroach {
-		tmpl = pgTemplate{}
-	}
-	dsn = newPGTestDatabase(tb, tmpl)
-	pgTestDatabases.Lock()
-	pgTestDatabases.byTest[test] = dsn
-	pgTestDatabases.Unlock()
-	// Registered after the drop, so it runs first: a later test with the
-	// same name (benchmark rounds, -count) gets a new database.
-	tb.Cleanup(func() {
+	// Validate server access before publishing an in-flight entry so
+	// skipped tests leave no entry behind.
+	server, baseURL := testPGServer(tb)
+	name := tb.Name()
+	for {
 		pgTestDatabases.Lock()
-		delete(pgTestDatabases.byTest, test)
+		if entry := findPGTestDBLocked(name); entry != nil {
+			entry.refs++
+			pgTestDatabases.Unlock()
+			<-entry.ready
+			if entry.failed {
+				continue
+			}
+			tb.Cleanup(func() { releasePGTestDatabase(tb, entry) })
+			return entry.dsn
+		}
+		entry := &pgTestDB{
+			key:   name,
+			ready: make(chan struct{}),
+			refs:  1,
+		}
+		pgTestDatabases.byTest[name] = entry
 		pgTestDatabases.Unlock()
-	})
-	return dsn, tmpl != pgTemplate{}
+
+		if server.cockroach {
+			tmpl = pgTemplate{}
+		}
+		return finishPGTestDatabase(tb, server, baseURL, tmpl, entry)
+	}
+}
+
+func finishPGTestDatabase(
+	tb testing.TB, server *pgTestServer, baseURL string, tmpl pgTemplate, entry *pgTestDB,
+) string {
+	tb.Helper()
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		pgTestDatabases.Lock()
+		entry.failed = true
+		if pgTestDatabases.byTest[entry.key] == entry {
+			delete(pgTestDatabases.byTest, entry.key)
+		}
+		pgTestDatabases.Unlock()
+		close(entry.ready)
+	}()
+
+	dsn, dbName, slot := createPGTestDatabase(tb, server, baseURL, tmpl)
+	if tmpl != (pgTemplate{}) {
+		pgFreshSchemaCopies.Store(dbName, tmpl.schema)
+	}
+	entry.dsn = dsn
+	entry.name = dbName
+	entry.server = server
+	entry.slot = slot
+	created = true
+	tb.Cleanup(func() { releasePGTestDatabase(tb, entry) })
+	close(entry.ready)
+	return dsn
+}
+
+func releasePGTestDatabase(tb testing.TB, entry *pgTestDB) {
+	tb.Helper()
+	pgTestDatabases.Lock()
+	entry.refs--
+	if entry.refs > 0 {
+		pgTestDatabases.Unlock()
+		return
+	}
+	if pgTestDatabases.byTest[entry.key] == entry {
+		delete(pgTestDatabases.byTest, entry.key)
+	}
+	pgTestDatabases.Unlock()
+
+	pgFreshSchemaCopies.Delete(entry.name)
+	dropPGTestDatabase(tb, entry.server, entry.name)
+	releasePGTestSlot(tb, entry.slot)
 }
 
 // isolatedPGDatabase returns a database separate from testPGURL's, for tests
 // that need several fresh databases.
 func isolatedPGDatabase(t *testing.T) string {
 	t.Helper()
-	return newPGTestDatabase(t, pgTemplate{})
+	server, baseURL := testPGServer(t)
+	dsn, dbName, slot := createPGTestDatabase(t, server, baseURL, pgTemplate{})
+	t.Cleanup(func() {
+		dropPGTestDatabase(t, server, dbName)
+		releasePGTestSlot(t, slot)
+	})
+	return dsn
 }
 
 // testPGStandbyURL points TEST_PG_STANDBY_URL, a physical standby of the
@@ -149,8 +229,8 @@ func testPGStandbyURL(tb testing.TB) string {
 type pgTestServer struct {
 	admin     *sql.DB
 	cockroach bool
-	// slots is how many top-level tests may hold databases on the server at
-	// once, across every test process; zero means no limit.
+	// slots is how many database-owning tests or subtests may hold databases on
+	// the server at once, across every test process; zero means no limit.
 	slots   int
 	slotDir string
 }
@@ -230,64 +310,69 @@ func pgTestSlotConfig(ctx context.Context, admin *sql.DB, baseURL string) (int, 
 	return max(1, min(maxConnections/8, lockSlots)), dir, nil
 }
 
-// A top-level test holds one server slot while any of its databases exist.
+// Each test that owns databases holds one server slot while any of its
+// databases exist. Subtests inherit an ancestor's slot when one is already
+// held, avoiding self-deadlock on single-slot servers, while sibling subtests
+// without a parent slot acquire separate slots so concurrent subtest databases
+// stay within the server's lock-memory budget.
 var pgTestSlots = struct {
 	sync.Mutex
 	byTest map[string]*pgTestSlot
 }{byTest: map[string]*pgTestSlot{}}
 
 type pgTestSlot struct {
+	key       string
 	lock      *flock.Flock
 	databases int
 }
 
-// holdPGTestSlot takes a server slot for t's top-level test, waiting for
-// one to free up, and gives it back when the test's last database is
-// dropped.
-func holdPGTestSlot(tb testing.TB, server *pgTestServer) {
-	tb.Helper()
-	if server.slots == 0 {
-		return
-	}
-	test, _, _ := strings.Cut(tb.Name(), "/")
-	pgTestSlots.Lock()
-	slot, ok := pgTestSlots.byTest[test]
-	pgTestSlots.Unlock()
-	if !ok {
-		lock := waitPGTestSlot(tb, server)
-		pgTestSlots.Lock()
-		// A parallel subtest of the same test may have taken one meanwhile.
-		if slot, ok = pgTestSlots.byTest[test]; ok {
-			require.NoError(tb, lock.Unlock(), "releasing test slot")
-		} else {
-			slot = &pgTestSlot{lock: lock}
-			pgTestSlots.byTest[test] = slot
+func findPGTestSlotLocked(name string) *pgTestSlot {
+	for cur := name; ; {
+		if slot, ok := pgTestSlots.byTest[cur]; ok {
+			return slot
 		}
-		pgTestSlots.Unlock()
-	}
-	pgTestSlots.Lock()
-	slot.databases++
-	pgTestSlots.Unlock()
-	tb.Cleanup(func() {
-		pgTestSlots.Lock()
-		defer pgTestSlots.Unlock()
-		slot.databases--
-		if slot.databases == 0 {
-			delete(pgTestSlots.byTest, test)
-			assert.NoError(tb, slot.lock.Unlock(), "releasing test slot")
+		idx := strings.LastIndexByte(cur, '/')
+		if idx < 0 {
+			return nil
 		}
-	})
+		cur = cur[:idx]
+	}
 }
 
-func waitPGTestSlot(tb testing.TB, server *pgTestServer) *flock.Flock {
+// acquirePGTestSlot takes a server slot for tb (or joins an ancestor's held
+// slot), waiting for one to free up, and returns the slot to pass to
+// releasePGTestSlot after the database is dropped. It returns nil when
+// server.slots is zero.
+func acquirePGTestSlot(tb testing.TB, server *pgTestServer) *pgTestSlot {
 	tb.Helper()
+	if server.slots == 0 {
+		return nil
+	}
+	name := tb.Name()
 	for {
+		pgTestSlots.Lock()
+		if slot := findPGTestSlotLocked(name); slot != nil {
+			slot.databases++
+			pgTestSlots.Unlock()
+			return slot
+		}
+		pgTestSlots.Unlock()
 		for i := range server.slots {
 			lock := flock.New(filepath.Join(server.slotDir, fmt.Sprintf("slot-%02d.lock", i)))
 			locked, err := lock.TryLock()
 			require.NoError(tb, err, "taking test slot")
 			if locked {
-				return lock
+				pgTestSlots.Lock()
+				if slot := findPGTestSlotLocked(name); slot != nil {
+					slot.databases++
+					pgTestSlots.Unlock()
+					assert.NoError(tb, lock.Unlock(), "releasing test slot")
+					return slot
+				}
+				slot := &pgTestSlot{key: name, lock: lock, databases: 1}
+				pgTestSlots.byTest[name] = slot
+				pgTestSlots.Unlock()
+				return slot
 			}
 		}
 		select {
@@ -300,14 +385,42 @@ func waitPGTestSlot(tb testing.TB, server *pgTestServer) *flock.Flock {
 	}
 }
 
-// newPGTestDatabase creates a database and drops it when t finishes. The
-// database is empty, or a copy of the template for tmpl when tmpl is set.
-func newPGTestDatabase(tb testing.TB, tmpl pgTemplate) string {
+func releasePGTestSlot(tb testing.TB, slot *pgTestSlot) {
 	tb.Helper()
-	server, baseURL := testPGServer(tb)
-	// Registered before the drop, so the slot is released after it.
-	holdPGTestSlot(tb, server)
+	if slot == nil {
+		return
+	}
+	pgTestSlots.Lock()
+	slot.databases--
+	var releaseLock *flock.Flock
+	if slot.databases == 0 {
+		if pgTestSlots.byTest[slot.key] == slot {
+			delete(pgTestSlots.byTest, slot.key)
+		}
+		releaseLock = slot.lock
+	}
+	pgTestSlots.Unlock()
+	if releaseLock != nil {
+		assert.NoError(tb, releaseLock.Unlock(), "releasing test slot")
+	}
+}
+
+// createPGTestDatabase acquires a server slot and creates a database (empty, or
+// a copy of tmpl's template when tmpl is set). The caller owns dropping the
+// database and releasing the returned slot afterward.
+func createPGTestDatabase(
+	tb testing.TB, server *pgTestServer, baseURL string, tmpl pgTemplate,
+) (string, string, *pgTestSlot) {
+	tb.Helper()
 	name := fmt.Sprintf("agentsview_test_%016x", rand.Uint64())
+	dsn := withPGDatabase(tb, baseURL, name)
+	slot := acquirePGTestSlot(tb, server)
+	created := false
+	defer func() {
+		if !created {
+			releasePGTestSlot(tb, slot)
+		}
+	}()
 	create := "CREATE DATABASE " + name
 	if tmpl != (pgTemplate{}) {
 		create += " TEMPLATE " + pgTemplateName(tb, server, baseURL, tmpl)
@@ -320,15 +433,18 @@ func newPGTestDatabase(tb testing.TB, tmpl pgTemplate) string {
 	}
 	_, err := server.admin.ExecContext(tb.Context(), create)
 	require.NoError(tb, err, "creating test database")
-	tb.Cleanup(func() {
-		drop := "DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"
-		if server.cockroach {
-			drop = "DROP DATABASE IF EXISTS " + name + " CASCADE"
-		}
-		_, err := server.admin.ExecContext(context.WithoutCancel(tb.Context()), drop)
-		assert.NoError(tb, err, "dropping test database")
-	})
-	return withPGDatabase(tb, baseURL, name)
+	created = true
+	return dsn, name, slot
+}
+
+func dropPGTestDatabase(tb testing.TB, server *pgTestServer, name string) {
+	tb.Helper()
+	drop := "DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"
+	if server.cockroach {
+		drop = "DROP DATABASE IF EXISTS " + name + " CASCADE"
+	}
+	_, err := server.admin.ExecContext(context.WithoutCancel(tb.Context()), drop)
+	assert.NoError(tb, err, "dropping test database")
 }
 
 // pgTemplateDatabase is a template database. Each is built once per test
