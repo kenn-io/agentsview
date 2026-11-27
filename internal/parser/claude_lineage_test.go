@@ -1151,6 +1151,12 @@ func TestClaudeRecordedForkFindsParentInAnotherProjectDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(forkDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(origDir, "orig-1111.jsonl"),
 		[]byte(compactedOriginalContent()), 0o644))
+	// Project directories can be symlinks into another tree.
+	moved := filepath.Join(t.TempDir(), "moved")
+	require.NoError(t, os.Rename(origDir, moved))
+	if err := os.Symlink(moved, origDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
 	forkPath := filepath.Join(forkDir, "fork-2222.jsonl")
 	require.NoError(t, os.WriteFile(forkPath, []byte(compactedForkContent(
 		lineageDerivedFromLine("fork-2222", "fork:orig-1111"),

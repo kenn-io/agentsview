@@ -306,37 +306,13 @@ func claudeRecordedForkParent(path string, self claudeHeadSniff) string {
 // claudeFindForkParentTranscript returns the top-level transcript of
 // session parentID, looking first beside the fork at path and then in
 // the root's other project directories. It returns "" when none exists.
-func claudeFindForkParentTranscript(
-	ctx context.Context, path, parentID string,
-) (string, error) {
-	name := parentID + ".jsonl"
+func claudeFindForkParentTranscript(path, parentID string) string {
 	projectDir := filepath.Dir(path)
-	if claudeIsRegularFile(filepath.Join(projectDir, name)) {
-		return filepath.Join(projectDir, name), nil
+	sameDir := filepath.Join(projectDir, parentID+".jsonl")
+	if info, err := os.Stat(sameDir); err == nil && info.Mode().IsRegular() {
+		return sameDir
 	}
-	root := filepath.Dir(projectDir)
-	dirEntries, err := os.ReadDir(root)
-	if err != nil {
-		return "", nil //nolint:nilerr // Unavailable optional lineage metadata yields no lineage hint.
-	}
-	for _, entry := range dirEntries {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		dir := filepath.Join(root, entry.Name())
-		if !entry.IsDir() || dir == projectDir {
-			continue
-		}
-		if candidate := filepath.Join(dir, name); claudeIsRegularFile(candidate) {
-			return candidate, nil
-		}
-	}
-	return "", nil
-}
-
-func claudeIsRegularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+	return claudeFindSourceFile(filepath.Dir(projectDir), parentID)
 }
 
 // claudeForkLine is one uuid-bearing line of a fork transcript.
@@ -401,11 +377,10 @@ func claudeLineageCaptureSiblings(ctx context.Context, path string) ([]string, e
 		return nil, err
 	}
 	if parentID := claudeRecordedForkParent(path, self); parentID != "" {
-		parentPath, err := claudeFindForkParentTranscript(ctx, path, parentID)
-		if err != nil || parentPath == "" {
-			return nil, err
+		if parentPath := claudeFindForkParentTranscript(path, parentID); parentPath != "" {
+			return []string{parentPath}, nil
 		}
-		return []string{parentPath}, nil
+		return nil, nil
 	}
 	if !self.ok || !self.rootIsBG {
 		return nil, nil
@@ -596,10 +571,7 @@ func claudeResolveRecordedForkLineage(
 	ctx context.Context, path, parentID string,
 ) (*claudeLineagePlan, error) {
 	plan := &claudeLineagePlan{parentSessionID: parentID}
-	parentPath, err := claudeFindForkParentTranscript(ctx, path, parentID)
-	if err != nil {
-		return nil, err
-	}
+	parentPath := claudeFindForkParentTranscript(path, parentID)
 	if parentPath == "" {
 		return plan, nil
 	}
