@@ -24,10 +24,12 @@ func TestLocalSyncFromVaultPreservesSourceIdentity(t *testing.T) {
 		name     string
 		agent    parser.AgentType
 		stageMin int64
+		review   bool
 	}{
 		{name: "claude", agent: parser.AgentClaude},
 		{name: "codex", agent: parser.AgentCodex},
 		{name: "codex staged", agent: parser.AgentCodex, stageMin: 1},
+		{name: "codex review", agent: parser.AgentCodex, review: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -36,9 +38,16 @@ func TestLocalSyncFromVaultPreservesSourceIdentity(t *testing.T) {
 			wantID := nativeID
 			var file, content string
 			if tc.agent == parser.AgentCodex {
+				if tc.review {
+					root = filepath.Join(root, ".codex-run-v1-test", "sessions")
+				}
 				file = filepath.Join(root, "rollout-2026-01-01T00-00-00-"+nativeID+".jsonl")
+				originator := "codex_cli_rs"
+				if tc.review {
+					originator = "codex_exec"
+				}
 				content = testjsonl.NewSessionBuilder().
-					AddCodexMeta("2026-01-01T00:00:00Z", nativeID, "/workspace/project-a", "codex_cli_rs").
+					AddCodexMeta("2026-01-01T00:00:00Z", nativeID, "/workspace/project-a", originator).
 					AddCodexMessage("2026-01-01T00:00:01Z", "user", "hello archive").
 					AddCodexMessage("2026-01-01T00:00:02Z", "assistant", "archive reply").String()
 				wantID = "codex:" + nativeID
@@ -108,6 +117,11 @@ func TestLocalSyncFromVaultPreservesSourceIdentity(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, session)
 			assert.Equal(t, "origin-device", session.Machine)
+			if tc.review {
+				assert.Equal(t, string(parser.SessionKindRoborev), session.SessionKind)
+				assert.Empty(t, session.ParentSessionID)
+				assert.Empty(t, session.RelationshipType)
+			}
 			require.NotNil(t, session.FilePath)
 			assert.Equal(t, manifest.Manifest.SourceKey, *session.FilePath)
 			messages, err := database.GetAllMessages(ctx, wantID)

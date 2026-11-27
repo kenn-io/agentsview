@@ -56,6 +56,8 @@ func TestCodexRawReplay(t *testing.T) {
 				}
 			} else if layout == "alias-homes label" {
 				roots = []string{base}
+				primary = filepath.Join(base, label)
+				metadata[sessions] = []string{primary}
 			}
 			index := filepath.Join(primary, parser.CodexSessionIndexFilename)
 			require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"Primary title"}`+"\n"), 0o600))
@@ -65,6 +67,18 @@ func TestCodexRawReplay(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, discovery.Complete)
 			require.Len(t, discovery.Sources, 1)
+			if layout == "alias-homes label" {
+				plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, discovery.Sources[0])
+				require.NoError(t, err)
+				require.True(t, supported)
+				assert.Contains(t, plan.Entries, parser.RawCaptureEntry{Path: "alias-homes/case/session_index.jsonl", LocalPath: index})
+			}
+			if layout == "unlabeled run home" {
+				plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, discovery.Sources[0])
+				require.NoError(t, err)
+				require.True(t, supported)
+				assert.Equal(t, home, plan.CaptureRoot)
+			}
 			if layout == "overlapping roots" || layout == "symlinked sessions" {
 				direct, err := provider.Parse(t.Context(), parser.ParseRequest{Source: discovery.Sources[0], ForceParse: true})
 				require.NoError(t, err)

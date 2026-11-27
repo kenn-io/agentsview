@@ -499,10 +499,15 @@ func (p *codexProvider) PlanRawCapture(
 			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is not a regular file")
 		}
 	}
+	// Keep the marked home in replay paths without widening the physical root.
+	pathRoot := captureRoot
 	if home := codexRunHome(src.Path); home != "" && rawCapturePathWithin(home, captureRoot) {
-		captureRoot = filepath.Dir(home)
+		pathRoot = filepath.Dir(home)
+		if metadataPath != "" {
+			captureRoot = pathRoot
+		}
 	}
-	rel, err := filepath.Rel(captureRoot, src.Path)
+	rel, err := filepath.Rel(pathRoot, src.Path)
 	if err != nil {
 		return RawCapturePlan{}, invalidRawCapturePlan(
 			"resolve Codex source path: %s", rawCaptureFilesystemError(err),
@@ -558,7 +563,7 @@ func (p *codexProvider) PlanRawCapture(
 				// rollouts and let hosted discovery find every captured file.
 				parentRel := filepath.Join(fmt.Sprintf("replay-parent-%d", len(entries)), filepath.Base(parentPath))
 				if rawCapturePathWithin(captureRoot, parentPath) {
-					parentRel, err = filepath.Rel(captureRoot, parentPath)
+					parentRel, err = filepath.Rel(pathRoot, parentPath)
 					if err != nil {
 						return RawCapturePlan{}, invalidRawCapturePlan(
 							"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
@@ -584,11 +589,11 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && (metadataPath != "" || CodexSourceLabel(src.Root, src.Path) != "")) &&
+			if (p.Config.StableSourceSnapshots || i == 0 && (pathRoot != captureRoot || metadataPath != "" || CodexSourceLabel(src.Root, src.Path) != "")) &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
-				rel, err := filepath.Rel(captureRoot, candidate)
+				rel, err := filepath.Rel(pathRoot, candidate)
 				if err != nil {
 					return RawCapturePlan{}, invalidRawCapturePlan(
 						"resolve Codex session index: %s", rawCaptureFilesystemError(err),
