@@ -509,10 +509,20 @@ func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(ctx,
 		`UPDATE raw_content_revisions
-		 SET recency_state = '{"outcome":"completed","outcome_confidence":"medium","health_score":100,"health_grade":"A"}'::jsonb
+		 SET recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
 		 WHERE session_id = $1`, resolved.SessionID,
 	)
 	require.NoError(t, err)
+	var beforeRecencyBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&beforeRecencyBytes))
+	beforeRecency, err := decodeRawRecency(beforeRecencyBytes)
+	require.NoError(t, err)
+	require.Equal(t, "completed", beforeRecency.Outcome)
+	require.Equal(t, "medium", beforeRecency.OutcomeConfidence)
+	require.Equal(t, new(100), beforeRecency.HealthScore)
+	require.Equal(t, new("A"), beforeRecency.HealthGrade)
 	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
 	require.NoError(t, err)
 
