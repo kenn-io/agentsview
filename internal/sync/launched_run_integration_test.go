@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,10 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func codexStartup(id string) string {
+	return "OpenAI Codex v0.1.0\n--------\nworkdir: /workspace/project\nsession id: " + id + "\n--------\nuser\nReview\n"
+}
 
 func TestLaunchedRunLinksAfterIncrementalResult(t *testing.T) {
 	for _, mode := range []string{"all", "paths", "session"} {
@@ -41,7 +46,7 @@ func testLaunchedRunLinksAfterIncrementalResult(t *testing.T, mode string) {
 	children, err := database.GetChildSessions(t.Context(), "launcher")
 	require.NoError(t, err)
 	assert.Empty(t, children)
-	content += `{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"session id: ` + id + `"}]}}` + "\n"
+	content += `{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":` + strconv.Quote(codexStartup(id)) + `}]}}` + "\n"
 	require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
 	switch mode {
 	case "all":
@@ -110,7 +115,7 @@ func TestLaunchedRunScopedReparse(t *testing.T) {
 	require.NoError(t, os.MkdirAll(codexRoot, 0700))
 	content := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n" +
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-01T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"codex exec review"}}]}}` + "\n" +
-		`{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"session id: ` + id + `"}]}}` + "\n"
+		`{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":` + strconv.Quote(codexStartup(id)) + `}]}}` + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", "launcher.jsonl"), []byte(content), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+id+".jsonl"), []byte(testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z")+"\n"), 0600))
 	archive := filepath.Join(t.TempDir(), "archive.db")
@@ -163,7 +168,7 @@ func TestCodexLaunchedRunLateResult(t *testing.T) {
 			children, err := database.GetChildSessions(t.Context(), "codex:"+parent)
 			require.NoError(t, err)
 			assert.Empty(t, children)
-			content += testjsonl.CodexFunctionCallOutputJSON("call-1", map[string]any{"output": "session id: " + child}, "2026-10-01T10:00:03Z") + "\n"
+			content += testjsonl.CodexFunctionCallOutputJSON("call-1", map[string]any{"output": codexStartup(child)}, "2026-10-01T10:00:03Z") + "\n"
 			require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
 			switch mode {
 			case "paths":

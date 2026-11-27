@@ -52,7 +52,7 @@ func launchedFlagTakesValue(agent, flag string) bool {
 }
 
 var launchedUUID = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
-var launchedOutputID = regexp.MustCompile(`(?im)^session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?$`)
+var launchedOutputID = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
 var launchedValidID = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
 var launchedOutputHint = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
 
@@ -65,6 +65,7 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 	var launches []string
 	unsafeOutput := false
 	conflictingExplicit := false
+	codexJSON := false
 	var scan func(string, int)
 	scan = func(command string, depth int) {
 		if depth > 8 || ctx.Err() != nil {
@@ -83,7 +84,7 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 				unsafeOutput = true
 				return false
 			}
-			if stmt, ok := node.(*syntax.Stmt); ok && (len(stmt.Redirs) > 0 || stmt.Background) {
+			if stmt, ok := node.(*syntax.Stmt); ok && !capturedLaunchOutput(stmt) {
 				unsafeOutput = true
 			}
 			call, ok := node.(*syntax.CallExpr)
@@ -126,22 +127,9 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 			prefix := ""
 			if name == "codex" {
 				prefix = "codex:"
+				codexJSON = launchedCodexJSON(words)
 			}
-			explicit := map[string]bool{}
-			for i := 1; i < len(words); i++ {
-				if !literal[i] {
-					continue
-				}
-				id := ""
-				if strings.HasPrefix(words[i], "--session-id=") {
-					id = strings.TrimPrefix(words[i], "--session-id=")
-				} else if words[i] == "--session-id" && i+1 < len(words) && literal[i+1] {
-					id = words[i+1]
-				}
-				if launchedValidID.MatchString(id) {
-					explicit[prefix+strings.ToLower(id)] = true
-				}
-			}
+			explicit := launchedExplicitIDs(name, prefix, words, literal)
 			if len(explicit) > 1 {
 				conflictingExplicit = true
 			}
@@ -157,7 +145,7 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 	for _, command := range commands {
 		scan(command, 0)
 	}
-	if len(launches) == 1 && !unsafeOutput && !conflictingExplicit {
+	if len(launches) == 1 && !unsafeOutput && !conflictingExplicit && (launches[0] != "codex:" || codexJSON || launchedOutputID.MatchString(launchedRunOutput(output))) {
 		for _, id := range launchedOutputIDs(output) {
 			if strings.HasPrefix(id, "codex:") == (launches[0] == "codex:") {
 				ids[id] = true
@@ -172,6 +160,63 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 		result = append(result, id)
 	}
 	return result
+}
+
+func launchedCodexJSON(words []string) bool {
+	for i := 1; i < len(words); i++ {
+		if words[i] == "--" {
+			return false
+		}
+		if words[i] == "--json" {
+			return true
+		}
+		if launchedFlagTakesValue("codex", words[i]) {
+			i++
+		}
+	}
+	return false
+}
+
+// capturedLaunchOutput allows only redirections that keep stderr in the result.
+func capturedLaunchOutput(stmt *syntax.Stmt) bool {
+	if stmt.Background {
+		return false
+	}
+	for _, redir := range stmt.Redirs {
+		if redir.Op != syntax.DplOut || redir.N == nil || redir.N.Value != "2" {
+			return false
+		}
+		words, literal := shellWords([]*syntax.Word{redir.Word})
+		if !literal[0] || words[0] != "1" {
+			return false
+		}
+	}
+	return true
+}
+
+func launchedExplicitIDs(agent, prefix string, words []string, literal []bool) map[string]bool {
+	ids := map[string]bool{}
+	for i := 1; i < len(words); i++ {
+		word := words[i]
+		if word == "--" {
+			break
+		}
+		id := ""
+		if literal[i] && strings.HasPrefix(word, "--session-id=") {
+			id = strings.TrimPrefix(word, "--session-id=")
+		} else if word == "--session-id" && i+1 < len(words) {
+			i++
+			if literal[i] {
+				id = words[i]
+			}
+		} else if !strings.Contains(word, "=") && launchedFlagTakesValue(agent, word) {
+			i++
+		}
+		if launchedValidID.MatchString(id) {
+			ids[prefix+strings.ToLower(id)] = true
+		}
+	}
+	return ids
 }
 
 // isResumedRun checks control arguments, not words in the prompt.
@@ -284,10 +329,10 @@ func ShellInputCommands(input string) ([]string, bool) {
 func launchedOutputIDs(text string) []string {
 	text = launchedRunOutput(text)
 	var ids []string
-	for _, match := range launchedOutputID.FindAllStringSubmatch(text, -1) {
-		ids = append(ids, "codex:"+strings.ToLower(match[1]))
+	if match := launchedOutputID.FindStringSubmatch(text); len(match) != 0 {
+		return []string{"codex:" + strings.ToLower(match[1])}
 	}
-	for _, line := range strings.Split(text, "\n") {
+	for i, line := range strings.Split(text, "\n") {
 		if !strings.Contains(line, `"thread_id"`) && !strings.Contains(line, `"session_id"`) {
 			continue
 		}
@@ -299,7 +344,7 @@ func launchedOutputIDs(text string) []string {
 		if json.Unmarshal([]byte(line), &event) != nil {
 			continue
 		}
-		if event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
+		if i == 0 && event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
 			ids = append(ids, "codex:"+strings.ToLower(event.ThreadID))
 		}
 		if (event.Type == "system" || event.Type == "result") && launchedValidID.MatchString(event.SessionID) {
