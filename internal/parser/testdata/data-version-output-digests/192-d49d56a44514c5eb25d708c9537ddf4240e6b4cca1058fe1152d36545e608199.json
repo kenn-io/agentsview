@@ -1,7 +1,7 @@
 {
-  "version": 191,
+  "version": 192,
   "bump": true,
-  "digest": "ed4249eb510ec675a57cb76265748eb2d6c828ba1686e11b89d897ce71527cd3",
+  "digest": "d49d56a44514c5eb25d708c9537ddf4240e6b4cca1058fe1152d36545e608199",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -15,11 +15,11 @@
       "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "7c73d609202d51ddc4235656908d608f55f109e8290339d8bd44257c9d3a021f"
     },
     "antigravity-cli": {
-      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "a8f662e398636c855f5465ead715340f65f412043314c954176e0a6be6c1b77d",
-      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c86adbd1233ec45932dd37624f4a3033ad1784af72442594807a028bf54cbc9b",
-      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c9765a2707dd1b529d638a445797c26b8687b654b9e57e85c554e7cd48eaf502",
-      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "8f4b868094be7001592805e336c90e95541b4b16e2e110f6bcbb054d62720929",
-      "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "87b78741598f2126e69571d0fb5b3983a209f7830b566b745ad9b04e538f1914"
+      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c63077e8534c5880bc4a18abf9144180cbe780d6e0a4a1893a89d90e5037efda",
+      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c40d90f8b8361981192dabcab9efc61746c3a96b6998627ae822a49c3942ab38",
+      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c8281a3c97d035cd717aae1cfcf604a9e87e7453d60867433418b3f00fb2663f",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "2147b81894e3463e65235fe4afc5f01fc4d169bf79b55de47122ba5c9a1ae38b",
+      "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "16ff742ae81bcaae022c397090af18f59ad52245855e130e5e80ca7bf80ed3ac"
     },
     "augure-code": {
       "2026/09/07/rollout-2026-09-07T14-02-01-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "e2ac5d9bdeaa466cda6cb22b8b000cbe8b958bef3fd158b80b61c001c16595ee"
