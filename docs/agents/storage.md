@@ -1356,6 +1356,8 @@ through `usage_generation`.
 Each filter combination has its own entry. Each file is capped at 128 MiB, and
 all `sqlite-trends` entries share a 256 MiB budget. Read-only archives and
 disabled disk storage use the direct reader.
+SQLite also keeps the latest timezone's dashboard parts in memory under an
+estimated 64 MiB budget, evicting least recently used sessions first.
 
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on

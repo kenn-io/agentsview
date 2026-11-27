@@ -23,6 +23,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.4
@@ -111,7 +112,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.2 // indirect
 	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hhrutter/tiff v1.0.6 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

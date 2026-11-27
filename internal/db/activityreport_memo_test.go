@@ -51,7 +51,8 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			case "stale store":
 				key := activityMemoKey{"s", q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
 				generation := d.activityMemo.generation
-				entry := d.activityMemo.entries[key].Value.(activityMemoEntry)
+				entry, ok := d.activityMemo.peek(key)
+				require.True(t, ok)
 				replacement := testDB(t)
 				insertSession(t, replacement, "s", "p")
 				seedMessage(t, replacement, "s", 0, "user", "2026-06-16T10:00:00Z", "")
@@ -142,7 +143,7 @@ func TestActivityMemoOverflowSkipsReport(t *testing.T) {
 	}
 	q := dayQuery(t, "2026-06-16", "UTC")
 	assert.Len(t, activityRuns(t, d, q, "large", "small"), 2)
-	assert.Empty(t, d.activityMemo.entries)
+	assert.Zero(t, d.activityMemo.Len())
 	rewriteActivityModels(t, d, "reread", "large", "small")
 	assert.Equal(t, []string{"large", "small"}, rereadRuns(activityRuns(t, d, q, "large", "small"), "reread"))
 }
@@ -259,7 +260,7 @@ func TestActivityMemoReportKeepsManySessions(t *testing.T) {
 	cold, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 4_097.0, cold.Report.Totals.AgentMinutes, 1e-9)
-	require.Len(t, d.activityMemo.entries, 4_097)
+	require.Equal(t, 4_097, d.activityMemo.Len())
 	ids := make([]string, 4_097)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("s-%04d", i)
@@ -269,7 +270,7 @@ func TestActivityMemoReportKeepsManySessions(t *testing.T) {
 	warm, err := d.BuildActivityReportArtifacts(t.Context(), f, q, nil)
 	require.NoError(t, err)
 	assert.Equal(t, cold.Report.Totals, warm.Report.Totals)
-	assert.Len(t, d.activityMemo.entries, 4_097)
+	assert.Equal(t, 4_097, d.activityMemo.Len())
 	assert.Equal(t, []string{"m"}, reportModels(warm))
 }
 

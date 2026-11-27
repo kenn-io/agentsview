@@ -35,57 +35,91 @@ type dashboardSession struct {
 type dashboardPartsMemo struct {
 	mu            sync.Mutex
 	slot, version string
-	parts         map[string]kept.Part[dashboardPart]
-	bytes         int64
+	boundedLRU[string, kept.Part[dashboardPart]]
+	maxBytes int64
 }
 
-// reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
-func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
+func (m *dashboardPartsMemo) reuseSelection(slot, version string, sessions []dashboardSession, versions map[string]string, parts map[string]kept.Part[dashboardPart]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.slot != slot || m.version != version {
-		return ids
-	}
-	return slices.DeleteFunc(ids, func(id string) bool {
-		p, ok := m.parts[id]
-		if ok = ok && p.Fingerprint == versions[id]; ok {
-			parts[id] = p
-		}
-		return ok
-	})
-}
-
-func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.slot != slot || m.version != version {
-		m.slot, m.version, m.parts, m.bytes = slot, version, make(map[string]kept.Part[dashboardPart], len(parts)), 0
-	}
-	for id, p := range parts {
-		m.add(id, p)
-	}
-}
-
-// add skips oversized parts and clears earlier entries when a fitting part would exceed the limit.
-func (m *dashboardPartsMemo) add(id string, p kept.Part[dashboardPart]) {
-	if old, ok := m.parts[id]; ok {
-		m.bytes -= dashboardPartBytes(old)
-		delete(m.parts, id)
-	}
-	n := dashboardPartBytes(p)
-	if n > kept.DefaultMaxBytes {
 		return
 	}
-	if m.bytes+n > kept.DefaultMaxBytes {
-		clear(m.parts)
-		m.bytes = 0
+	for _, session := range sessions {
+		p, ok := m.get(session.ID)
+		if !ok {
+			continue
+		}
+		fingerprint, current := versions[session.ID]
+		if current && p.Fingerprint == fingerprint {
+			parts[session.ID] = p
+		} else {
+			m.remove(session.ID)
+		}
 	}
-	m.parts[id] = p
-	m.bytes += n
+}
+
+func (m *dashboardPartsMemo) storeParts(slot, version string, parts map[string]kept.Part[dashboardPart]) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	maxBytes := m.maxBytes
+	if maxBytes == 0 {
+		maxBytes = kept.DefaultMaxBytes
+	}
+	if m.slot != slot || m.version != version {
+		m.slot, m.version = slot, version
+		m.reset()
+	}
+	var pending []string
+	var selectedBytes int64
+	for id, p := range parts {
+		cached, ok := m.peek(id)
+		if !ok {
+			pending = append(pending, id)
+			continue
+		}
+		if cached.Fingerprint != p.Fingerprint {
+			m.remove(id)
+			pending = append(pending, id)
+			continue
+		}
+		selectedBytes += dashboardPartBytes(cached)
+	}
+	if len(pending) == 0 {
+		return
+	}
+	slices.Sort(pending)
+	var oldest []string
+	next := 0
+	for _, id := range pending {
+		p := parts[id]
+		size := dashboardPartBytes(p)
+		if size > maxBytes-selectedBytes {
+			continue
+		}
+		// Retain selected parts and evict unrelated entries in LRU order.
+		if m.bytes+size > maxBytes {
+			if oldest == nil {
+				oldest = m.keys()
+			}
+			for next < len(oldest) && m.bytes+size > maxBytes {
+				old := oldest[next]
+				next++
+				if _, selected := parts[old]; !selected {
+					m.remove(old)
+				}
+			}
+		}
+		if m.bytes+size <= maxBytes {
+			m.add(id, p, size)
+			selectedBytes += size
+		}
+	}
 }
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
-	return int64(len(p.ID)+len(p.Fingerprint)) + dashboardPartSize(p.Value)
+	// The multiplier covers retained allocations; 256 covers the entry, list node, and map slot.
+	return int64(len(p.ID)+len(p.Fingerprint)) + 2*dashboardPartSize(p.Value) + 256
 }
 
 func dashboardPartSize(p dashboardPart) int64 {
@@ -178,7 +212,12 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			}
 		}
 		sort.Strings(ids)
-		ids = db.dashboardMemo.reuse("dashboard-parts|"+TrendsTimezoneKey(f), version, ids, versions, parts)
+		memoSlot := "dashboard-parts|" + TrendsTimezoneKey(f)
+		db.dashboardMemo.reuseSelection(memoSlot, version, sessions, versions, parts)
+		ids = slices.DeleteFunc(ids, func(id string) bool {
+			_, reused := parts[id]
+			return reused
+		})
 		if len(ids) > 0 {
 			if dashboardPartsReadObserver != nil {
 				dashboardPartsReadObserver(ids)
@@ -187,11 +226,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 				return dashboardPartsResult{}, err
 			}
 		}
+		db.dashboardMemo.storeParts(memoSlot, version, parts)
 		if len(changed) > 0 {
-			saveDashboardParts(db, f, slot, version, parts)
-		} else {
-			// A file loaded after a restart must seed the memo for other filters.
-			db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
+			saveDashboardParts(db, slot, version, parts)
 		}
 		return dashboardPartsResult{Parts: parts, Handled: true}, nil
 	})
@@ -201,8 +238,7 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	return sessions, result.Parts, result.Handled, nil
 }
 
-func saveDashboardParts(db *DB, f AnalyticsFilter, slot, version string, parts map[string]kept.Part[dashboardPart]) {
-	db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
+func saveDashboardParts(db *DB, slot, version string, parts map[string]kept.Part[dashboardPart]) {
 	saved := make([]kept.Part[dashboardPart], 0, len(parts))
 	for _, p := range parts {
 		saved = append(saved, p)
