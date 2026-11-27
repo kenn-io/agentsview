@@ -1360,9 +1360,9 @@ fixtures retain this field; missing identities remain source-local.
   AgentsView reads it from the parent of the rollout's `sessions` directory on
   a full parse. A later incremental sync, repository project repair, or
   archive rebuild can replace the label until the next full parse.
-  A missing, malformed, or empty label falls back to the path-derived label;
-  a read error fails the parse for retry. `TestCodexRecordedRunLabel` covers
-  both forms.
+  A missing, malformed, or empty label leaves the project derived from the
+  configured folder or the session's working directory; a read error fails the
+  parse for retry. `TestCodexRecordedRunLabel` covers both forms.
 
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of

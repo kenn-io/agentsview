@@ -784,7 +784,8 @@ AgentsView reads without writing to or migrating the database.
 record the run's label in `roborev.json` inside the run home. AgentsView uses
 that label as the project on a full parse. A later incremental sync, repository
 project repair, or archive rebuild can replace it until the next full parse.
-If the file is missing or its label is invalid, AgentsView uses the label path.
+If the file is missing or its label is invalid, AgentsView uses the project
+derived from the configured folder or the session's working directory.
 If an existing file cannot be read, parsing fails and sync retries the session.
 A worktree mapping or an assigned project takes precedence.
 
