@@ -680,6 +680,27 @@ describe("MessageList follow cancellation", () => {
     await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
   });
 
+  it.each([
+    { ordinal: 0, block: "user" as const, older: false, thinking: false },
+    { ordinal: 1, block: "assistant" as const, older: true, thinking: false },
+    { ordinal: 1, block: "thinking" as const, older: false, thinking: true },
+  ])("reveals a linked $block message hidden by its block filter", async ({ ordinal, block, older, thinking }) => {
+    ui.setBlockVisible(block, false);
+    ui.setBlockVisible("hook", false);
+    const target = thinking ? { ...makeMessage(ordinal), content: "[Thinking]\nPlan.\n[/Thinking]", has_thinking: true, thinking_text: "Plan." } : makeMessage(ordinal);
+    messages.messages = older ? [makeMessage(10)] : [target, makeMessage(10)];
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [target, makeMessage(10)];
+    });
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.setFollowLatest(false);
+    (component as JumpList).scrollToOrdinal(ordinal);
+    await vi.waitFor(() => expect(ui.isBlockVisible(block)).toBe(true));
+    expect(ui.isBlockVisible("hook")).toBe(false);
+    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
+  });
+
   function withCall(message: Message, toolUseId: string, inputJson?: string): Message {
     return {
       ...message,

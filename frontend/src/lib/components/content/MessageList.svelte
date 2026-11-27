@@ -7,7 +7,7 @@
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
-  import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
+  import { ALL_BLOCK_TYPES, ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -38,6 +38,7 @@
   import { settleVirtualScroll } from "./staged-scroll.js";
   import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "../../utils/transcript-mode.js";
+  import { hasVisibleSegments } from "../../utils/content-parser.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -734,6 +735,22 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
+    if (!normalDisplayItemsAsc.some((item) => item.ordinals.includes(ordinal))) {
+      const message = messages.messages.find((item) => item.ordinal === ordinal);
+      const hiddenBlock = message && !hasVisibleSegments(message, (type) =>
+        type === "code" || ui.isBlockVisible(type),
+      ) && ALL_BLOCK_TYPES.find((block) =>
+        !ui.isBlockVisible(block) && hasVisibleSegments(message, (type) =>
+          type === "code" || type === block || ui.isBlockVisible(type),
+        ),
+      );
+      if (hiddenBlock) {
+        ui.setBlockVisible(hiddenBlock, true);
+        await tick();
+        if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+      }
+    }
+
     if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
       ui.setTranscriptMode("normal");
       await tick();
@@ -874,9 +891,6 @@
     return displayItemsAsc;
   }
 
-  export function getNormalDisplayItems(): DisplayItem[] {
-    return normalDisplayItemsAsc;
-  }
 
   let searchRevealKey = $derived.by(() => {
     const match = inSessionSearch.resolvedCurrent;

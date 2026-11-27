@@ -105,7 +105,6 @@
   import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
-  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
     filterParamsEqual,
     hasFilterParams,
@@ -132,16 +131,11 @@
     window.location.reload();
   }
   import type { DisplayItem } from "./lib/utils/display-items.js";
-  import {
-    parseContent,
-    enrichSegments,
-  } from "./lib/utils/content-parser.js";
 
   let messageListRef:
     | {
         scrollToOrdinal: (o: number, call?: ScrollCall) => void;
         getDisplayItems: () => DisplayItem[];
-        getNormalDisplayItems: () => DisplayItem[];
       }
     | undefined = $state(undefined);
 
@@ -229,14 +223,9 @@
   });
 
   // Scroll to pending ordinal once messages finish loading.
-  // If the target message is hidden specifically because thinking
-  // is disabled, auto-enable thinking so the message becomes visible.
-  // Messages hidden by other block filters (tool/code/user/assistant)
-  // are left alone — auto-changing unrelated filters is unexpected.
   $effect(() => {
     const ordinal = ui.pendingScrollOrdinal;
     const loading = messages.loading;
-    const thinkingVisible = ui.isBlockVisible("thinking");
     untrack(() => {
       if (ordinal === null || loading || !messageListRef) return;
       // A missing session keeps the anchor armed: recovery reloads
@@ -245,54 +234,6 @@
         sessions.activeSessionNotFound && messages.messages.length === 0
       ) {
         return;
-      }
-
-      const items = messageListRef.getDisplayItems();
-      const normalItems =
-        messageListRef.getNormalDisplayItems();
-      const found = items.some((item) =>
-        item.ordinals.includes(ordinal),
-      );
-
-      if (!found) {
-        if (
-          shouldAutoSwitchTranscriptModeToNormal(
-            ui.transcriptMode,
-            ordinal,
-            items,
-            normalItems,
-          )
-        ) {
-          ui.setTranscriptMode("normal");
-          return; // effect re-runs with normal transcript mode
-        }
-
-        // Only auto-enable thinking if the ordinal is loaded
-        // but filtered out *specifically* due to hidden thinking.
-        // If it's outside the loaded window, don't change filters.
-        // Auto-enable thinking filter when navigating to a message
-        // that contains a thinking block.
-        const msg = messages.messages.find(
-          (m) => m.ordinal === ordinal,
-        );
-        if (msg && !thinkingVisible) {
-          const segs = enrichSegments(
-            parseContent(
-              msg.content,
-              msg.has_tool_use,
-              msg.id,
-              msg.content_length,
-            ),
-            msg.tool_calls,
-          );
-          const hasThinkingSegment = segs.some(
-            (s) => s.type === "thinking",
-          );
-          if (hasThinkingSegment) {
-            ui.setBlockVisible("thinking", true);
-            return; // effect re-runs with thinking visible
-          }
-        }
       }
 
       const call = ui.pendingScrollCall;
