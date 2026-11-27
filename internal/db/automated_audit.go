@@ -75,8 +75,8 @@ func applyUsageOnlyMetadataAutomation(ctx context.Context, w *writerHandle, only
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET is_automated = 1, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE is_automated = 0
-		  AND (session_kind = ? OR entrypoint = ?)`+auditFilter,
-		parser.SessionKindRoborev, parser.SessionKindRoborev,
+		  AND (session_kind IN (?, ?) OR entrypoint = ?)`+auditFilter,
+		parser.SessionKindRoborev, parser.SessionKindMuseBackground, parser.SessionKindRoborev,
 	); err != nil {
 		return fmt.Errorf("applying metadata automation in usage-only archive: %w", err)
 	}

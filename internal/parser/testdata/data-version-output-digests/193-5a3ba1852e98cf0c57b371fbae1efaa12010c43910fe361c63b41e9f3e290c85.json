@@ -1,7 +1,7 @@
 {
-  "version": 191,
+  "version": 193,
   "bump": true,
-  "digest": "89eb756d485b8a2c293f426885e1600c762268f7a69881a5119bc4d75823cd8c",
+  "digest": "5a3ba1852e98cf0c57b371fbae1efaa12010c43910fe361c63b41e9f3e290c85",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -15,11 +15,11 @@
       "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "7c73d609202d51ddc4235656908d608f55f109e8290339d8bd44257c9d3a021f"
     },
     "antigravity-cli": {
-      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "a8f662e398636c855f5465ead715340f65f412043314c954176e0a6be6c1b77d",
-      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c86adbd1233ec45932dd37624f4a3033ad1784af72442594807a028bf54cbc9b",
-      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c9765a2707dd1b529d638a445797c26b8687b654b9e57e85c554e7cd48eaf502",
-      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "8f4b868094be7001592805e336c90e95541b4b16e2e110f6bcbb054d62720929",
-      "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "87b78741598f2126e69571d0fb5b3983a209f7830b566b745ad9b04e538f1914"
+      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c63077e8534c5880bc4a18abf9144180cbe780d6e0a4a1893a89d90e5037efda",
+      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c40d90f8b8361981192dabcab9efc61746c3a96b6998627ae822a49c3942ab38",
+      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c8281a3c97d035cd717aae1cfcf604a9e87e7453d60867433418b3f00fb2663f",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "2147b81894e3463e65235fe4afc5f01fc4d169bf79b55de47122ba5c9a1ae38b",
+      "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "16ff742ae81bcaae022c397090af18f59ad52245855e130e5e80ca7bf80ed3ac"
     },
     "augure-code": {
       "2026/09/07/rollout-2026-09-07T14-02-01-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "e2ac5d9bdeaa466cda6cb22b8b000cbe8b958bef3fd158b80b61c001c16595ee"
@@ -55,7 +55,8 @@
       "2025/01/01/rollout-2025-01-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl": "4b43f5c1b4d66b6a61fbd163aaf10df5fffd1ebcad4b551f7b301d84621cc739",
       "2026/06/11/rollout-2026-06-11T12-44-06-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "f9c874220bbb76a99e1e77496e1b92e5432dea39d8bdc1111f2dc6f3a95304dd",
       "2026/09/01/rollout-2026-09-01T10-00-00-11111111-1111-4111-8111-111111111111.jsonl": "f79a239f7a288c6ec0a684eb411aeee8a2588ca6c122f5cefd8d8e8b33691d20",
-      "2026/09/01/rollout-2026-09-01T10-00-00-44444444-4444-4444-8444-444444444444.jsonl": "738230dce2a01d71d94c690c5d75c5ee7d7969ed415ed4ed1764cfc3eb4deab7"
+      "2026/09/01/rollout-2026-09-01T10-00-00-44444444-4444-4444-8444-444444444444.jsonl": "738230dce2a01d71d94c690c5d75c5ee7d7969ed415ed4ed1764cfc3eb4deab7",
+      "old/case/.codex-run-v1-corpus/sessions/2026/09/01/rollout-2026-09-01T10-00-00-55555555-5555-4555-8555-555555555555.jsonl": "b6833c7089202e79ec1d749f8b1aa4209db6dcaf5da53207dcd81b3d97b2fcf8"
     },
     "codex-cloud": {
       "account-key/thread-a.jsonl.zstd": "bc30e01f8b0ef1ab56ff24950bb945351828e74b0feafdf0c76d8b48b8918fae"
