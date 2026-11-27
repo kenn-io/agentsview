@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -155,55 +156,67 @@ func TestPushCopiesSessionThatGrowsDuringTheCopy(t *testing.T) {
 // connection, and the swap would give up.
 func TestPushDuringArchiveSwapLetsSwapFinish(t *testing.T) {
 	t.Parallel()
-	const id = "claude:push-during-swap"
 	const schema = pgPushTestSchema
-	ctx := t.Context()
 	pgURL := testPGSchemaURL(t, schema)
-	local := testDB(t)
-	require.NoError(t, local.UpsertSession(ctx, db.Session{
-		ID: id, Agent: "claude", Project: "sample", Machine: "machine",
-		MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
-	}))
-	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
-		SessionID: id, Ordinal: 0, Role: "user", Content: "hello",
-		SourceUUID: "uuid-0", Timestamp: "2026-09-25T12:00:00Z",
-	}}))
-	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, []db.UsageEvent{{
-		SessionID: id, Source: "session", Model: "claude-sonnet-4",
-		InputTokens: 10, OutputTokens: 5,
-		OccurredAt: "2026-09-25T12:00:00Z", DedupKey: "session:" + id,
-	}}))
-	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-
-	swapDone := make(chan error, 1)
-	syncer.afterMessageSnapshot = sync.OnceFunc(func() {
-		paused := make(chan struct{})
-		go func() {
-			swapDone <- local.WithArchiveSwap(ctx, func(swap *db.ArchiveSwap) error {
-				close(paused)
-				if err := swap.Close(ctx); err != nil {
-					return err
-				}
-				return swap.Reopen()
-			})
-		}()
-		<-paused
-	})
-	result, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Zero(t, result.Errors)
-
-	select {
-	case err := <-swapDone:
-		require.NoError(t, err, "the swap must finish once the push releases its snapshot")
-	case <-time.After(30 * time.Second):
-		require.Fail(t, "archive swap did not finish")
+	tests := []struct {
+		name       string
+		sequential bool
+	}{
+		{name: "batched new sessions"},
+		{name: "sequential sessions", sequential: true},
 	}
-	var pgUsageCount int
-	require.NoError(t, syncer.pg.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM usage_events WHERE session_id = $1`, id,
-	).Scan(&pgUsageCount))
-	assert.Equal(t, 1, pgUsageCount, "the push must still copy usage events read from its snapshot")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := "claude:push-during-swap-" + strings.ReplaceAll(tt.name, " ", "-")
+			ctx := t.Context()
+			local := testDB(t)
+			require.NoError(t, local.UpsertSession(ctx, db.Session{
+				ID: id, Agent: "claude", Project: "sample", Machine: "machine",
+				MessageCount: 1, CreatedAt: "2026-09-25T12:00:00Z",
+			}))
+			require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+				SessionID: id, Ordinal: 0, Role: "user", Content: "hello",
+				SourceUUID: "uuid-0", Timestamp: "2026-09-25T12:00:00Z",
+			}}))
+			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, []db.UsageEvent{{
+				SessionID: id, Source: "session", Model: "claude-sonnet-4",
+				InputTokens: 10, OutputTokens: 5,
+				OccurredAt: "2026-09-25T12:00:00Z", DedupKey: "session:" + id,
+			}}))
+			syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			syncer.sequentialNewSessions = tt.sequential
+
+			swapDone := make(chan error, 1)
+			syncer.afterMessageSnapshot = sync.OnceFunc(func() {
+				paused := make(chan struct{})
+				go func() {
+					swapDone <- local.WithArchiveSwap(ctx, func(swap *db.ArchiveSwap) error {
+						close(paused)
+						if err := swap.Close(ctx); err != nil {
+							return err
+						}
+						return swap.Reopen()
+					})
+				}()
+				<-paused
+			})
+			result, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+
+			select {
+			case err := <-swapDone:
+				require.NoError(t, err, "the swap must finish once the push releases its snapshot")
+			case <-time.After(30 * time.Second):
+				require.Fail(t, "the push never opened a message snapshot, or the swap did not finish")
+			}
+			var pgUsageCount int
+			require.NoError(t, syncer.pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM usage_events WHERE session_id = $1`, id,
+			).Scan(&pgUsageCount))
+			assert.Equal(t, 1, pgUsageCount, "the push must still copy usage events read from its snapshot")
+		})
+	}
 }
