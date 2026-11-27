@@ -11,6 +11,11 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func isAntigravitySummariesEventPath(agent parser.AgentType, path string) bool {
+	return (agent == parser.AgentAntigravity || agent == parser.AgentAntigravityCLI) &&
+		strings.TrimSuffix(filepath.Base(path), "-wal") == parser.AntigravitySummariesDBName
+}
+
 // classifyAntigravitySummariesPath maps a conversation_summaries.db (or -wal)
 // change to only the stored sessions under that store whose non-title summary
 // fingerprint digest (workspace or parent) no longer matches. Title-only edits
@@ -21,13 +26,13 @@ func (e *Engine) classifyAntigravitySummariesPath(
 	provider parser.Provider,
 	roots []string,
 	path string,
-) (files []parser.DiscoveredFile, fallback bool, err error) {
+) (files []parser.DiscoveredFile, fallbackErr, err error) {
 	store := strings.TrimSuffix(filepath.Clean(path), "-wal")
 	storeRoot := filepath.Dir(store)
 	if _, ok := parser.SQLiteContainerPathForEvent(
 		storeRoot, path, parser.AntigravitySummariesDBName, true,
 	); !ok {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	owned := false
 	for _, root := range roots {
@@ -42,26 +47,26 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		}
 	}
 	if !owned {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	parser.InvalidateAntigravitySummaries(storeRoot)
 	digests, digestErr := parser.AntigravitySummaryDigests(ctx, storeRoot)
 	if digestErr != nil {
 		if errors.Is(digestErr, context.Canceled) ||
 			errors.Is(digestErr, context.DeadlineExceeded) {
-			return nil, false, digestErr
+			return nil, nil, digestErr
 		}
 		// An unreadable store cannot supply workspace or parent updates;
 		// native-title reconciliation surfaces the store read failure.
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	records, listErr := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(agent)})
 	if listErr != nil {
 		if errors.Is(listErr, context.Canceled) ||
 			errors.Is(listErr, context.DeadlineExceeded) {
-			return nil, false, listErr
+			return nil, nil, listErr
 		}
-		return nil, true, nil
+		return nil, listErr, nil
 	}
 	sessionRoot := parser.AntigravitySessionRoot
 	if agent == parser.AgentAntigravityCLI {
@@ -86,16 +91,16 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		localPaths[rec.ID] = resolved
 	}
 	if len(ids) == 0 {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	slices.Sort(ids)
 	identities, idErr := e.db.ListSessionWriteIdentitiesByID(ctx, ids)
 	if idErr != nil {
 		if errors.Is(idErr, context.Canceled) ||
 			errors.Is(idErr, context.DeadlineExceeded) {
-			return nil, false, idErr
+			return nil, nil, idErr
 		}
-		return nil, true, nil
+		return nil, idErr, nil
 	}
 	for _, id := range ids {
 		stored, ok := identities[id]
@@ -118,9 +123,9 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		if findErr != nil {
 			if errors.Is(findErr, context.Canceled) ||
 				errors.Is(findErr, context.DeadlineExceeded) {
-				return nil, false, findErr
+				return nil, nil, findErr
 			}
-			fallback = true
+			fallbackErr = errors.Join(fallbackErr, findErr)
 			continue
 		}
 		if !found {
@@ -130,7 +135,7 @@ func (e *Engine) classifyAntigravitySummariesPath(
 			files = append(files, file)
 		}
 	}
-	return files, fallback, nil
+	return files, fallbackErr, nil
 }
 
 func antigravityTitleRoots(agent parser.AgentType, configured []string) []string {

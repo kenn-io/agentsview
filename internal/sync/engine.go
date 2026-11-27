@@ -2040,6 +2040,33 @@ func (e *Engine) classifyProviderChangedPath(
 			!changedPathWithinAnyRoot(path, watchRoots) {
 			continue
 		}
+		if isAntigravitySummariesEventPath(agentType, path) {
+			// Titles reconcile in syncChangedPathsLocked, while workspace or
+			// parent changes in conversation_summaries.db select only the
+			// sessions whose stored summary fingerprint digest no longer
+			// matches.
+			summaryFiles, fallbackErr, summaryErr := e.classifyAntigravitySummariesPath(
+				ctx, agentType, provider, roots, path,
+			)
+			if err := errors.Join(summaryErr, fallbackErr); err != nil {
+				classificationErr = errors.Join(
+					classificationErr,
+					fmt.Errorf(
+						"%s provider changed-path classification for %q: %w",
+						def.Type, path, err,
+					),
+				)
+			}
+			for _, discovered := range summaryFiles {
+				key := string(discovered.Agent) + "\x00" + discovered.Path
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				files = append(files, discovered)
+			}
+			continue
+		}
 		// Capture the shared container's state before any watermark-only
 		// listing below: the provider-side freshness merge may trust the
 		// caller's stored authority only while the container provably has

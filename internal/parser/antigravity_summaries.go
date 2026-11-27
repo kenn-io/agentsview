@@ -22,9 +22,8 @@ import (
 // conversation that started a sub-agent conversation. Both providers read
 // them through loadAntigravitySummaries. Discovery turns the workspace into
 // source CWD authority and parsing applies the parent. Each source's
-// fingerprint covers both, so a store-only change reparses the conversation
-// on the next full sync. Store writes are not routed on their own: a missed
-// or failed read is corrected by a later sync.
+// fingerprint covers both, so a store-only change reparses only the affected
+// conversations on changed-path syncs and on the next full sync.
 
 // antigravitySummary is what one conversation's summary row says outside its
 // transcript.

@@ -120,19 +120,18 @@ func (e *Engine) planOneChangedPath(
 			)
 			continue
 		}
-		if (agent == parser.AgentAntigravity || agent == parser.AgentAntigravityCLI) &&
-			strings.TrimSuffix(filepath.Base(path), "-wal") == parser.AntigravitySummariesDBName {
+		if isAntigravitySummariesEventPath(agent, path) {
 			// Titles reconcile after the plan runs, while workspace or parent
 			// changes in conversation_summaries.db select only the sessions
 			// whose stored summary fingerprint digest no longer matches.
-			files, fallback, summaryErr := e.classifyAntigravitySummariesPath(
+			files, fallbackErr, summaryErr := e.classifyAntigravitySummariesPath(
 				ctx, agent, provider, roots, path,
 			)
 			if summaryErr != nil {
 				return changedPathAttribution{}, false, summaryErr
 			}
 			attribution.files = append(attribution.files, files...)
-			if fallback {
+			if fallbackErr != nil {
 				attribution.addFallback(agent)
 			}
 			continue
