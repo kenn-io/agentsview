@@ -287,7 +287,7 @@ func claudeDerivedFromForkParent(line []byte) string {
 	gjson.GetBytes(line, "sessions").ForEach(func(_, s gjson.Result) bool {
 		switch s.Get("via").Str {
 		case "fork":
-			if id := s.Get("id").Str; id != "" && id != self && IsValidSessionID(id) {
+			if id := s.Get("id").Str; id != self && IsValidSessionID(id) {
 				parent = strings.Clone(id)
 			}
 		case "clear":

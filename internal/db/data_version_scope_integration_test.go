@@ -387,16 +387,8 @@ func TestClaudeRecordedForkUpgradeLinksParentInPlace(t *testing.T) {
 	root := t.TempDir()
 	const origID = "c0000000-0000-4000-8000-000000000193"
 	const forkID = "c0000000-0000-4000-8000-000000001193"
-	line := func(kind, uuid, parent, sessionID, text string) string {
-		parentField := "null"
-		if parent != "" {
-			parentField = `"` + parent + `"`
-		}
-		content := `"` + text + `"`
-		if kind == "assistant" {
-			content = `[{"type":"text","text":"` + text + `"}]`
-		}
-		return `{"type":"` + kind + `","uuid":"` + uuid + `","parentUuid":` + parentField + `,"timestamp":"2026-11-27T12:00:00Z","sessionId":"` + sessionID + `","cwd":"/work","message":{"role":"` + kind + `","content":` + content + `}}`
+	line := func(kind, uuid, parent, _, text string) string {
+		return testjsonl.ClaudeEntryJSON(kind, text, "2026-11-27T12:00:00Z", uuid, parent, "/work")
 	}
 	// The fork replays the original's post-compaction chain from c1,
 	// which is not the original's root.
