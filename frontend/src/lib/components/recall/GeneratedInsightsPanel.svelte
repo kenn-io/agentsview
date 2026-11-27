@@ -1,8 +1,7 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { onDestroy, onMount, untrack } from "svelte";
-  import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
+  import { onDestroy, onMount } from "svelte";
   import {
     Button,
     Card,
@@ -271,22 +270,12 @@
     return "";
   }
 
-  let mounted = true;
-
-  async function loadInsights() {
-    await insights.load();
-    if (mounted && !insights.error && insights.items.length === 0 && insights.tasks.length === 0) {
-      gettingStarted.complete("insights");
-    }
-  }
-
   onMount(() => {
     sessions.refreshFilterOptions();
-    void loadInsights();
+    void insights.load();
   });
 
   onDestroy(() => {
-    mounted = false;
     insights.cancelInFlightReads();
     clearTimeout(copiedInsightLinkTimer);
   });
@@ -297,9 +286,6 @@
     if (insights.items.some((item) => item.id === id)) insights.select(id);
   });
 
-  $effect(() => {
-    if (insights.selectedItem) untrack(() => gettingStarted.complete("insights"));
-  });
 </script>
 
 <section class="generated-insights-panel" aria-labelledby="generated-title">
@@ -426,7 +412,7 @@
   </Card>
 
   {#if insights.error}
-    <LoadError message={insights.error} onRetry={() => void loadInsights()} telemetry="insight" />
+    <LoadError message={insights.error} onRetry={() => void insights.load()} telemetry="insight" />
   {/if}
   {#if insights.error && insights.items.length === 0 && insights.tasks.length === 0}
     <!-- Nothing loaded to show under the error. -->

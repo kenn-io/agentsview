@@ -6,7 +6,6 @@
   import { settings } from "../../stores/settings.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
-  import GettingStarted from "../analytics/GettingStarted.svelte";
 
   const folders = $derived(
     settings.sessionProviders
@@ -23,7 +22,6 @@
       <SidebarToggleButton placement="content" />
     </div>
   {/if}
-  <div class="getting-started-container"><GettingStarted /></div>
   <EmptyState title={m.empty_archive_title()} description={m.empty_archive_desc()}>
     {#snippet icon()}
       <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
@@ -63,10 +61,6 @@
     align-items: center;
     padding: 8px 16px;
     flex-shrink: 0;
-  }
-
-  .getting-started-container:has(:global(.getting-started)) {
-    padding: 16px 16px 0;
   }
 
   .empty-archive-folders {

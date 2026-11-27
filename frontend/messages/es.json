@@ -3293,11 +3293,5 @@
   "session_toc_search": "Buscar prompts",
   "session_toc_no_match": "Ningún prompt coincide",
   "shortcuts_toggle_session_toc": "Ir a un prompt",
-  "getting_started_title": "Primeros pasos",
-  "getting_started_dismiss": "Cerrar",
-  "getting_started_open_session": "Abrir una sesión",
-  "getting_started_search": "Buscar en tu historial",
-  "getting_started_usage": "Ver el uso de tokens",
-  "getting_started_insights": "Leer tus análisis",
   "session_diagnostics_hide": "Ocultar diagnósticos"
 }

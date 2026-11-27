@@ -103,7 +103,6 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
-  import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
@@ -640,7 +639,6 @@
       // Wait for the URL to name the session, so a stale selection left from another page is not counted.
       if (session && session.id === activeId && routedId === activeId && activeId !== viewedSessionId) {
         viewedSessionId = activeId;
-        gettingStarted.complete("session");
         reportTelemetry("session_viewed", { agent: session.agent });
       }
     });

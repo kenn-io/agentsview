@@ -5,7 +5,6 @@ import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
-import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
 import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
@@ -13,6 +12,7 @@ import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
 import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
 import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
+import { sidebarIndexRowToSession } from "./lib/stores/sessionRows.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
@@ -105,7 +105,7 @@ afterEach(() => {
   router.isRootPath = false;
   sessions.activeSessionId = null;
   sessions.archiveEmpty = false;
-  gettingStarted.done = new Set();
+  sessions.loading = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -810,6 +810,31 @@ describe("App root Sessions landing", () => {
     router.isRootPath = true;
   }
 
+  it("shows populated sessions without a getting started card", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    localStorage.clear();
+    sessions.archiveEmpty = false;
+    sessions.sessions = ["one", "two"].map((id) => sidebarIndexRowToSession({
+      id,
+      project: "demo",
+      machine: "local",
+      agent: "codex",
+      first_message: `Session ${id}`,
+      started_at: null,
+      ended_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      message_count: 1,
+    }));
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".analytics-page")).not.toBeNull();
+    expect(document.body.textContent).toContain("Session one");
+    expect(document.body.textContent).toContain("Session two");
+    expect(document.querySelector(".getting-started")).toBeNull();
+  });
+
   it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
@@ -821,7 +846,24 @@ describe("App root Sessions landing", () => {
 
     expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
     expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
-    expect(document.body.querySelector(".getting-started") !== null).toBe(empty);
+    expect(document.body.querySelector(".getting-started")).toBeNull();
+    if (empty) {
+      document.querySelector<HTMLButtonElement>(".empty-archive-choose")!.click();
+      await flushEffects();
+      expect(router.route).toBe("settings");
+      expect(router.params.panel).toBe("agent-directories");
+    }
+  });
+
+  it("does not show a checklist while inventory is loading", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = false;
+    sessions.loading = true;
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
   });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
@@ -2167,9 +2209,7 @@ describe("App telemetry", () => {
     sessions.sessions = [];
   });
 
-  it("reports one session_viewed per visit and completes the checklist when the session hydrates", async () => {
-    const { gettingStarted } = await import("./lib/stores/gettingStarted.svelte.js");
-    gettingStarted.done = new Set();
+  it("reports one session_viewed per visit when the session hydrates", async () => {
     setup();
     sessions.sessions = [hydratedSession("session-1", "codex")];
     router.route = "sessions";
@@ -2179,7 +2219,6 @@ describe("App telemetry", () => {
 
     await open("session-1");
     await vi.waitFor(() => expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]));
-    expect(gettingStarted.done.has("session")).toBe(true);
 
     sessions.sessions = [hydratedSession("session-1", "codex", { message_count: 3 })];
     await flushEffects();

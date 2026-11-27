@@ -5,18 +5,14 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
-import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
-import { sidebarIndexRowToSession } from "../../stores/sessionRows.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
-// @ts-ignore
-import GettingStarted from "./GettingStarted.svelte";
 // @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
 import { requestUrl } from "../../test-support/request-url.js";
@@ -55,9 +51,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   document.body.innerHTML = "";
   localStorage.clear();
-  gettingStarted.done = new Set();
   sessions.sessions = [];
-  sessions.archiveEmpty = false;
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
@@ -1013,78 +1007,5 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(panels).toHaveBeenCalledTimes(beforeRefresh + 2);
     expect(statsRequests).toHaveLength(1);
     expect(showsOpenedPRs()).toBe(true);
-  });
-});
-
-describe("getting started checklist", () => {
-  it("shows the checklist and hides it after dismissal", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    sessions.archiveEmpty = true;
-    component = mount(GettingStarted, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
-    document
-      .querySelector<HTMLButtonElement>('.getting-started button[aria-label="Dismiss"]')!
-      .click();
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
-  });
-
-  it("hides the checklist once a session is listed", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    sessions.archiveEmpty = true;
-    component = mount(GettingStarted, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).not.toBeNull();
-    sessions.sessions = [sidebarIndexRowToSession({
-      id: "session-1",
-      project: "demo",
-      machine: "local",
-      agent: "codex",
-      started_at: null,
-      ended_at: null,
-      created_at: "2026-01-01T00:00:00Z",
-      message_count: 1,
-    })];
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
-  });
-
-  it("hides the checklist while inventory is unknown or a filter leaves no rows", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    component = mount(GettingStarted, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
-    sessions.archiveEmpty = true;
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).not.toBeNull();
-    sessions.filters.machine = "another-machine";
-    sessions.archiveEmpty = false;
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
   });
 });
