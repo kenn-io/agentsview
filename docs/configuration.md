@@ -700,7 +700,7 @@ keeps the default directories.
 | Claude Cowork         | (platform-specific, see below)                                                                                                                                   | Claude Desktop cowork sessions                                                                                                                                |
 | Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                                                                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                                                 |
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                                                                                                           | JSONL per session                                                                                                                                             |
-| Codex Cloud           | Fetched from OpenAI when `[agents.codex-cloud] enabled = true`; see [Codex Cloud](#codex-cloud)                                                                  | Compressed JSONL copy per chat under `<data dir>/sources/codex-cloud/`                                                                                      |
+| Codex Cloud           | Fetched from OpenAI when `[agents.codex-cloud] enabled = true`; see [Codex Cloud](#codex-cloud)                                                                  | Compressed JSONL copy per chat under `<data dir>/sources/codex-cloud/`                                                                                        |
 | Cline CLI             | `~/.cline/data/sessions/` or `~/.cline/`                                                                                                                         | Paired `<id>.json` metadata and `<id>.messages.json` transcript files                                                                                         |
 | Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
@@ -718,10 +718,10 @@ keeps the default directories.
 | Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
 | gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                     | JSONL logs                                                                                                                                                    |
 | Grok                  | `~/.grok/sessions/`                                                                                                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                                                       |
-| Hermes Agent          | `~/.hermes/sessions/` (macOS and Linux), `~/AppData/Local/hermes/sessions/` (Windows)                                                                            | SQLite `state.db`; JSONL / JSON transcripts remain supported                                                                                                 |
+| Hermes Agent          | `~/.hermes/sessions/` (macOS and Linux), `~/AppData/Local/hermes/sessions/` (Windows)                                                                            | SQLite `state.db`; JSONL / JSON transcripts remain supported                                                                                                  |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                             | JSONL per session                                                                                                                                             |
 | IcodeMate             | `~/.local/share/icodemate/` and `~/.icodemate/cli/projects/`                                                                                                     | OpenCode-family storage, including per-session usage events                                                                                                   |
-| Junie                 | `~/.junie/sessions/` (or `$JUNIE_HOME/sessions/`)                                                                                                             | Per-session `events.jsonl` plus sibling `index.jsonl` metadata; CLI `SessionStore` only                                                                     |
+| Junie                 | `~/.junie/sessions/` (or `$JUNIE_HOME/sessions/`)                                                                                                                | Per-session `events.jsonl` plus sibling `index.jsonl` metadata; CLI `SessionStore` only                                                                       |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                           | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                                                                                                 | JSONL per session                                                                                                                                             |
 | Kimi Work             | (platform-specific, see below)                                                                                                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                                                |
@@ -734,20 +734,20 @@ keeps the default directories.
 | Muse Personal         | `~/agents/` on your Muse's hosted machine                                                                                                                        | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR`                                  |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
-| OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
+| OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                         |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                    | One JSONL file per review under an encoded project directory                                                                                                  |
 | Open Interpreter      | `~/.openinterpreter/sessions/`, `archived_sessions/`                                                                                                             | Codex-format JSONL per session                                                                                                                                |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
-| fx                    | `~/.fx/sessions/`                                                                                                                                                | Schema 4 session folders with `events.jsonl`, `session.json`, and optional `usage-v2.json` (older fx)                                                                           |
+| fx                    | `~/.fx/sessions/`                                                                                                                                                | Schema 4 session folders with `events.jsonl`, `session.json`, and optional `usage-v2.json` (older fx)                                                         |
 | Tau                   | `~/.tau/sessions/`                                                                                                                                               | JSONL transcripts under `<project>/`, with metadata `index.jsonl` excluded                                                                                    |
 | Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                       | Flat Pi-family JSONL sessions                                                                                                                                 |
 | StepCode              | `~/.stepcode/agent/sessions/`                                                                                                                                    | JSONL per session                                                                                                                                             |
 | Direct API            | `~/.agentsview/direct-api/`                                                                                                                                      | Body-free JSONL usage files                                                                                                                                   |
 | Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                                                       |
-| Piebald               | `~/.local/share/piebald/` (Linux), `~/Library/Application Support/piebald/` (macOS), `~/AppData/Roaming/piebald/` (Windows)                                    | SQLite database (`app.db`)                                                                                                                                    |
+| Piebald               | `~/.local/share/piebald/` (Linux), `~/Library/Application Support/piebald/` (macOS), `~/AppData/Roaming/piebald/` (Windows)                                      | SQLite database (`app.db`)                                                                                                                                    |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                                                 |
 | Positron Assistant    | (platform-specific, see below)                                                                                                                                   | JSON / JSONL per session                                                                                                                                      |
 | QClaw                 | `~/.qclaw/agents/`                                                                                                                                               | JSONL per session                                                                                                                                             |
@@ -764,7 +764,7 @@ keeps the default directories.
 | TraeX (TRAE CLI)      | `~/.trae/cli/sessions/` and `~/.trae/cli/archived_sessions/`                                                                                                     | Codex-compatible rollout JSONL per session                                                                                                                    |
 | Warp                  | (platform-specific, see below)                                                                                                                                   | SQLite database                                                                                                                                               |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                         | JSONL per session                                                                                                                                             |
-| CodeBuddy             | (platform-specific, see below)                                                                                                                                   | Hierarchical session JSON manifest (`index.json`) and message files (`messages/*.json`)                                                                       |
+| CodeBuddy             | `~/.codebuddy/projects/` plus the IDE 4.x data directory (platform-specific, see below)                                                                          | CLI and IDE 5.x JSONL per session; IDE 4.x JSON manifest (`index.json`) and message files                                                                     |
 | ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                                                                                                            | SQLite database (`db.sqlite`) with usage rows                                                                                                                 |
 | Zed                   | (platform-specific, see below)                                                                                                                                   | SQLite database (`threads/threads.db`)                                                                                                                        |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
@@ -1433,17 +1433,65 @@ documents the projection's limits.
 
 ### CodeBuddy
 
-Tencent CodeBuddy CN uses the `codebuddy` agent ID and reads `history` under the
-configured `CodeBuddyExtension/Data` directory. On Windows, the default follows
-`%LOCALAPPDATA%`, falling back to `~/AppData/Local` when that variable is unset
-or not absolute. macOS uses
-`~/Library/Application Support/CodeBuddyExtension/Data`, and Linux uses
-`~/.config/CodeBuddyExtension/Data`. Set `CODEBUDDY_DIR` to replace these
-defaults.
+Tencent CodeBuddy CN uses the `codebuddy` agent ID for three clients:
+
+- **CodeBuddy CLI and IDE 5.x** write one JSONL transcript per conversation
+  under `~/.codebuddy/projects/`. Subagent transcripts sit beside them.
+- **The IDE 5.x catalog** (`~/.codebuddy/codebuddy.db`) supplies the titles you
+  set in the IDE, forked-conversation links, and `/btw` and discussion side
+  questions. A CLI-only install has no catalog; its transcripts still import. On
+  a machine you reach from the IDE over SSH, the catalog holds only side
+  questions, so those conversations keep their transcript titles and cannot be
+  opened in the IDE from AgentsView.
+- **IDE 4.x** keeps conversations under `history` in `CodeBuddyExtension/Data`.
+  On Windows, the default follows `%LOCALAPPDATA%`, falling back to
+  `~/AppData/Local` when that variable is unset or not absolute. macOS uses
+  `~/Library/Application Support/CodeBuddyExtension/Data`, and Linux uses
+  `~/.local/share/CodeBuddyExtension/Data`, also checking
+  `~/.config/CodeBuddyExtension/Data`, where earlier AgentsView releases looked.
+
+Set `CODEBUDDY_CONFIG_DIR` to an absolute path, as you would for CodeBuddy
+itself, to move the CLI and IDE 5.x home. Set `CODEBUDDY_DIR` or
+`agents.codebuddy.dirs` to replace every default; each entry may be a CodeBuddy
+home, its `projects` directory, or an IDE 4.x data directory.
+
+When IDE 5.x converts a 4.x conversation, AgentsView shows the converted
+transcript, which holds every later turn, and stops reading the frozen 4.x copy.
+The 4.x request totals and pasted images, which the converter does not copy, are
+still read from the 4.x directory. Conversations that were never converted keep
+their 4.x copy. If CodeBuddy later deletes the converted transcript, for example
+when it cleans up old sessions, the archive keeps the converted conversation with
+its later turns and marks its source missing; the 4.x copy does not replace it,
+including during a full resync.
+
+Each transcript shows the conversation path CodeBuddy would replay. Turns you
+rewound and resent stay visible as forked sessions, image attachments come from
+CodeBuddy's image store, and large tool outputs saved to `tool-results` are
+shown in full. If CodeBuddy later cleans up a saved output, the archive keeps
+the copy it read. Token usage counts each model response once, even when a fork
+repeats the history it inherited.
+
+From a CodeBuddy session, **Resume** runs `codebuddy --resume <session>` with
+the CLI session id, and the menu offers **Open in CodeBuddy CN** and **Open in
+CodeBuddy CN Insiders** when those IDEs are installed. On Linux, an IDE entry
+also needs the desktop to open that IDE's links, so `xdg-mime query default
+x-scheme-handler/codebuddycn` (or `codebuddycn-insiders`) must name a desktop
+file. A host the IDE reaches over SSH has the `buddycn` command but no such
+handler, so it does not offer them. If the IDE has no record of the
+conversation on this computer, for example because it ran only in the CLI, or
+the IDE cannot be launched, AgentsView says so and leaves the clipboard alone;
+continue the conversation from a terminal instead. Preserved branches, side
+questions, subagents, and unconverted 4.x conversations have no CLI session, so
+the menu does not offer to resume them. Deleting or archiving a conversation in
+CodeBuddy does not remove it from AgentsView.
 
 Session projects use the working directory when present, falling back to the
-workspace identifier. Message changes, including deletion, refresh their owning
-session, and workspace index changes refresh sessions in that workspace. See the
+workspace identifier. A transcript, saved tool output, or catalog change
+refreshes only the conversations it touches; for IDE 4.x, message changes,
+including deletion, refresh their owning session, and workspace index changes
+refresh sessions in that workspace. Remote sync sends the projects directory, a
+consistent copy of the catalog, and only the images transcripts reference, never
+the rest of the CodeBuddy home. See the
 [format evidence](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md#codebuddy)
 for usage accounting assumptions and verification limits.
 

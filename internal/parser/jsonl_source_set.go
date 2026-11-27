@@ -70,6 +70,10 @@ type JSONLSourceSetOptions struct {
 	// SessionIDFromPath returns the raw session ID used by FindSource fallback
 	// lookups. It should not include the provider ID prefix.
 	SessionIDFromPath func(root, path string) string
+	// ReconciliationIdentity returns the raw session ID a source names when
+	// its Key is a path, so the engine can compare the source with the
+	// archived owner of that session before parsing it.
+	ReconciliationIdentity func(root, path string) string
 	// LookupIDValid reports whether a raw session ID is shaped like an ID this
 	// provider could resolve, gating the FindSource discovery fallback. It
 	// defaults to IsValidSessionID. Providers whose SessionIDFromPath emits
@@ -869,11 +873,12 @@ func (s JSONLSourceSet) sourceRefFromPath(
 		displayPath,
 	)
 	return SourceRef{
-		Provider:       s.provider,
-		Key:            key,
-		DisplayPath:    displayPath,
-		FingerprintKey: fingerprintKey,
-		ProjectHint:    callPathFunc(s.options.ProjectHint, root, path),
+		Provider:               s.provider,
+		Key:                    key,
+		DisplayPath:            displayPath,
+		FingerprintKey:         fingerprintKey,
+		ReconciliationIdentity: callPathFunc(s.options.ReconciliationIdentity, root, path),
+		ProjectHint:            callPathFunc(s.options.ProjectHint, root, path),
 		Opaque: JSONLSource{
 			Root:    root,
 			Path:    path,

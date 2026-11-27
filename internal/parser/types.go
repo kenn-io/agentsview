@@ -1586,6 +1586,13 @@ type ParsedSession struct {
 	SourceVersion      string
 	GroupKey           string `json:"group_key,omitempty"`
 	KeepStoredGroupKey bool   `json:"keep_stored_group_key,omitempty"`
+	// LegacyCompanionIncomplete reports a CodeBuddy conversation converted
+	// from 4.x whose 4.x directory could not be read in full: the
+	// directory or its manifest is missing or not a message list, a listed
+	// assistant message cannot be read, or a 4.x image cannot be read. Sync
+	// keeps the archived request totals and images that only that
+	// directory supplied; what the directory still reads wins.
+	LegacyCompanionIncomplete bool
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback
@@ -1953,6 +1960,13 @@ func usageOnlyMessage(msg ParsedMessage) (ParsedMessage, bool) {
 		(msg.ContextTokens <= 0 && msg.OutputTokens <= 0) {
 		return ParsedMessage{}, false
 	}
+	return hiddenUsageRow(msg), true
+}
+
+// hiddenUsageRow returns msg as a hidden usage row without checking its
+// counts: it keeps msg's identity, timestamp, model, and token fields and
+// drops everything a hidden row cannot show.
+func hiddenUsageRow(msg ParsedMessage) ParsedMessage {
 	msg.Role = RoleAssistant
 	msg.IsSystem = true
 	msg.Content = ""
@@ -1963,7 +1977,7 @@ func usageOnlyMessage(msg ParsedMessage) (ParsedMessage, bool) {
 	msg.HasToolUse = false
 	msg.ToolCalls = nil
 	msg.ToolResults = nil
-	return msg, true
+	return msg
 }
 
 // accumulateMessageTokenUsage rolls up explicit per-message token

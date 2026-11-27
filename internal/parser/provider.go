@@ -68,6 +68,14 @@ type ProviderConfig struct {
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string
+	// AssetsDir is the local content-addressed asset store. Providers that
+	// attach user images write them here and reference them as asset://
+	// links; an empty value keeps references without writing files.
+	AssetsDir string
+	// AssetsReadOnly keeps a report-only parse from writing to AssetsDir.
+	// References are still computed, and verified copies already in
+	// AssetsDir still stand in for originals that are gone.
+	AssetsReadOnly bool
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity
@@ -240,10 +248,37 @@ type ReconciliationSourceRank struct {
 	Path string
 }
 
+// Lower reports whether r ranks below other: a lower class, then an older
+// copy, then a lower tie-break, then the larger path. The engine's archive
+// check and a provider that picks among copies itself use it, so both keep the
+// same copy.
+func (r ReconciliationSourceRank) Lower(other ReconciliationSourceRank) bool {
+	if r.Class != other.Class {
+		return r.Class < other.Class
+	}
+	if r.Recency != other.Recency {
+		return r.Recency < other.Recency
+	}
+	if r.TieBreak != other.TieBreak {
+		return r.TieBreak < other.TieBreak
+	}
+	return r.Path > other.Path
+}
+
 // ReconciliationSourceRanker declares provider-specific duplicate ordering so
 // authoritative reconciliation selects the same source as FindSource.
 type ReconciliationSourceRanker interface {
 	ReconciliationSourceRank(SourceRef) ReconciliationSourceRank
+}
+
+// StoredSourcePathRanker ranks an archived source path that no longer
+// resolves to a source, using only the path's layout. The engine asks it
+// when a candidate competes with a session whose stored file is gone, so a
+// lower-ranked copy cannot replace history only the vanished source held;
+// the missing source is then tombstoned instead. It returns false when the
+// layout carries no rank, which keeps the candidate eligible.
+type StoredSourcePathRanker interface {
+	RankStoredSourcePath(path string) (ReconciliationSourceRank, bool)
 }
 
 // ReconciliationMemberIdentityResolver derives the stable logical-member

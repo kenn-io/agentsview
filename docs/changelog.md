@@ -9,6 +9,19 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- AgentsView now reads CodeBuddy CLI and CodeBuddy IDE 5.x conversations from
+  `~/.codebuddy`, next to the IDE 4.x history it already read. Branches,
+  subagents, `/btw` side questions and discussion threads, images, and
+  per-request usage appear in browsing, search, usage, export, MCP, and remote
+  sync. A conversation the IDE converted from 4.x shows its full CBC
+  transcript, and repeated responses in forks and converted copies count once.
+  The continue menu resumes the CLI with `codebuddy --resume` or opens the
+  conversation in CodeBuddy CN or CN Insiders, and explains when the IDE has no
+  record of it. `CODEBUDDY_CONFIG_DIR` moves the CodeBuddy home as it does for
+  CodeBuddy itself.
+
 **Improvements**
 
 - `replica pg push` loads new sessions into PostgreSQL much faster over slow or
@@ -19,6 +32,10 @@ The latest release is
 
 **Bug fixes**
 
+- On Linux, IDE 4.x CodeBuddy history is found in
+  `~/.local/share/CodeBuddyExtension/Data`, where the IDE extension keeps it.
+  AgentsView used to look only in `~/.config/CodeBuddyExtension/Data`, which
+  stays a default root.
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
   Integrations must reconcile event keys and poll times across reports.

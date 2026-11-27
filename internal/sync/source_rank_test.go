@@ -145,7 +145,7 @@ func TestStoredSourceRankUsesPhysicalPathsWhenAvailable(t *testing.T) {
 			}
 			lookups := 0
 			counting := &sourceRankCountingProvider{Provider: provider, lookups: &lookups}
-			ranked, err := engine.storedSourceRanksHigher(t.Context(), counting, storedPath, candidate)
+			ranked, err := engine.storedSourceRanksHigher(t.Context(), counting, "", storedPath, candidate)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantRanked, ranked)
 			assert.Equal(t, tc.wantCalls, calls)
@@ -171,4 +171,62 @@ func TestReconciliationMissingMemberSkipsStoredRankLookup(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, relocated)
 	assert.Zero(t, lookups, "a missing candidate needs no stored-source rank")
+}
+
+// A remote sync records CodeBuddy transcripts by their remote location. When
+// that location cannot be mapped to a local copy, a converted transcript still
+// outranks the frozen 4.x copy of the same conversation.
+func TestStoredSourceRankKeepsUnmappedRemoteCodeBuddyTranscript(t *testing.T) {
+	legacyRoot := t.TempDir()
+	convDir := filepath.Join(legacyRoot, "history", "ws", "conv1")
+	require.NoError(t, os.MkdirAll(filepath.Join(convDir, "messages"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "index.json"),
+		[]byte(`{"messages":[{"id":"u1","role":"user"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(convDir, "messages", "u1.json"),
+		[]byte(`{"role":"user","message":{"content":[{"type":"text","text":"first"}]}}`), 0o600))
+	provider, ok := parser.NewProvider(parser.AgentCodeBuddy, parser.ProviderConfig{Roots: []string{legacyRoot}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	legacy := sources[0]
+
+	for _, tc := range []struct {
+		name       string
+		storedPath string
+		resolver   func(string) (string, bool)
+		wantRanked bool
+	}{
+		{name: "no resolver", storedPath: "host:/home/user/.codebuddy/projects/-work-demo/conv1.jsonl", wantRanked: true},
+		{
+			name: "unmapped", storedPath: "host:/home/user/.codebuddy/projects/-work-demo/conv1.jsonl",
+			resolver: func(string) (string, bool) { return "", false }, wantRanked: true,
+		},
+		{
+			name: "unmapped Windows transcript", storedPath: `host:C:\Users\user\.codebuddy\projects\-work-demo\conv1.jsonl`,
+			resolver: func(string) (string, bool) { return "", false }, wantRanked: true,
+		},
+		{
+			name: "Windows transcript with no resolver", storedPath: `host:C:\Users\user\.codebuddy\projects\-work-demo\conv1.jsonl`,
+			wantRanked: true,
+		},
+		{
+			name: "unmapped 4.x copy", storedPath: "host:/home/user/history/ws/conv1/index.json",
+			resolver: func(string) (string, bool) { return "", false },
+		},
+		{
+			name: "unmapped Windows 4.x copy", storedPath: `host:C:\Users\user\history\ws\conv1\index.json`,
+			resolver: func(string) (string, bool) { return "", false },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &Engine{
+				pathRewriter:       func(path string) string { return "host:" + path },
+				storedPathResolver: tc.resolver,
+			}
+			ranked, err := engine.storedSourceRanksHigher(t.Context(), provider, "", tc.storedPath, legacy)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantRanked, ranked)
+		})
+	}
 }

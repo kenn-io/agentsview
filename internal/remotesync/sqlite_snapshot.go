@@ -255,6 +255,13 @@ func sqliteSnapshotTargets(targets TargetSet) map[string]struct{} {
 			out[filepath.Join(root, parser.AntigravitySummariesDBName)] = struct{}{}
 		}
 	}
+	// CodeBuddy's IDE catalog supplies titles, forks, and side questions
+	// for the transcripts beside it.
+	for _, root := range targets.Dirs[parser.AgentCodeBuddy] {
+		if catalog := parser.CodeBuddyCatalogForProjects(root); catalog != "" {
+			out[catalog] = struct{}{}
+		}
+	}
 	return out
 }
 
@@ -270,13 +277,16 @@ func sqliteSnapshotPaths(stateDB string) []string {
 func sqliteSnapshotForArchivePath(path string) (string, bool) {
 	path = filepath.Clean(path)
 	switch filepath.Base(path) {
-	case "state.db", "threads.db", parser.AntigravitySummariesDBName:
+	case "state.db", "threads.db", parser.AntigravitySummariesDBName, parser.CodeBuddyCatalogDBName:
 		return path, true
-	case "state.db-wal", "threads.db-wal", parser.AntigravitySummariesDBName + "-wal":
+	case "state.db-wal", "threads.db-wal", parser.AntigravitySummariesDBName + "-wal",
+		parser.CodeBuddyCatalogDBName + "-wal":
 		return strings.TrimSuffix(path, "-wal"), true
-	case "state.db-shm", "threads.db-shm", parser.AntigravitySummariesDBName + "-shm":
+	case "state.db-shm", "threads.db-shm", parser.AntigravitySummariesDBName + "-shm",
+		parser.CodeBuddyCatalogDBName + "-shm":
 		return strings.TrimSuffix(path, "-shm"), true
-	case "state.db-journal", "threads.db-journal", parser.AntigravitySummariesDBName + "-journal":
+	case "state.db-journal", "threads.db-journal", parser.AntigravitySummariesDBName + "-journal",
+		parser.CodeBuddyCatalogDBName + "-journal":
 		return strings.TrimSuffix(path, "-journal"), true
 	default:
 		return "", false

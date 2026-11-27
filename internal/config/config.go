@@ -1557,6 +1557,13 @@ func Default() (Config, error) {
 				dirs[0] = filepath.Join(localAppData, "CodeBuddyExtension", "Data")
 			}
 		}
+		// CODEBUDDY_CONFIG_DIR relocates the CodeBuddy CLI and IDE 5.x home,
+		// as it does for CodeBuddy itself.
+		if def.Type == parser.AgentCodeBuddy {
+			if home := os.Getenv("CODEBUDDY_CONFIG_DIR"); strings.TrimSpace(home) != "" && filepath.IsAbs(home) {
+				dirs[len(dirs)-1] = filepath.Join(home, "projects")
+			}
+		}
 		// XDG_STATE_HOME replaces the state directory, including both .local
 		// and state components of the home-relative default.
 		if def.Type == parser.AgentEvener {

@@ -49,6 +49,14 @@ even when their source files no longer exist. Schema repairs also require a full
 resync. Archive-only archives use the preservation rebuild, which does not read
 source files on the receiving host.
 
+When a provider ranks duplicate sources for one session, a lower-ranked copy
+replaces the archived session only if the stored source still resolves, or the
+provider does not implement `parser.StoredSourcePathRanker`. With that
+interface, a deleted stored source keeps the rank of its path layout, so the
+archive keeps its content and reconciliation marks it source-missing. A remote
+sync ranks a stored location it cannot map to a local copy the same way. A
+rebuild reads the stored path from the original archive.
+
 Full parser and archive-only preservation rebuilds serve the old archive while
 writes receive a retryable HTTP 503. Scoped upgrades serve saved rows while the
 affected providers reparse. Schema repairs still block startup. A failed or
@@ -429,6 +437,29 @@ separate wiring. `internal/sync/engine.go`'s `reconcileProviderHistoryContext`
 checks cheaply, over the parsed messages and before any store read, whether
 anything is flagged before loading the archived session. Rebuilds read the old
 archive, and S3 Claude sessions follow the same rule.
+
+CodeBuddy CLI and IDE 5.x transcripts share the side-file layout and the same
+restore. A CodeBuddy rewind moves a call from its conversation to a branch
+session whose own archive lacks the output. Before a sync rewrites any session
+of a transcript, it reads the archived rows of every session saved from that
+transcript that the user has not trashed or deleted, including sessions whose
+source is missing, and keeps only the outputs its writes flagged
+(`ingest.SourceToolResults`). One index serves every branch of the
+transcript. When the archive saved a written session, or a branch's
+conversation, from another copy of the transcript under another configured
+home, the index reads that copy's saved sessions too, so a newer copy that
+rewinds a call still finds the output the older copy saved. A branch restores
+an output from the other sessions only when its own archive lacks the identity,
+or holds only the `<persisted-output>` placeholder, and every other session
+that saved the text holds the same text; saved placeholders do not count.
+
+The sync writes a CodeBuddy conversation after the branches and side questions
+of its transcript. When the archive holds an output or image link one of them
+restores and a save fails, the sync leaves the transcript's later sessions,
+including the conversation, unwritten until the next retry, so the
+conversation keeps the only saved copy. The bulk writer saves such a
+conversation in a second transaction, after every other session of its
+transcript is saved or skipped on purpose.
 
 ### Codex deletion scope
 
