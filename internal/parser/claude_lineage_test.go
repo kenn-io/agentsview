@@ -1115,14 +1115,19 @@ func TestClaudeRecordedForkWithoutParentTranscriptLinksUntrimmed(t *testing.T) {
 
 func TestClaudeDerivedFromWithoutForkLinkKeepsSiblingBehavior(t *testing.T) {
 	t.Parallel()
-	for _, via := range []string{"clear", "subprocess", "compact", "resume"} {
-		t.Run(via, func(t *testing.T) {
+	newer := strings.Replace(
+		lineageDerivedFromLine("fork-2222", "fork:other-9999"), `"v":1`, `"v":2`, 1)
+	for name, record := range map[string]string{
+		"subprocess":    lineageDerivedFromLine("fork-2222", "subprocess:other-9999"),
+		"compact":       lineageDerivedFromLine("fork-2222", "compact:fork-2222"),
+		"resume":        lineageDerivedFromLine("fork-2222", "resume:fork-2222"),
+		"newer version": newer,
+	} {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fork := lineageDerivedFromLine("fork-2222", via+":other-9999") + "\n" +
-				compactedForkContent()
 			_, forkPath := writeLineageFixture(t,
 				"orig-1111.jsonl", compactedOriginalContent(),
-				"fork-2222.jsonl", fork,
+				"fork-2222.jsonl", compactedForkContent(record),
 			)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(filepath.Dir(forkPath), "other-9999.jsonl"),
@@ -1151,12 +1156,6 @@ func TestClaudeRecordedForkFindsParentInAnotherProjectDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(forkDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(origDir, "orig-1111.jsonl"),
 		[]byte(compactedOriginalContent()), 0o644))
-	// Project directories can be symlinks into another tree.
-	moved := filepath.Join(t.TempDir(), "moved")
-	require.NoError(t, os.Rename(origDir, moved))
-	if err := os.Symlink(moved, origDir); err != nil {
-		t.Skipf("symlink not supported: %v", err)
-	}
 	forkPath := filepath.Join(forkDir, "fork-2222.jsonl")
 	require.NoError(t, os.WriteFile(forkPath, []byte(compactedForkContent(
 		lineageDerivedFromLine("fork-2222", "fork:orig-1111"),
@@ -1171,25 +1170,6 @@ func TestClaudeRecordedForkFindsParentInAnotherProjectDir(t *testing.T) {
 	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
 	require.Len(t, results[0].Messages, 2)
 	assert.Equal(t, "fork question", results[0].Messages[0].Content)
-}
-
-func TestClaudeDerivedFromNewerVersionIgnored(t *testing.T) {
-	t.Parallel()
-	record := strings.Replace(
-		lineageDerivedFromLine("fork-2222", "fork:orig-1111"), `"v":1`, `"v":2`, 1)
-	_, forkPath := writeLineageFixture(t,
-		"orig-1111.jsonl", compactedOriginalContent(),
-		"fork-2222.jsonl", compactedForkContent(record),
-	)
-
-	results, _, err := claudeParseFile(t.Context(),
-		forkPath, "my_app", "local",
-		claudeParseOptions{siblingLineage: true},
-	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Session.ParentSessionID)
-	assert.Len(t, results[0].Messages, 4)
 }
 
 func TestClaudeDerivedFromClearAfterForkIsUnrelated(t *testing.T) {

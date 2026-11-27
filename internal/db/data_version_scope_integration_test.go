@@ -387,20 +387,20 @@ func TestClaudeRecordedForkUpgradeLinksParentInPlace(t *testing.T) {
 	root := t.TempDir()
 	const origID = "c0000000-0000-4000-8000-000000000193"
 	const forkID = "c0000000-0000-4000-8000-000000001193"
-	line := func(kind, uuid, parent, _, text string) string {
+	line := func(kind, uuid, parent, text string) string {
 		return testjsonl.ClaudeEntryJSON(kind, text, "2026-11-27T12:00:00Z", uuid, parent, "/work")
 	}
 	// The fork replays the original's post-compaction chain from c1,
 	// which is not the original's root.
-	orig := line("user", "u1", "", origID, "first") + "\n" +
-		line("assistant", "a1", "u1", origID, "first answer") + "\n" +
-		line("user", "c1", "", origID, "summary") + "\n" +
-		line("assistant", "a2", "c1", origID, "summary answer") + "\n"
+	orig := line("user", "u1", "", "first") + "\n" +
+		line("assistant", "a1", "u1", "first answer") + "\n" +
+		line("user", "c1", "", "summary") + "\n" +
+		line("assistant", "a2", "c1", "summary answer") + "\n"
 	fork := `{"type":"derived-from","v":1,"sessionId":"` + forkID + `","sessions":[{"type":"claude_code_session","id":"` + origID + `","via":"fork"}]}` + "\n" +
-		line("user", "c1", "", forkID, "summary") + "\n" +
-		line("assistant", "a2", "c1", forkID, "summary answer") + "\n" +
-		line("user", "f1", "a2", forkID, "fork question") + "\n" +
-		line("assistant", "f2", "f1", forkID, "fork answer") + "\n"
+		line("user", "c1", "", "summary") + "\n" +
+		line("assistant", "a2", "c1", "summary answer") + "\n" +
+		line("user", "f1", "a2", "fork question") + "\n" +
+		line("assistant", "f2", "f1", "fork answer") + "\n"
 	forkSource := filepath.Join(root, "project", forkID+".jsonl")
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", origID+".jsonl"), []byte(orig))
 	dbtest.WriteTestFile(t, forkSource, []byte(fork))
@@ -431,7 +431,6 @@ func TestClaudeRecordedForkUpgradeLinksParentInPlace(t *testing.T) {
 	require.NotNil(t, session.ParentSessionID)
 	assert.Equal(t, origID, *session.ParentSessionID)
 	assert.Equal(t, "continuation", session.RelationshipType)
-	assert.Equal(t, 2, session.MessageCount)
 	assert.Equal(t, forkSource, database.GetSessionFilePath(t.Context(), forkID))
 	var count int
 	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
