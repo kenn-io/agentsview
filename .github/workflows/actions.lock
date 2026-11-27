@@ -120,7 +120,7 @@ dependencies:
         repo_id: 260749683
     'kenn-io/actions@main':
         ref: 'main'
-        commit: 'sha1-5fd6669b1a32f9a82763de1964d1a3b9bbbb16e0'
+        commit: 'sha1-0275b7bfe16ba7d0d7c086e00598fb315a7f32ca'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
