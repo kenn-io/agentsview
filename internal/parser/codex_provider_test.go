@@ -2517,15 +2517,19 @@ func TestCodexRecordedLabelReadErrorRetries(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e2"
 	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
 	writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
-	require.NoError(t, os.Mkdir(filepath.Join(home, CodexRunMetadataFilename), 0o700))
+	metadataPath := filepath.Join(home, CodexRunMetadataFilename)
+	require.NoError(t, os.Mkdir(metadataPath, 0o700))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	if err == nil {
-		require.NotEmpty(t, outcome.SourceErrors)
-		require.Empty(t, outcome.Results)
+	for _, sourceErr := range outcome.SourceErrors {
+		err = errors.Join(err, sourceErr.Err)
 	}
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	assert.Equal(t, metadataPath, pathErr.Path)
+	assert.Empty(t, outcome.Results)
 }

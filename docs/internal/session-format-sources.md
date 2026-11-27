@@ -1353,8 +1353,9 @@ fixtures retain this field; missing identities remain source-local.
   omits `--thread-source`, so Agentsview identifies parentless `codex_exec`
   sessions in these homes as roborev runs from their path.
 
-- **Roborev recorded labels (2026-11-26):** `CodexSandbox.prepare` in
-  `internal/agent/codex_sandbox.go` writes `roborev.json` in the retained
+- **Roborev recorded labels (2026-11-26):** [Roborev's recorded-label
+  change](https://github.com/kenn-io/roborev/pull/1865) makes `CodexSandbox.prepare` in
+  `internal/agent/codex_sandbox.go` write `roborev.json` in the retained
   `.codex-run-v1-*` home before the run starts, with a `label` string.
   AgentsView reads it from the parent of the rollout's `sessions` directory.
   A missing, malformed, or empty label falls back to the path-derived label;
