@@ -334,6 +334,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Session struct {
+	RecordedProject bool `json:"-"`
 	// WebURL is a client-derived browser link, never persisted.
 	WebURL  string `json:"web_url,omitempty"`
 	ID      string `json:"id"`

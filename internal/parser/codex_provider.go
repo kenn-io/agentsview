@@ -487,6 +487,23 @@ func (p *codexProvider) PlanRawCapture(
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
 	}
+	metadataPath := codexRunMetadataPath(src.Path)
+	if metadataPath != "" {
+		info, err := os.Stat(metadataPath)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			metadataPath = ""
+		case err != nil:
+			return RawCapturePlan{}, invalidRawCapturePlan("stat Codex run metadata: %s", rawCaptureFilesystemError(err))
+		case !info.Mode().IsRegular():
+			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is not a regular file")
+		default:
+			home := codexRunHome(src.Path)
+			if rawCapturePathWithin(home, captureRoot) {
+				captureRoot = filepath.Dir(home)
+			}
+		}
+	}
 	rel, err := filepath.Rel(captureRoot, src.Path)
 	if err != nil {
 		return RawCapturePlan{}, invalidRawCapturePlan(
@@ -499,6 +516,13 @@ func (p *codexProvider) PlanRawCapture(
 		Appendable: true,
 	}}
 	var sidecarRoots []string
+	if metadataPath != "" {
+		metadataRel, err := filepath.Rel(captureRoot, metadataPath)
+		if err != nil || !rawCapturePathWithin(captureRoot, metadataPath) {
+			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is outside its capture root")
+		}
+		entries = append(entries, RawCaptureEntry{Path: filepath.ToSlash(metadataRel), LocalPath: metadataPath})
+	}
 	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
 		resolvedSource, err := filepath.EvalSymlinks(src.Path)
 		if err != nil {

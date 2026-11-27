@@ -711,7 +711,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (190: include retained tool calls in pull request links.)
 // (191: import Antigravity CLI session titles from conversation_summaries.db;
 // native title reconciliation backfills stored sessions without reparsing.)
-const dataVersion = 191
+// (192: use recorded labels for retained Codex runs.)
+const dataVersion = 192
 
 const archiveOnlyVersionBase = 1 << 20
 

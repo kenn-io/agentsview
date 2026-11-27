@@ -358,6 +358,9 @@ func (e *Engine) resyncBuildLocked(
 	e.archiveRebuildIndex = archiveIndex
 	deferredSourceCwd := newSourceCwdReconciliationBatch()
 	e.deferredSourceCwd = deferredSourceCwd
+	recordedProjects := &recordedProjectBatch{projects: make(map[string]string)}
+	e.deferredRecordedProjects = recordedProjects
+	defer func() { e.deferredRecordedProjects = nil }()
 	defer func() { e.deferredSourceCwd = nil }()
 	deferredTitles := make(map[string]*string)
 	e.deferredNativeTitles = deferredTitles
@@ -419,6 +422,7 @@ func (e *Engine) resyncBuildLocked(
 		contributorEngine.archiveStore = origDB
 		contributorEngine.archiveRebuildIndex = archiveIndex
 		contributorEngine.deferredSourceCwd = deferredSourceCwd
+		contributorEngine.deferredRecordedProjects = recordedProjects
 		contributorEngine.deferredNativeTitles = deferredTitles
 		contributorEngine.forceFullParse = contributor.ForceParse ||
 			contributor.ForceFullParseAfterCache
@@ -878,8 +882,11 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	if err := newDB.CorrectRecordedProjectSnapshots(ctx, recordedProjects.projects); err != nil {
+		return abortPreserved(fmt.Errorf("correct recorded project snapshots: %w", err))
+	}
 	if _, err := newDB.RestoreSessionProjectsFromIdentitySnapshots(
-		ctx,
+		ctx, recordedProjects.projects,
 	); err != nil {
 		log.Printf("resync: restore session project identity: %v", err)
 		stats.Aborted = true

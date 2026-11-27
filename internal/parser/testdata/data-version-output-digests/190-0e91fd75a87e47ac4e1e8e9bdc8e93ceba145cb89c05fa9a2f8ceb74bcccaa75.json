@@ -1,0 +1,9 @@
+{
+  "version": 190,
+  "digest": "0e91fd75a87e47ac4e1e8e9bdc8e93ceba145cb89c05fa9a2f8ceb74bcccaa75",
+  "providers": {
+    "codex": {
+      "old/case/.codex-run-v1-corpus/sessions/2026/09/01/rollout-2026-09-01T10-00-00-55555555-5555-4555-8555-555555555555.jsonl": "00e2ac61414f74747e88f8fcc86c3ad2f84dba72303879f16fce0992f5ce5774"
+    }
+  }
+}

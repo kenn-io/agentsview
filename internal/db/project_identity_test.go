@@ -1108,7 +1108,7 @@ func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
 	require.Len(t, copied, 1)
 	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
-	restoredProjects, err := destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
+	restoredProjects, err := destination.RestoreSessionProjectsFromIdentitySnapshots(ctx, nil)
 	require.NoError(t, err)
 	assert.Zero(t, restoredProjects,
 		"resync identity restore must leave trashed classifications untouched")

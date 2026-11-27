@@ -761,7 +761,7 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
+		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection, false,
 	); err != nil {
 		return err
 	}
@@ -865,7 +865,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	}
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-			ctx, tx, obs, snapshotProject, result.inserted, true,
+			ctx, tx, obs, snapshotProject, result.inserted, true, s.RecordedProject,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
@@ -891,7 +891,7 @@ func upsertProjectIdentityObservationTxContext(
 	obs export.ProjectIdentityObservation,
 ) error {
 	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, obs.Project, false, false,
+		ctx, tx, obs, obs.Project, false, false, false,
 	)
 }
 
@@ -902,14 +902,17 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	snapshotProject string,
 	sessionInserted bool,
 	allowSnapshotProjectCorrection bool,
+	recordedProject bool,
 ) error {
 	normalized, err := normalizeProjectIdentityObservation(obs)
 	if err != nil {
 		return err
 	}
-	normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
-	if err != nil {
-		return err
+	if !recordedProject {
+		normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
+		if err != nil {
+			return err
+		}
 	}
 	if err := upsertProjectIdentityObservationExec(
 		ctx, tx,
@@ -969,13 +972,46 @@ func writeSessionProjectIdentitySnapshotExec(
 	)
 }
 
+// CorrectRecordedProjectSnapshots applies fresh parser labels after rebuild metadata is copied.
+func (db *DB) CorrectRecordedProjectSnapshots(ctx context.Context, projects map[string]string) error {
+	ids := make([]string, 0, len(projects))
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for chunk := range slices.Chunk(ids, 500) {
+		snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, chunk)
+		if err != nil {
+			return err
+		}
+		for id, snapshot := range snapshots {
+			snapshot.Project = projects[id]
+			if err := upsertSessionProjectIdentitySnapshotExec(ctx, tx, func(ctx context.Context, query string, args ...any) rowScanner {
+				return tx.QueryRowContext(ctx, query, args...)
+			}, snapshot, true); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
 // RestoreSessionProjectsFromIdentitySnapshots resets current project labels to
 // resolved Git-backed parser-source snapshots. Full resync calls this after
 // copying snapshots from the old archive and before reapplying active worktree
 // mappings, so a missing checkout cannot replace resolved historical identity
 // with a basename fallback.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
-	ctx context.Context,
+	ctx context.Context, recordedProjects map[string]string,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, err
@@ -1080,7 +1116,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			return 0, err
 		}
 	}
-	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
+	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true, recordedProjects); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

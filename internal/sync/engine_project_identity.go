@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -485,4 +486,19 @@ func remoteNameFromGitConfigSection(section string) string {
 	}
 	name := strings.TrimSpace(strings.TrimPrefix(section, `remote `))
 	return strings.Trim(name, `"`)
+}
+
+// recordedProjectBatch holds fresh labels only for the duration of a rebuild.
+type recordedProjectBatch struct {
+	mu       sync.Mutex
+	projects map[string]string
+}
+
+func (e *Engine) recordRebuildProject(s db.Session, pw pendingWrite) {
+	if e.deferredRecordedProjects == nil || !pw.sess.RecordedProject {
+		return
+	}
+	e.deferredRecordedProjects.mu.Lock()
+	defer e.deferredRecordedProjects.mu.Unlock()
+	e.deferredRecordedProjects.projects[s.ID] = pw.sess.Project
 }

@@ -38,7 +38,7 @@ func storedFields(v reflect.Value, root string) any {
 		fields := make(map[string]any)
 		for i := range v.NumField() {
 			field := v.Type().Field(i)
-			if !field.IsExported() || field.Name == "FileMtime" || field.Name == "FileInode" || field.Name == "FileDevice" || field.Name == "FileHash" {
+			if !field.IsExported() || field.Name == "FileMtime" || field.Name == "FileInode" || field.Name == "FileDevice" || field.Name == "FileHash" || field.Name == "RecordedProject" {
 				continue
 			}
 			fields[field.Name] = storedFields(v.Field(i), root)

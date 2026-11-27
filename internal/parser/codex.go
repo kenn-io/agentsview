@@ -2308,8 +2308,18 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		sessionName = codexAgentPathLeaf(b.agentPath)
 	}
 
+	recordedLabel := ""
 	if p.spec.agent == AgentCodex {
-		if label := CodexSourceLabelForRoots(p.sources.roots, path); label != "" {
+		var err error
+		recordedLabel, err = CodexRecordedLabel(ctx, path)
+		if err != nil {
+			return nil, nil, codexCursorState{}, false, nil, "", "", err
+		}
+		label := recordedLabel
+		if label == "" {
+			label = CodexSourceLabelForRoots(p.sources.roots, path)
+		}
+		if label != "" {
 			b.project = label
 			if b.sessionKind == SessionKindNonInteractive && b.relationshipType == "" {
 				b.sessionKind = SessionKindRoborev
@@ -2318,6 +2328,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	}
 
 	sess := &ParsedSession{
+		RecordedProject:    recordedLabel != "",
 		ID:                 sessionID,
 		Project:            b.project,
 		Machine:            machine,
