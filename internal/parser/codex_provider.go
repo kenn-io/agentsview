@@ -1701,7 +1701,7 @@ const codexLabeledSourceClass = 2
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
-	if !ok || CodexSourceLabel(src.Root, src.Path) == "" {
+	if !ok || (codexRunHome(src.Path) == "" && CodexSourceLabel(src.Root, src.Path) == "") {
 		return ReconciliationSourceRank{}
 	}
 	path := src.Path

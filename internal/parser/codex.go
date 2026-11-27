@@ -2321,9 +2321,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		}
 		if label != "" {
 			b.project = label
-			if b.sessionKind == SessionKindNonInteractive && b.relationshipType == "" {
-				b.sessionKind = SessionKindRoborev
-			}
+		}
+		if (label != "" || codexRunHome(path) != "") && b.sessionKind == SessionKindNonInteractive && b.relationshipType == "" {
+			b.sessionKind = SessionKindRoborev
 		}
 	}
 

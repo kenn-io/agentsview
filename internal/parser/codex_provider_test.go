@@ -2396,19 +2396,28 @@ func TestCodexChangedPathRelevance(t *testing.T) {
 func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	for _, tc := range []struct {
-		name, homeDir, project, kind string
-		roots                        []string
+		name, homeDir, metadata, project, kind string
+		recorded                               bool
+		roots                                  []string
 	}{
-		{"nested", "experiment/case/.codex-run-v1-abc", "experiment/case", SessionKindRoborev, []string{"."}},
-		{"root", ".codex-run-v1-abc", "project", SessionKindNonInteractive, []string{"."}},
-		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", SessionKindRoborev, []string{".", "team"}},
-		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", SessionKindRoborev, []string{"team", "."}},
+		{"nested", "experiment/case/.codex-run-v1-abc", `{"label":`, "experiment/case", SessionKindRoborev, false, []string{"."}},
+		{"root", ".codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"."}},
+		{"parent root missing", "team/case/.codex-run-v1-abc", "", "project", SessionKindRoborev, false, []string{"team/case"}},
+		{"sessions root malformed", "team/case/.codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"outer root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{".", "team"}},
+		{"inner root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{"team", "."}},
+		{"sessions root", "team/case/.codex-run-v1-abc", `{"label":"team/case"}`, "team/case", SessionKindRoborev, true, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"wider root", "other/place/.codex-run-v1-abc", `{"label":"team/case"}`, "team/case", SessionKindRoborev, true, []string{"."}},
+		{"ordinary home", ".codex", `{"label":"team/case"}`, "project", SessionKindNonInteractive, false, []string{".codex/sessions"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			home := filepath.Join(root, filepath.FromSlash(tc.homeDir))
 			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
 			path := writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+			if tc.metadata != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(home, CodexRunMetadataFilename), []byte(tc.metadata), 0o600))
+			}
 			roots := make([]string, len(tc.roots))
 			for i, dir := range tc.roots {
 				roots[i] = filepath.Join(root, filepath.FromSlash(dir))
@@ -2419,11 +2428,15 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			assert.Equal(t, path, sources[0].DisplayPath)
+			if tc.name == "root" {
+				assert.NotZero(t, CodexSourceRank(sources[0]).Class)
+			}
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, tc.project, outcome.Results[0].Result.Session.Project)
 			assert.Equal(t, tc.kind, outcome.Results[0].Result.Session.SessionKind)
+			assert.Equal(t, tc.recorded, outcome.Results[0].Result.Session.RecordedProject)
 			index := filepath.Join(home, CodexSessionIndexFilename)
 			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
 			require.NoError(t, err)
@@ -2433,16 +2446,38 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	}
 }
 
+func TestCodexDirectRunRootPreferredOverOrdinaryCopy(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
+	runRoot := filepath.Join(root, "z", ".codex-run-v1-abc", "sessions")
+	run := writeCodexProviderSessionContent(t, runRoot, id, content)
+	ordinary := writeCodexProviderSessionContent(t, filepath.Join(root, "ordinary"), id, content)
+	now := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(ordinary, now, now))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{filepath.Join(root, "ordinary"), runRoot}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, run, sources[0].DisplayPath)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, run, source.DisplayPath)
+}
+
 func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
 	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
-	writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
-	writeCodexProviderSessionContent(t, root, id, content)
+	older := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
+	ordinary := writeCodexProviderSessionContent(t, root, id, content)
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	newer := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "newer", ".codex-run-v1-abc", "sessions"), id, content)
 	now := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(ordinary, now.Add(time.Hour), now.Add(time.Hour)))
 	require.NoError(t, os.Chtimes(newer, now, now))
 	require.NoError(t, os.WriteFile(newer+".zst", zstdCompress(t, []byte(content)), 0o600))
 	check := func(want string) {
@@ -2460,50 +2495,9 @@ func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
 	require.NoError(t, os.Chtimes(newer+".zst", now, now))
 	check(newer + ".zst")
 	require.NoError(t, os.WriteFile(newer, []byte(content), 0o600))
-	require.NoError(t, os.Chtimes(newer, now, now))
-	check(newer)
-}
-
-func TestCodexRecordedRunLabel(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	const recorded = `{"label":"team/case"}`
-	for _, tc := range []struct {
-		name, homeDir, metadata, project, recorded string
-		kind                                       string
-		roots                                      []string
-	}{
-		{"sessions root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"team/case/.codex-run-v1-abc/sessions"}},
-		{"wider root", "other/place/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"."}},
-		{"malformed", "team/case/.codex-run-v1-abc", `{"label":`, "team/case", "", SessionKindRoborev, []string{"."}},
-		{"parent root malformed", "team/case/.codex-run-v1-abc", `{"label":`, "project", "", SessionKindNonInteractive, []string{"team/case"}},
-		{"ordinary home", ".codex", recorded, "project", "", SessionKindNonInteractive, []string{".codex/sessions"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			home := filepath.Join(root, filepath.FromSlash(tc.homeDir))
-			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-			writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
-			if tc.metadata != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(home, CodexRunMetadataFilename), []byte(tc.metadata), 0o600))
-			}
-			roots := make([]string, len(tc.roots))
-			for i, dir := range tc.roots {
-				roots[i] = filepath.Join(root, filepath.FromSlash(dir))
-			}
-			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
-			require.True(t, ok)
-			sources, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-			require.NoError(t, err)
-			require.Len(t, outcome.Results, 1)
-			sess := outcome.Results[0].Result.Session
-			assert.Equal(t, tc.project, sess.Project)
-			assert.Equal(t, tc.recorded != "", sess.RecordedProject)
-			assert.Equal(t, tc.kind, sess.SessionKind)
-		})
-	}
+	old := now.Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(newer, old, old))
+	check(older)
 }
 
 func TestCodexRecordedLabelReadErrorRetries(t *testing.T) {
