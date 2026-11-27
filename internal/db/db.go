@@ -715,8 +715,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (192: use recorded labels for retained Codex runs.)
 const dataVersion = 192
 
-const archiveOnlyVersionBase = 1 << 20
-const detachedVersionBase = 1 << 21
+const (
+	archiveOnlyVersionBase = 1 << 20
+	detachedVersionBase    = 1 << 21
+)
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
