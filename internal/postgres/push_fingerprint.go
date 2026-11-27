@@ -904,7 +904,15 @@ func localToolResultEventPGFingerprint(ctx context.Context,
 	)
 }
 
-func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
+// usageFingerprintReader reads usage event fingerprints from the archive or
+// from a MessageSnapshot that a push already holds open.
+type usageFingerprintReader interface {
+	SortedUsageEventFingerprints(
+		ctx context.Context, sessionIDs []string, normalizeTimestamp func(string) string,
+	) (map[string]string, error)
+}
+
+func localUsageEventPGFingerprint(ctx context.Context, local usageFingerprintReader, sessionID string) (string, error) {
 	fingerprints, err := local.SortedUsageEventFingerprints(
 		ctx, []string{sessionID}, pgUsageEventTimestampFingerprintText,
 	)

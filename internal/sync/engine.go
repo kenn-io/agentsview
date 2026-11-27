@@ -3024,67 +3024,81 @@ func (e *Engine) swapResyncDatabaseLocked(
 		})
 	}
 
-	// Close the original to quiesce writes and checkpoint its WAL before the
-	// rename. The worker path already holds the daemon's write barrier; the
-	// in-process path relies on this close for the same guarantee.
-	reportResyncPhase(PhaseCopyingMetadata, "Closing current database before swap")
-	if err := origDB.CloseConnections(ctx); err != nil {
-		log.Printf("resync: close orig db: %v", err)
-		stats.Aborted = true
-		stats.Warnings = append(stats.Warnings,
-			"close before swap failed: "+err.Error(),
-		)
-		err = fmt.Errorf("full resync not installed, archive unchanged: %w", err)
-		removeTempDB(tempPath)
-		// Connections may be partially closed; reopen to restore service.
-		if rerr := origDB.Reopen(); rerr != nil {
-			log.Printf("resync: recovery reopen: %v", rerr)
-			return false, errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
-		}
-		return false, err
-	}
-
-	reportResyncPhase(PhaseSwappingDatabase, "Swapping rebuilt database into place")
-	// CloseConnections checkpointed the original (including the
-	// barrier-closed-writer case), so its remaining sidecars are stale files
-	// whose removal cannot discard data, and a failed rename below reopens a
-	// complete original.
-	removeWAL(origPath)
-
-	if err := atomicfile.Replace(tempPath, origPath); err != nil {
-		log.Printf("resync: rename temp db: %v", err)
-		stats.Aborted = true
-		stats.Warnings = append(stats.Warnings,
-			"resync swap failed: "+err.Error(),
-		)
-		removeTempDB(tempPath)
-		// Restore service even on rename failure.
-		if rerr := origDB.Reopen(); rerr != nil {
-			log.Printf("resync: recovery reopen: %v", rerr)
-			return false, errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
-		}
-		return false, err
-	}
-	removeWAL(tempPath)
-
-	if err := ops.reopen(origDB); err != nil {
-		log.Printf("resync: reopen db: %v", err)
-		// The replacement is already renamed into place; a failed reopen
-		// leaves both pools closed and every read failing until restart, so
-		// retry before surfacing the failure.
-		if rerr := ops.reopen(origDB); rerr != nil {
-			log.Printf("resync: recovery reopen: %v", rerr)
+	// Hold the database write lock and pause new reads across the entire
+	// close-rename-reopen window so live HTTP requests wait for the replacement
+	// pool and no lock-holding caller can block on paused reads.
+	swapErr := origDB.WithArchiveSwap(ctx, func(swap *db.ArchiveSwap) error {
+		// Close the original to quiesce writes and checkpoint its WAL before the
+		// rename. The worker path already holds the daemon's write barrier; the
+		// in-process path relies on this close for the same guarantee.
+		reportResyncPhase(PhaseCopyingMetadata, "Closing current database before swap")
+		if err := swap.Close(ctx); err != nil {
+			log.Printf("resync: close orig db: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
-				"resync swap completed but reopening active database failed: "+
-					err.Error(),
+				"close before swap failed: "+err.Error(),
 			)
-			return true, errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
+			err = fmt.Errorf("full resync not installed, archive unchanged: %w", err)
+			removeTempDB(tempPath)
+			// Connections may be partially closed; reopen to restore service.
+			if rerr := swap.Reopen(); rerr != nil {
+				log.Printf("resync: recovery reopen: %v", rerr)
+				return errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
+			}
+			return err
 		}
-		log.Printf("resync: reopen recovered on retry")
-		stats.Warnings = append(stats.Warnings,
-			"resync reopen required a retry: "+err.Error(),
-		)
+
+		reportResyncPhase(PhaseSwappingDatabase, "Swapping rebuilt database into place")
+		// Close checkpointed the original (including the
+		// barrier-closed-writer case), so its remaining sidecars are stale files
+		// whose removal cannot discard data, and a failed rename below reopens a
+		// complete original.
+		removeWAL(origPath)
+
+		if err := atomicfile.Replace(tempPath, origPath); err != nil {
+			log.Printf("resync: rename temp db: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"resync swap failed: "+err.Error(),
+			)
+			removeTempDB(tempPath)
+			// Restore service even on rename failure.
+			if rerr := swap.Reopen(); rerr != nil {
+				log.Printf("resync: recovery reopen: %v", rerr)
+				return errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
+			}
+			return err
+		}
+		removeWAL(tempPath)
+		installed = true
+
+		if err := ops.reopen(swap.Reopen); err != nil {
+			log.Printf("resync: reopen db: %v", err)
+			// The replacement is already renamed into place; a failed reopen
+			// leaves both pools closed and every read failing until restart, so
+			// retry before surfacing the failure.
+			if rerr := ops.reopen(swap.Reopen); rerr != nil {
+				log.Printf("resync: recovery reopen: %v", rerr)
+				stats.Aborted = true
+				stats.Warnings = append(stats.Warnings,
+					"resync swap completed but reopening active database failed: "+
+						err.Error(),
+				)
+				return errors.Join(err, fmt.Errorf("recovery reopen: %w", rerr))
+			}
+			log.Printf("resync: reopen recovered on retry")
+			stats.Warnings = append(stats.Warnings,
+				"resync reopen required a retry: "+err.Error(),
+			)
+		}
+		return nil
+	})
+	if swapErr != nil {
+		if !stats.Aborted {
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings, "resync swap failed: "+swapErr.Error())
+		}
+		return installed, swapErr
 	}
 	origDB.MarkDataCurrent()
 	if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {

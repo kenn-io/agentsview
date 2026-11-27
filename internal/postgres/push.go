@@ -3282,6 +3282,9 @@ func (s *Sync) pushMessages(
 		return 0, false, err
 	}
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
+	if s.afterMessageSnapshot != nil {
+		s.afterMessageSnapshot()
+	}
 	defer func() {
 		if err == nil && changed {
 			// Every caller must publish message changes to read-mode watchers.
@@ -3307,7 +3310,7 @@ func (s *Sync) pushMessages(
 		}
 		usageFP, known := sessionUsageFingerprints[sessionID]
 		if !known {
-			usageFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
+			usageFP, err = localUsageEventPGFingerprint(ctx, snapshot, sessionID)
 			if err != nil {
 				return 0, false, err
 			}
@@ -3315,7 +3318,7 @@ func (s *Sync) pushMessages(
 		usageChanged = usageFP != comparisons.UsageEventFingerprint[sessionID]
 		if !transcriptChanged {
 			if usageChanged {
-				usageChanged, err = s.replaceUsageEvents(ctx, tx, sessionID)
+				usageChanged, err = replaceUsageEvents(ctx, tx, snapshot, sessionID)
 			}
 			return 0, usageChanged, err
 		}
@@ -3332,7 +3335,7 @@ func (s *Sync) pushMessages(
 	}
 
 	if usageChanged {
-		usageChanged, err = s.replaceUsageEvents(ctx, tx, sessionID)
+		usageChanged, err = replaceUsageEvents(ctx, tx, snapshot, sessionID)
 		if err != nil {
 			return 0, false, err
 		}
@@ -3439,8 +3442,8 @@ func (s *Sync) copySessionMessages(
 // messages because a session can have token/cost accounting with no
 // messages at all (e.g. a hermes state.db-only session).
 // It reports whether any rows were deleted or inserted.
-func (s *Sync) replaceUsageEvents(
-	ctx context.Context, tx pgSessionExecer, sessionID string,
+func replaceUsageEvents(
+	ctx context.Context, tx pgSessionExecer, snapshot *db.MessageSnapshot, sessionID string,
 ) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM usage_events
@@ -3453,7 +3456,7 @@ func (s *Sync) replaceUsageEvents(
 	if err != nil {
 		return false, fmt.Errorf("counting deleted pg usage_events: %w", err)
 	}
-	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
+	usageEvents, err := snapshot.GetUsageEvents(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf("reading local usage events: %w", err)
 	}

@@ -5257,6 +5257,151 @@ func TestCloseConnectionsBlocksConcurrentReopen(t *testing.T) {
 	assert.NotNil(t, s, "session s1 missing after Reopen")
 }
 
+func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(t.Context(), func(swap *ArchiveSwap) error {
+			if err := swap.Close(t.Context()); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
+
+	<-closed
+
+	// A read whose context cancels while paused must unblock with context.Canceled
+	// instead of waiting or reporting sql: database is closed.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.GetSession(canceledCtx, "s1")
+	require.ErrorIs(t, err, context.Canceled)
+
+	// A live read blocks while connections are closed and completes against the
+	// replacement pool as soon as Reopen installs it.
+	type readResult struct {
+		session *Session
+		err     error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		s, readErr := d.GetSession(t.Context(), "s1")
+		readDone <- readResult{session: s, err: readErr}
+	}()
+
+	select {
+	case res := <-readDone:
+		require.Failf(t, "read returned while paused", "session=%v err=%v", res.session, res.err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; read must remain paused until Reopen installs the new pool
+	}
+
+	close(allowReopen)
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap did not complete")
+	}
+
+	select {
+	case res := <-readDone:
+		require.NoError(t, res.err, "GetSession after Reopen")
+		require.NotNil(t, res.session)
+		assert.Equal(t, "s1", res.session.ID)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "paused read did not wake after Reopen")
+	}
+}
+
+func TestWithArchiveSwapDoesNotDeadlockPreviewOrWriteLockedReaders(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReclassificationSession(t, d, "wt-1", "archive.example", "/worktrees/service/app", "branch")
+
+	draft := WorktreeReclassificationDraft{
+		Machine:    "archive.example",
+		PathPrefix: "/worktrees/service",
+		Project:    "service",
+		Enabled:    true,
+	}
+
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(ctx, func(swap *ArchiveSwap) error {
+			if err := swap.Close(ctx); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
+
+	<-closed
+
+	type previewResult struct {
+		preview WorktreeReclassificationPreview
+		err     error
+	}
+	previewDone := make(chan previewResult, 1)
+	go func() {
+		p, err := d.PreviewWorktreeReclassification(ctx, draft)
+		previewDone <- previewResult{preview: p, err: err}
+	}()
+
+	// InsertMissingModelPricing acquires db.mu and reads via db.getReader();
+	// because WithArchiveSwap holds db.mu for the entire paused window, it
+	// blocks on db.mu rather than entering paused reads while holding db.mu.
+	pricingDone := make(chan error, 1)
+	go func() {
+		pricingDone <- d.InsertMissingModelPricing(ctx, []ModelPricing{{
+			ModelPattern: "swap-regression-model",
+		}})
+	}()
+
+	select {
+	case res := <-previewDone:
+		require.Failf(t, "preview returned while swap paused reads", "preview=%+v err=%v", res.preview, res.err)
+	case err := <-pricingDone:
+		require.Failf(t, "write-locked reader returned while swap held db.mu", "err=%v", err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; concurrent preview and write-locked reader must wait without returning early or deadlocking
+	}
+
+	close(allowReopen)
+
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap stalled waiting for concurrent preview or write-locked reader")
+	}
+
+	select {
+	case res := <-previewDone:
+		require.NoError(t, res.err, "PreviewWorktreeReclassification")
+		assert.Equal(t, 1, res.preview.MatchedSessions)
+		assert.Equal(t, 1, res.preview.UpdatedSessions)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "PreviewWorktreeReclassification did not complete after Reopen")
+	}
+
+	select {
+	case err := <-pricingDone:
+		require.NoError(t, err, "InsertMissingModelPricing")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "InsertMissingModelPricing did not complete after WithArchiveSwap")
+	}
+}
+
 func TestCloseWriterWaitsForInFlightWriterQuery(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
