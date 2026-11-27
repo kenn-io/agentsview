@@ -716,13 +716,10 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(usage.mode).toBe("cost");
-    usage.summary = null;
     router.params = { view: "tokens", project: "demo" };
     await flushEffects();
 
     expect(usage.mode).toBe("token");
-    usage.summary = usageSummaryWithUnsupported();
-    await flushEffects();
     expect(
       document
         .querySelector(

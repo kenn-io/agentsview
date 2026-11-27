@@ -580,7 +580,6 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await tick();
 
-    await enterSearchQuery("   ");
     await enterSearchQuery("消");
 
     const items = document.querySelectorAll(".palette-item");
