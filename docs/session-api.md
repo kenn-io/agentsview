@@ -661,9 +661,10 @@ one `SessionDetail` back, the CLI never picks one arbitrarily.
 
 Because the ambiguity check runs after the sync engine finishes, the file has
 already been parsed and every candidate session is written to the local
-archive. Re-run `session sync <id>` with the specific session you want. The
-`<id>` form resolves the file path from the archive, so it only works for
-sessions already stored there.
+archive. Re-run `session sync <id>` with the specific session you want. For
+Codex, an ID prefixed with `codex:` can find a session in configured source
+roots even before it is stored in the archive. Other session IDs resolve their
+file paths from the archive and must already be stored there.
 
 - `session sync` uses a writable local daemon when one is running, or starts a
   detached daemon when no compatible daemon is running. It then proxies to

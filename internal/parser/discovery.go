@@ -906,6 +906,29 @@ func CodexSourceLabel(root, path string) string {
 	return label
 }
 
+// CodexSourceLabelForRoots uses the outermost matching root for the label.
+func CodexSourceLabelForRoots(roots []string, path string) string {
+	_, label := CodexSourceLabelRoot(roots, path)
+	return label
+}
+
+// CodexSourceLabelRoot returns the outermost matching root and its label.
+func CodexSourceLabelRoot(roots []string, path string) (string, string) {
+	var selected, label string
+	for _, root := range roots {
+		candidate := CodexSourceLabel(root, path)
+		if candidate == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, selected)
+		if selected == "" || (err == nil && filepath.IsLocal(rel)) {
+			selected = root
+			label = candidate
+		}
+	}
+	return selected, label
+}
+
 // CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
 func CodexLabeledIndexSessions(root, indexPath string) string {
 	if filepath.Base(indexPath) != CodexSessionIndexFilename {

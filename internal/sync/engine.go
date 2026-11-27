@@ -5609,6 +5609,10 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			preference1 = rank.Class
 			preference2 = configuredRootPreferenceForSource(source, statPath, roots)
 			preference3 = rank.Recency
+		} else if isCodexFormatAgent(agent) {
+			if rank.Class != 0 {
+				preference1, preference2, preference3 = rank.Class, rank.Recency, rank.TieBreak
+			}
 		} else {
 			preference2 = rank.Class
 			preference3 = rank.Recency
@@ -6443,11 +6447,25 @@ func (e *Engine) syncAllLocked(
 		// engine's own dedup, so a changed archived copy that is newer than the
 		// cutoff would be lost behind an older live copy that the cutoff drops.
 		// Re-expand to every on-disk duplicate before filtering so the cutoff
-		// sees each copy's real mtime; the quick-sync dedupe below then keeps
-		// the newest surviving duplicate before falling back to normal layout
-		// preference.
+		// sees each copy's real mtime. Keep a preferred labeled source when
+		// any copy passes the cutoff; otherwise prefer the newest survivor.
+		labeled := make(map[string]parser.DiscoveredFile)
+		for _, file := range all {
+			if file.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(e.sources().agentDirs[file.Agent], file.Path) != "" {
+				labeled[discoveredFileKey(file)] = file
+			}
+		}
 		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterQuickSyncFiles(ctx, all, since)
+		for _, file := range all {
+			key := discoveredFileKey(file)
+			if preferred, ok := labeled[key]; ok {
+				if !slices.ContainsFunc(all, func(candidate parser.DiscoveredFile) bool { return candidate.Path == preferred.Path }) {
+					all = append(all, preferred)
+				}
+				delete(labeled, key)
+			}
+		}
 	}
 
 	if quickSyncCutoff {
@@ -9469,6 +9487,9 @@ func reconciliationSourceRankLower(
 	}
 	if candidate.Recency != stored.Recency {
 		return candidate.Recency < stored.Recency
+	}
+	if candidate.TieBreak != stored.TieBreak {
+		return candidate.TieBreak < stored.TieBreak
 	}
 	return candidate.Path > stored.Path
 }
@@ -13061,10 +13082,18 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
-	return e.syncSingleSessionContext(ctx, sessionID, false)
+	return e.syncSingleSessionContext(ctx, sessionID, false, false)
 }
 
-func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try bool) (err error) {
+// ErrSourceFileNotFound indicates that a session's source could not be found.
+var ErrSourceFileNotFound = errors.New("source file not found")
+
+// RefreshSessionByIDContext searches for the current source before refreshing it.
+func (e *Engine) RefreshSessionByIDContext(ctx context.Context, sessionID string) error {
+	return e.syncSingleSessionContext(ctx, sessionID, false, true)
+}
+
+func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try, exhaustive bool) (err error) {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -13124,10 +13153,15 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	}
 
 	path := e.FindSourceFile(ctx, sessionID)
+	if exhaustive && def.Type == parser.AgentCodex && e.db.GetSessionFilePath(ctx, sessionID) != "" {
+		raw := strings.TrimPrefix(sessionID, def.IDPrefix)
+		if found := e.findProviderSourceFile(ctx, def, sessionID, raw, ""); found != "" &&
+			parser.CodexSourceLabelForRoots(e.sources().agentDirs[def.Type], found) != "" {
+			path = found
+		}
+	}
 	if path == "" {
-		return fmt.Errorf(
-			"source file not found for %s", sessionID,
-		)
+		return fmt.Errorf("%w for %s", ErrSourceFileNotFound, sessionID)
 	}
 	// OpenCode-format agents (OpenCode, Kilo, MiMoCode) are
 	// provider-authoritative: their SQLite virtual paths and storage

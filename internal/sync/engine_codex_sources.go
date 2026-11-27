@@ -451,6 +451,11 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
+			if preferred, compared := parser.PreferLabeledCodexSource(*candidate.ProviderSource, *current.ProviderSource); compared {
+				return preferred
+			}
+		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {

@@ -26,6 +26,7 @@ var (
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
 	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
 	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
+	_ ReconciliationSourceRanker        = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -183,6 +184,10 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+func (p *codexProvider) ReconciliationSourceRank(source SourceRef) ReconciliationSourceRank {
+	return CodexSourceRank(source)
 }
 
 // SourceForReconciliation allows a rollout restored after discovery to use
@@ -1058,21 +1063,12 @@ func (s codexSourceSet) discover(
 		}
 		paths := s.discoverSessionPaths(root)
 		if withLabeled {
-			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-				if err != nil {
-					return nil //nolint:nilerr // Discovery skips unreadable paths and keeps available sessions.
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
-					paths = append(paths, s.discoverSessionPaths(filepath.Join(path, "sessions"))...)
-					return filepath.SkipDir
-				}
-				return nil
-			})
-			if err != nil && ctx.Err() != nil {
-				return nil, ctx.Err()
+			dirs, err := labeledSessionDirs(ctx, root)
+			if err != nil {
+				return nil, err
+			}
+			for _, dir := range dirs {
+				paths = append(paths, s.discoverSessionPaths(dir)...)
 			}
 		}
 		for _, path := range paths {
@@ -1095,6 +1091,24 @@ func (s codexSourceSet) discover(
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func labeledSessionDirs(ctx context.Context, root string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // Keep available sessions when a path is unreadable.
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
+			dirs = append(dirs, filepath.Join(path, "sessions"))
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return dirs, err
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1399,29 +1413,22 @@ func (s codexSourceSet) FindSource(
 				if !req.RequireFreshSource || req.PreferStoredSource {
 					return source, true, nil
 				}
-				return s.canonicalSource(ctx, source)
+				preferred, err := s.preferredKnownRolloutSource(ctx, source)
+				return preferred, err == nil, err
 			}
 			if source, ok := s.directPathSource(root, path, true); ok {
 				if !req.RequireFreshSource || req.PreferStoredSource {
 					return source, true, nil
 				}
-				return s.canonicalSource(ctx, source)
+				preferred, err := s.preferredKnownRolloutSource(ctx, source)
+				return preferred, err == nil, err
 			}
 		}
 	}
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	for _, root := range s.roots {
-		path := s.findSourceFile(root, req.RawSessionID)
-		if path == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, path, true); ok {
-			return s.canonicalSource(ctx, source)
-		}
-	}
-	return SourceRef{}, false, nil
+	return s.findCanonicalSource(ctx, req.RawSessionID)
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1532,6 +1539,10 @@ func (s codexSourceSet) sourceRef(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
+	labelRoot, label := CodexSourceLabelRoot(s.roots, path)
+	if label != "" {
+		root = labelRoot
+	}
 	return SourceRef{
 		Provider:       s.agent,
 		Key:            codexSourceKey(s.agent, uuid),
@@ -1616,37 +1627,35 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 	return best, nil
 }
 
-func (s codexSourceSet) canonicalSource(
-	ctx context.Context,
-	source SourceRef,
-) (SourceRef, bool, error) {
-	src, ok := source.Opaque.(codexSource)
-	if !ok || src.UUID == "" {
-		return source, true, nil
-	}
+func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		path := s.findSourceFile(root, src.UUID)
-		if path == "" {
-			continue
+		paths := []string{s.findSourceFile(root, uuid)}
+		if s.agent == AgentCodex {
+			dirs, err := labeledSessionDirs(ctx, root)
+			if err != nil {
+				return SourceRef{}, false, err
+			}
+			for _, dir := range dirs {
+				paths = append(paths, s.discoverSessionPaths(dir)...)
+			}
 		}
-		candidate, ok := s.sourceRef(root, path, true)
-		if !ok {
-			continue
-		}
-		if !foundExisting || preferCodexSource(candidate, best) {
-			best = candidate
-			foundExisting = true
+		for _, path := range paths {
+			if extractUUIDFromRollout(filepath.Base(path)) != uuid {
+				continue
+			}
+			candidate, ok := s.sourceRef(root, path, true)
+			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
+				best = candidate
+				foundExisting = true
+			}
 		}
 	}
-	if !foundExisting {
-		return source, true, nil
-	}
-	return best, true, nil
+	return best, foundExisting, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {
@@ -1663,11 +1672,54 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 	return codexSourceKey(agent, uuid)
 }
 
-// preferCodexSource reports whether candidate should replace current as the
-// copy of one session: the live dated layout before the archived flat one,
-// then the plain rollout before its compressed form, then the lexically
-// smaller path.
+const codexLabeledSourceClass = 2
+
+// CodexSourceRank ranks a source for duplicate selection.
+func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
+	src, ok := source.Opaque.(codexSource)
+	if !ok || CodexSourceLabel(src.Root, src.Path) == "" {
+		return ReconciliationSourceRank{}
+	}
+	path := src.Path
+	if plain := codexPlainRolloutPath(path); isCompressedCodexRolloutPath(path) && IsRegularFile(plain) {
+		path = plain
+	}
+	var recency int64
+	if info, err := os.Stat(path); err == nil {
+		recency = info.ModTime().UnixNano()
+	}
+	tieBreak := int64(1)
+	if isCompressedCodexRolloutPath(src.Path) {
+		tieBreak = 0
+	}
+	return ReconciliationSourceRank{
+		Class: codexLabeledSourceClass, Recency: recency, TieBreak: tieBreak, Path: src.Path,
+	}
+}
+
+// PreferLabeledCodexSource compares labeled copies, or leaves ordinary copies to the caller.
+func PreferLabeledCodexSource(candidate, current SourceRef) (preferred, compared bool) {
+	candRank, currRank := CodexSourceRank(candidate), CodexSourceRank(current)
+	if candRank.Class != 0 || currRank.Class != 0 {
+		if candRank.Class != currRank.Class {
+			return candRank.Class > currRank.Class, true
+		}
+		if candRank.Recency != currRank.Recency {
+			return candRank.Recency > currRank.Recency, true
+		}
+		if candRank.TieBreak != currRank.TieBreak {
+			return candRank.TieBreak > currRank.TieBreak, true
+		}
+		return candRank.Path < currRank.Path, true
+	}
+	return false, false
+}
+
+// preferCodexSource ranks labeled copies by recency and keeps ordinary layout precedence.
 func preferCodexSource(candidate, current SourceRef) bool {
+	if preferred, compared := PreferLabeledCodexSource(candidate, current); compared {
+		return preferred
+	}
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
 	if cand.Layout != curr.Layout {
