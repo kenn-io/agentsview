@@ -37,7 +37,6 @@
   import { m } from "../../i18n/index.js";
   import { settleVirtualScroll } from "./staged-scroll.js";
   import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
-  import { shouldAutoSwitchTranscriptModeToNormal } from "../../utils/transcript-mode.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -96,19 +95,11 @@
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
 
-  let revealedOrdinal: number | undefined = $state(undefined);
-  let revealNormalMode = $state(false);
-  $effect(() => {
-    void messages.sessionId;
-    untrack(() => { revealedOrdinal = undefined; revealNormalMode = false; });
-  });
-
   // Share transcript row visibility and searchable block filters with the index.
   let sessionScope = $derived(
     projectSessionScope({
       messages: messages.messages,
-      transcriptMode: revealNormalMode ? "normal" : ui.transcriptMode,
-      revealOrdinal: revealedOrdinal,
+      transcriptMode: ui.transcriptMode,
       visibleBlocks: ui.visibleBlocks,
       hasBlockFilters: ui.hasBlockFilters,
       keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(
@@ -704,7 +695,7 @@
     return ++lastScrollRequest;
   }
 
-  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall, revealFiltered = false) {
+  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
     const reqId = endScrollOwnership();
     const sessionId = messages.sessionId;
     const isCurrent = () => requestIsCurrent(reqId, sessionId);
@@ -741,17 +732,6 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
-    if (revealFiltered) {
-      revealedOrdinal = ordinal;
-      await tick();
-      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
-      if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
-        revealNormalMode = true;
-        await tick();
-        if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
-      }
-    }
-
     // A message inside a collapsed empty row has no card until the row opens.
     const emptyGroup = displayItemsAsc.find(
       (item) => item.kind === "empty-group" && item.ordinals.includes(ordinal),
@@ -773,12 +753,8 @@
     ordinalJump = { reqId, ordinal, sessionId, targetHolds, until: performance.now() + 5000, sawLoadingOlder: false };
   }
 
-  export function scrollToOrdinal(ordinal: number, call?: ScrollCall, revealFiltered = false) {
-    void scrollToOrdinalInternal(ordinal, call, revealFiltered);
-  }
-
-  export function getNormalDisplayItems(): DisplayItem[] {
-    return normalDisplayItemsAsc;
+  export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
+    void scrollToOrdinalInternal(ordinal, call);
   }
 
   function scrollToLatestInternal() {
@@ -890,6 +866,9 @@
     return displayItemsAsc;
   }
 
+  export function getNormalDisplayItems(): DisplayItem[] {
+    return normalDisplayItemsAsc;
+  }
 
   let searchRevealKey = $derived.by(() => {
     const match = inSessionSearch.resolvedCurrent;
@@ -1107,7 +1086,6 @@
               <EmptyMessagesRow
                 messages={item.messages}
                 open={emptyGroupOpen(item)}
-                {revealedOrdinal}
                 onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
               />
             {:else if item.message.is_compact_boundary}
@@ -1121,7 +1099,6 @@
             {:else}
               <MessageContent
                 message={item.message}
-                revealFiltered={item.ordinals.includes(revealedOrdinal ?? -1)}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
               />

@@ -7,11 +7,10 @@
   interface Props {
     messages: Message[];
     open: boolean;
-    revealedOrdinal?: number;
     onToggle: (open: boolean) => void;
   }
 
-  let { messages, open, onToggle, revealedOrdinal }: Props = $props();
+  let { messages, open, onToggle }: Props = $props();
 </script>
 
 <Disclosure
@@ -31,7 +30,7 @@
     <div class="empty-messages">
       {#each messages as message (message.id)}
         <div data-message-ordinal={message.ordinal}>
-          <MessageContent {message} revealFiltered={message.ordinal === revealedOrdinal} searchOrdinal={message.ordinal} />
+          <MessageContent {message} searchOrdinal={message.ordinal} />
         </div>
       {/each}
     </div>

@@ -338,7 +338,6 @@ class UIStore {
   pendingScrollSession: string | null = $state(null);
   /** The tool call a pending jump expects at its message; null when any message at the ordinal will do. */
   pendingScrollCall: ScrollCall | null = $state(null);
-  pendingScrollRevealFiltered = $state(false);
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
@@ -649,16 +648,14 @@ class UIStore {
     this.pendingScrollOrdinal = null;
     this.pendingScrollSession = null;
     this.pendingScrollCall = null;
-    this.pendingScrollRevealFiltered = false;
   }
 
-  scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall, revealFiltered = false) {
+  scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
     this.pendingScrollSession = sessionId ?? null;
     this.pendingScrollCall = call ?? null;
-    this.pendingScrollRevealFiltered = revealFiltered;
   }
 
   setFollowLatest(enabled: boolean) {
@@ -669,7 +666,6 @@ class UIStore {
       this.pendingScrollOrdinal = null;
       this.pendingScrollSession = null;
       this.pendingScrollCall = null;
-      this.pendingScrollRevealFiltered = false;
     }
   }
 

@@ -345,7 +345,7 @@ describe("MessageList follow cancellation", () => {
     });
     component = mount(MessageList, { target: document.body });
     await flushScrollUpdates();
-    component.scrollToOrdinal(3, undefined, true);
+    component.scrollToOrdinal(3);
     await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
   });
 
@@ -686,55 +686,31 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
-  it("reveals an older linked message hidden by focused mode", async () => {
-    ui.setTranscriptMode("focused");
-    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
-      messages.messages = [makeMessage(1), makeMessage(3), makeMessage(10)];
-    });
+  it("honors a filter changed after opening a message", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    setVirtualRows(3);
     component = mount(MessageList, { target: document.body });
     await tick();
-    ui.setFollowLatest(false);
-    (component as JumpList).scrollToOrdinal(1, undefined, true);
-    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalled());
-    expect(ui.transcriptMode).toBe("focused");
-    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
-  });
-
-  it.each([
-    { ordinal: 0, block: "user" as const, older: false, thinking: false },
-    { ordinal: 1, block: "assistant" as const, older: true, thinking: false },
-    { ordinal: 1, block: "thinking" as const, older: false, thinking: true },
-  ])("reveals a linked $block message hidden by its block filter", async ({ ordinal, block, older, thinking }) => {
-    ui.setBlockVisible(block, false);
-    ui.setBlockVisible("hook", false);
-    const target = thinking ? { ...makeMessage(ordinal), content: "[Thinking]\nPlan.\n[/Thinking]", has_thinking: true, thinking_text: "Plan." } : makeMessage(ordinal);
-    messages.messages = older ? [makeMessage(10)] : [target, makeMessage(10)];
-    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
-      messages.messages = [target, makeMessage(10)];
-    });
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    ui.setFollowLatest(false);
-    (component as JumpList).scrollToOrdinal(ordinal, undefined, true);
-    await vi.waitFor(() => expect(document.body.textContent).toContain(thinking ? "Thinking" : `msg ${ordinal}`));
-    expect(ui.isBlockVisible(block)).toBe(false);
-    expect(ui.isBlockVisible("hook")).toBe(false);
-    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
-  });
-
-  it("restores the filtered view in another session", async () => {
+    component.scrollToOrdinal(1);
+    await flushScrollUpdates();
     ui.setBlockVisible("assistant", false);
-    messages.messages = [makeMessage(1)];
+    await tick();
+    expect(document.body.textContent).not.toContain("msg 1");
+  });
+
+  it("honors focused mode after opening a message", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(3)];
+    setVirtualRows(3);
+    ui.setTranscriptMode("focused");
     component = mount(MessageList, { target: document.body });
     await tick();
-    component.scrollToOrdinal(1, undefined, true);
-    await vi.waitFor(() => expect(document.body.textContent).toContain("msg 1"));
-    messages.sessionId = "s2";
-    sessions.activeSessionId = "s2";
-    messages.messages = [{ ...makeMessage(1), session_id: "s2", content: "other session" }];
+    component.scrollToOrdinal(1);
+    await flushScrollUpdates();
+    ui.setTranscriptMode("normal");
     await tick();
-    expect(document.body.textContent).not.toContain("other session");
-    expect(ui.isBlockVisible("assistant")).toBe(false);
+    ui.setTranscriptMode("focused");
+    await tick();
+    expect(document.body.textContent).not.toContain("msg 1");
   });
 
   it("keeps block filters unchanged for an ordinary jump", async () => {
@@ -758,7 +734,7 @@ describe("MessageList follow cancellation", () => {
   }
 
   type JumpList = ReturnType<typeof mount> & {
-    scrollToOrdinal: (ordinal: number, call?: ScrollCall, revealFiltered?: boolean) => void;
+    scrollToOrdinal: (ordinal: number, call?: ScrollCall) => void;
   };
 
   it("cancels a queued jump before the first frame of a new session", async () => {

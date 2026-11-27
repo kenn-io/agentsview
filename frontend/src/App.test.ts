@@ -54,28 +54,6 @@ async function selectRelativeRange(days: number) {
   await flushEffects();
 }
 
-it("reveals filtered targets for browser links but not in-app message jumps", async () => {
-  stubAppDependencies();
-  vi.spyOn(sessions, "load").mockResolvedValue();
-  vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-  messages.loading = true;
-  router.route = "usage";
-  component = mount(App, { target: document.body });
-  await flushEffects();
-
-  window.history.replaceState(null, "", "/sessions/session-2?msg=7");
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  await flushEffects();
-  expect(ui.pendingScrollOrdinal).toBe(7);
-  expect(ui.pendingScrollRevealFiltered).toBe(true);
-
-  router.navigateToSession("session-3", { msg: "8" });
-  ui.scrollToOrdinal(8, "session-3");
-  await flushEffects();
-  expect(ui.pendingScrollOrdinal).toBe(8);
-  expect(ui.pendingScrollRevealFiltered).toBe(false);
-});
-
 function stubAppDependencies() {
   vi.stubGlobal(
     "ResizeObserver",
@@ -125,7 +103,6 @@ afterEach(() => {
   router.params = {};
   router.sessionId = null;
   router.isRootPath = false;
-  router.fromHistory = true;
   sessions.activeSessionId = null;
   sessions.archiveEmpty = false;
   sessions.filters.date = "";

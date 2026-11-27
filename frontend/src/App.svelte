@@ -103,10 +103,9 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
-  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
-  import { parseContent, enrichSegments } from "./lib/utils/content-parser.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
+  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
     filterParamsEqual,
     hasFilterParams,
@@ -133,10 +132,14 @@
     window.location.reload();
   }
   import type { DisplayItem } from "./lib/utils/display-items.js";
+  import {
+    parseContent,
+    enrichSegments,
+  } from "./lib/utils/content-parser.js";
 
   let messageListRef:
     | {
-        scrollToOrdinal: (o: number, call?: ScrollCall, revealFiltered?: boolean) => void;
+        scrollToOrdinal: (o: number, call?: ScrollCall) => void;
         getDisplayItems: () => DisplayItem[];
         getNormalDisplayItems: () => DisplayItem[];
       }
@@ -185,7 +188,6 @@
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
         ui.pendingScrollSession = null;
-        ui.pendingScrollRevealFiltered = false;
       }
       if (id) {
         if (ui.isMobileViewport) {
@@ -227,6 +229,10 @@
   });
 
   // Scroll to pending ordinal once messages finish loading.
+  // If the target message is hidden specifically because thinking
+  // is disabled, auto-enable thinking so the message becomes visible.
+  // Messages hidden by other block filters (tool/code/user/assistant)
+  // are left alone — auto-changing unrelated filters is unexpected.
   $effect(() => {
     const ordinal = ui.pendingScrollOrdinal;
     const loading = messages.loading;
@@ -241,19 +247,50 @@
         return;
       }
 
-      const revealFiltered = ui.pendingScrollRevealFiltered;
-      if (!revealFiltered) {
-        const items = messageListRef.getDisplayItems();
-        const normalItems = messageListRef.getNormalDisplayItems();
-        if (!items.some((item) => item.ordinals.includes(ordinal))) {
-          if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, items, normalItems)) {
-            ui.setTranscriptMode("normal");
-            return;
-          }
-          const msg = messages.messages.find((item) => item.ordinal === ordinal);
-          if (msg && !thinkingVisible && enrichSegments(parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length), msg.tool_calls).some((segment) => segment.type === "thinking")) {
+      const items = messageListRef.getDisplayItems();
+      const normalItems =
+        messageListRef.getNormalDisplayItems();
+      const found = items.some((item) =>
+        item.ordinals.includes(ordinal),
+      );
+
+      if (!found) {
+        if (
+          shouldAutoSwitchTranscriptModeToNormal(
+            ui.transcriptMode,
+            ordinal,
+            items,
+            normalItems,
+          )
+        ) {
+          ui.setTranscriptMode("normal");
+          return; // effect re-runs with normal transcript mode
+        }
+
+        // Only auto-enable thinking if the ordinal is loaded
+        // but filtered out *specifically* due to hidden thinking.
+        // If it's outside the loaded window, don't change filters.
+        // Auto-enable thinking filter when navigating to a message
+        // that contains a thinking block.
+        const msg = messages.messages.find(
+          (m) => m.ordinal === ordinal,
+        );
+        if (msg && !thinkingVisible) {
+          const segs = enrichSegments(
+            parseContent(
+              msg.content,
+              msg.has_tool_use,
+              msg.id,
+              msg.content_length,
+            ),
+            msg.tool_calls,
+          );
+          const hasThinkingSegment = segs.some(
+            (s) => s.type === "thinking",
+          );
+          if (hasThinkingSegment) {
             ui.setBlockVisible("thinking", true);
-            return;
+            return; // effect re-runs with thinking visible
           }
         }
       }
@@ -262,12 +299,11 @@
       ui.pendingScrollOrdinal = null;
       ui.pendingScrollSession = null;
       ui.pendingScrollCall = null;
-      ui.pendingScrollRevealFiltered = false;
       // Ensure highlight is set (the session-change effect
       // may have cleared it before this effect ran). The list clears it
       // again when the message no longer holds the expected call.
       ui.selectedOrdinal = ordinal;
-      messageListRef.scrollToOrdinal(ordinal, call ?? undefined, revealFiltered);
+      messageListRef.scrollToOrdinal(ordinal, call ?? undefined);
     });
   });
 
@@ -673,11 +709,10 @@
       if (msgParam === "last") {
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
-        ui.pendingScrollRevealFiltered = router.fromHistory;
       } else {
         const ordinal = parseInt(msgParam, 10);
         if (Number.isFinite(ordinal)) {
-          ui.scrollToOrdinal(ordinal, sid, call, router.fromHistory);
+          ui.scrollToOrdinal(ordinal, sid, call);
         }
       }
     });
@@ -693,7 +728,7 @@
       const target = ui.pendingScrollSession;
       if (target !== null && target !== messages.sessionId) return;
       const lastOrdinal = msgs[msgs.length - 1]!.ordinal;
-      ui.scrollToOrdinal(lastOrdinal, target ?? undefined, undefined, ui.pendingScrollRevealFiltered);
+      ui.scrollToOrdinal(lastOrdinal, target ?? undefined);
     });
   });
 
