@@ -44,7 +44,7 @@ func (db *DB) migrateRepositoryProjects(ctx context.Context, progress OpenProgre
 			return err
 		}
 		progress.report("Repairing repository project names")
-		if _, err := repairRepositoryProjectsTx(ctx, tx, "", true, nil); err != nil {
+		if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO stats (key, value)
@@ -319,7 +319,7 @@ func (db *DB) PreviewRepositoryProjects(ctx context.Context, project string) (Re
 		return RepositoryProjectRepair{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	return repairRepositoryProjectsTx(ctx, tx, project, false, nil)
+	return repairRepositoryProjectsTx(ctx, tx, project, false)
 }
 
 // RepairRepositoryProjects changes project metadata atomically, keeping
@@ -335,7 +335,7 @@ func (db *DB) RepairRepositoryProjects(ctx context.Context, project string) (Rep
 		return RepositoryProjectRepair{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	report, err := repairRepositoryProjectsTx(ctx, tx, project, true, nil)
+	report, err := repairRepositoryProjectsTx(ctx, tx, project, true)
 	if err != nil {
 		return RepositoryProjectRepair{}, fmt.Errorf("repairing repository projects: %w", err)
 	}
@@ -345,16 +345,12 @@ func (db *DB) RepairRepositoryProjects(ctx context.Context, project string) (Rep
 	return report, nil
 }
 
-func repairRepositoryProjectsTx(ctx context.Context, tx *sql.Tx, project string, apply bool, recordedProjects map[string]string) (RepositoryProjectRepair, error) {
+func repairRepositoryProjectsTx(ctx context.Context, tx *sql.Tx, project string, apply bool) (RepositoryProjectRepair, error) {
 	report := RepositoryProjectRepair{Changes: []RepositoryProjectChange{}}
 	candidates, err := repositoryProjectCandidates(ctx, tx, "", project)
 	if err != nil {
 		return report, err
 	}
-	candidates = slices.DeleteFunc(candidates, func(c repositoryProjectCandidate) bool {
-		_, recorded := recordedProjects[c.id]
-		return recorded
-	})
 	r, err := newRepositoryProjectResolver(ctx, tx)
 	if err != nil {
 		return report, err

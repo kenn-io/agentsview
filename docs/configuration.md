@@ -782,8 +782,8 @@ AgentsView reads without writing to or migrating the database.
 **Codex.** A configured Codex sessions directory can contain Roborev logs at
 `<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. Roborev can
 record the run's label in `roborev.json` inside the run home. AgentsView uses
-that label as the project on a full parse. A later incremental sync or
-repository project repair can replace it. Older runs and runs without a valid
+that label as the project on a full parse. A later incremental sync, repository
+project repair, or archive rebuild can replace it until the next full parse. Older runs and runs without a valid
 label use the label path. If the file cannot be read, sync retries the session.
 A worktree mapping or an assigned project takes precedence.
 

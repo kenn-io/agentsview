@@ -362,38 +362,30 @@ func TestCodexLabelIsNotRepositoryAlias(t *testing.T) {
 }
 
 func TestCodexRecordedProjectCorrectsSnapshot(t *testing.T) {
-	for _, mode := range []string{"reparse", "rebuild"} {
-		t.Run(mode, func(t *testing.T) {
-			database := openTestDB(t)
-			root := t.TempDir()
-			cwd := filepath.Join(root, "missing-checkout")
-			const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-			home := filepath.Join(root, "old", "case", ".codex-run-v1-test")
-			source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
-			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + id})
-			require.NoError(t, err)
-			require.Equal(t, "old/case", snapshots["codex:"+id].Project)
-			require.NoError(t, os.WriteFile(filepath.Join(home, "roborev.json"), []byte(`{"label":"team/case"}`), 0o600))
-			if mode == "reparse" {
-				require.NoError(t, database.SetSessionDataVersionsContext(t.Context(), []string{"codex:" + id}, 190))
-				require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			} else {
-				stats := engine.ResyncAll(t.Context(), nil)
-				require.False(t, stats.Aborted)
-				require.Zero(t, stats.Failed)
-			}
-			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.Equal(t, "team/case", session.Project)
-			snapshots, err = database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + id})
-			require.NoError(t, err)
-			assert.Equal(t, "team/case", snapshots["codex:"+id].Project)
-		})
-	}
+	t.Run("reparse", func(t *testing.T) {
+		database := openTestDB(t)
+		root := t.TempDir()
+		cwd := filepath.Join(root, "missing-checkout")
+		const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		home := filepath.Join(root, "old", "case", ".codex-run-v1-test")
+		source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+		dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+		engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+		t.Cleanup(engine.Close)
+		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+		snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + id})
+		require.NoError(t, err)
+		require.Equal(t, "old/case", snapshots["codex:"+id].Project)
+		require.NoError(t, os.WriteFile(filepath.Join(home, "roborev.json"), []byte(`{"label":"team/case"}`), 0o600))
+		require.NoError(t, database.SetSessionDataVersionsContext(t.Context(), []string{"codex:" + id}, 190))
+		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team/case", session.Project)
+		snapshots, err = database.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"codex:" + id})
+		require.NoError(t, err)
+		assert.Equal(t, "team/case", snapshots["codex:"+id].Project)
+	})
 }

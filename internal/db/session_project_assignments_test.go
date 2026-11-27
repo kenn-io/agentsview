@@ -297,7 +297,7 @@ func TestCodexPageUpgradePreservesProjectAssignment(t *testing.T) {
 
 			// Resync restores source identities after copying metadata, then later
 			// parsing and folder rules must still honor the explicit assignment.
-			_, err = destination.RestoreSessionProjectsFromIdentitySnapshots(ctx, nil)
+			_, err = destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
 			require.NoError(t, err)
 			assertSessionProject(t, destination, page, "saved_project")
 			insertSession(t, destination, page, "reparsed_project", withSource)

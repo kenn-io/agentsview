@@ -356,10 +356,9 @@ type Engine struct {
 	archiveRebuildIndex *archiveRebuildIndex
 	// sourceClaims maps a full session id to the file that took it before
 	// its row is written, so a second file in the same pass derives its own.
-	sourceClaimsMu           gosync.Mutex
-	sourceClaims             map[string]string
-	deferredSourceCwd        *sourceCwdReconciliationBatch
-	deferredRecordedProjects *recordedProjectBatch
+	sourceClaimsMu    gosync.Mutex
+	sourceClaims      map[string]string
+	deferredSourceCwd *sourceCwdReconciliationBatch
 	// deferredNativeTitles holds rebuild title changes for archived
 	// sessions that reach the replacement only through the orphan copy.
 	// Agents share it because every key carries its own agent prefix.
@@ -12171,7 +12170,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
-			e.recordRebuildProject(s, pw)
 			outcome.written[pendingIndex], outcome.resolved[pendingIndex] = true, true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
@@ -12274,7 +12272,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	for _, writtenIndex := range result.WrittenIndexes {
 		if writtenIndex >= 0 && writtenIndex < len(pendingIndexes) {
 			pendingIndex := pendingIndexes[writtenIndex]
-			e.recordRebuildProject(writes[writtenIndex].Session, batch[pendingIndex])
 			outcome.written[pendingIndex] = true
 			outcome.resolved[pendingIndex] = true
 		}

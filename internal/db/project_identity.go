@@ -978,7 +978,7 @@ func writeSessionProjectIdentitySnapshotExec(
 // mappings, so a missing checkout cannot replace resolved historical identity
 // with a basename fallback.
 func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
-	ctx context.Context, recordedProjects map[string]string,
+	ctx context.Context,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, err
@@ -996,26 +996,6 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	// Metadata copy may have replaced fresh labels with older snapshots.
-	ids := make([]string, 0, len(recordedProjects))
-	for id := range recordedProjects {
-		ids = append(ids, id)
-	}
-	for chunk := range slices.Chunk(ids, 500) {
-		snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(ctx, tx, chunk)
-		if err != nil {
-			return 0, err
-		}
-		for id, snapshot := range snapshots {
-			snapshot.Project = recordedProjects[id]
-			if err := upsertSessionProjectIdentitySnapshotExec(ctx, tx, func(ctx context.Context, query string, args ...any) rowScanner {
-				return tx.QueryRowContext(ctx, query, args...)
-			}, snapshot, true); err != nil {
-				return 0, err
-			}
-		}
-	}
 
 	type projectRestore struct {
 		sessionID       string
@@ -1103,7 +1083,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			return 0, err
 		}
 	}
-	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true, recordedProjects); err != nil {
+	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

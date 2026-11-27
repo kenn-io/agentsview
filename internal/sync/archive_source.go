@@ -150,7 +150,6 @@ func (e *Engine) SyncAttachedSource(ctx context.Context, source db.ArchiveSource
 		defer child.Close()
 		child.archiveStore, child.archiveRebuildIndex = e.archiveStore, e.archiveRebuildIndex
 		child.deferredSourceCwd, child.deferredNativeTitles = e.deferredSourceCwd, e.deferredNativeTitles
-		child.deferredRecordedProjects = e.deferredRecordedProjects
 		if progress != nil {
 			progress(Progress{Phase: PhaseSyncing, Detail: "Reading archived session"})
 		}
