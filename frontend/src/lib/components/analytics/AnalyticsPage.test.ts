@@ -16,6 +16,8 @@ import { yokedDates } from "../../stores/yokedDates.svelte.js";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
 // @ts-ignore
+import GettingStarted from "./GettingStarted.svelte";
+// @ts-ignore
 import QualityPage from "../quality/QualityPage.svelte";
 import { requestUrl } from "../../test-support/request-url.js";
 import { MetadataService } from "../../api/generated/index.js";
@@ -1026,7 +1028,7 @@ describe("getting started checklist", () => {
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     sessions.archiveEmpty = true;
-    component = mount(AnalyticsPage, { target: document.body });
+    component = mount(GettingStarted, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
     document
@@ -1047,7 +1049,7 @@ describe("getting started checklist", () => {
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     sessions.archiveEmpty = true;
-    component = mount(AnalyticsPage, { target: document.body });
+    component = mount(GettingStarted, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")).not.toBeNull();
     sessions.sessions = [sidebarIndexRowToSession({
@@ -1074,7 +1076,7 @@ describe("getting started checklist", () => {
     );
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
-    component = mount(AnalyticsPage, { target: document.body });
+    component = mount(GettingStarted, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")).toBeNull();
     sessions.archiveEmpty = true;

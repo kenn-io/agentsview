@@ -5,6 +5,7 @@ import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
+import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
 import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
@@ -104,6 +105,7 @@ afterEach(() => {
   router.isRootPath = false;
   sessions.activeSessionId = null;
   sessions.archiveEmpty = false;
+  gettingStarted.done = new Set();
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -819,6 +821,7 @@ describe("App root Sessions landing", () => {
 
     expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
     expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
+    expect(document.body.querySelector(".getting-started") !== null).toBe(empty);
   });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
