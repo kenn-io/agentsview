@@ -51,7 +51,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   document.body.innerHTML = "";
   localStorage.clear();
-  sessions.sessions = [];
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};

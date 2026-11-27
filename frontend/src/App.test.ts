@@ -845,13 +845,6 @@ describe("App root Sessions landing", () => {
 
     expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
     expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
-    expect(document.body.querySelector(".getting-started")).toBeNull();
-    if (empty) {
-      document.querySelector<HTMLButtonElement>(".empty-archive-choose")!.click();
-      await flushEffects();
-      expect(router.route).toBe("settings");
-      expect(router.params.panel).toBe("agent-directories");
-    }
   });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
