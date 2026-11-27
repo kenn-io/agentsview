@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func insertPGFrictionFindings(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx pgSessionExecer, sessionID string,
 	findings []db.FrictionFinding,
 ) error {
 	const batch = 50
@@ -56,7 +55,7 @@ func insertPGFrictionFindings(
 // pushFrictionFindings replaces one session's findings in the push
 // transaction. PostgreSQL created_at records the push time.
 func (s *Sync) pushFrictionFindings(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx pgSessionExecer, sessionID string,
 ) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM friction_findings WHERE session_id = $1`, sessionID)

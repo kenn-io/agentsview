@@ -1231,6 +1231,39 @@ missing indexes automatically. Each first build scans `sessions` and blocks
 writes until installation commits. Restricted publishers keep writing before
 owner installation, using the existing queries until the indexes are available.
 
+### PostgreSQL push batches for new sessions
+
+A push writes sessions in transactions of up to 50. Within each transaction,
+sessions PostgreSQL has no row for are written with pipelined pgx batches
+(`newSessionBatch`), so a first load costs a few round trips per 50 sessions
+instead of about 20 per session. The batch reuses the sequential writers and
+their SQL. It skips only reads that cannot find anything for a session with no
+row: the ownership check, the pin snapshot, and image text, because those
+tables reference `sessions`. The existence check, exclusions, and published
+commit links (which can outlive their session) are read once per transaction.
+
+Sessions keep their order within the transaction. Queued statements are sent
+before any session that takes the sequential path, because a session's upsert
+can read rows an earlier session wrote, such as a Codex thread's trash state.
+The batch also sends early once it holds 8 MiB, even partway through a
+transcript.
+
+The batch confirms that each session was still new when written. Its session
+upsert is insert-only (`pgSessionWriteOptions.InsertOnly`), so a row another
+push created after the existence check reports no affected rows instead of
+being overwritten without reconciling its pins, image text, and commit links.
+The last batch also checks that no exclusion applies to any of the sessions'
+tombstone IDs, as the sequential path does after its upsert.
+
+Sessions PostgreSQL already has, sessions an exclusion may apply to, and
+usage-only archives keep the sequential path. If any batched statement fails,
+or a session's upsert does not create its row, the transaction rolls back and is
+rewritten one statement at a time, which applies the usual per-session error
+handling; a session that fails this way is retried alone, batched and then
+sequentially. The batch's writers report zero affected rows for every statement,
+which is the true count only because nothing exists to delete for a new
+session; do not queue writes for sessions PostgreSQL already has.
+
 ### PostgreSQL schema step reuse
 
 A push starts with a schema step that checks every table, column, and index the

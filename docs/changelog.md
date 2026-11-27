@@ -9,6 +9,14 @@ The latest release is
 
 ## Unreleased
 
+**Improvements**
+
+- `replica pg push` loads new sessions into PostgreSQL much faster over slow or
+  distant links. It used to wait for about 20 round trips per session; it now
+  sends each group of up to 50 new sessions in a few round trips. With 100 ms
+  of latency, a test push of new sessions went from about 27 to about 1,100
+  sessions a minute. Pushes of sessions already in PostgreSQL work as before.
+
 **Bug fixes**
 
 - Reporting schema 7 lets integrations count shared Cursor billing events once

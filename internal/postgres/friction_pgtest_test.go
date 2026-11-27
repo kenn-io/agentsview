@@ -246,7 +246,7 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 				).Scan(&markerID))
 				var pushed []db.Session
 				rewriteMessages := mode == "messages"
-				result, err := ps.pushBatchAttempt(ctx, sessions, rewriteMessages, markerID, nil, nil, nil, &pushed, rewriteMessages)
+				result, err := ps.pushBatchAttempt(ctx, sessions, rewriteMessages, markerID, nil, nil, nil, &pushed, rewriteMessages, true)
 				require.NoError(t, err)
 				require.True(t, result.ok)
 				require.Equal(t, 1, result.sessions)
