@@ -128,10 +128,7 @@ func (in *SessionSignalRefreshInput) RefreshIfChanged(
 		in.LastAssistantText = lastContent
 	}
 	next := RecomputeSignalsForAutomationChange(*in, now)
-	if next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScore, curGrade) {
-		return next, false
-	}
-	return next, true
+	return next, !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScore, curGrade)
 }
 
 // RecomputeSignalsForAutomationChange derives outcome, recency, and health

@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 )
@@ -101,4 +103,91 @@ func TestRawProjectionCodexCloudRebuiltMirrorKeepsHistory(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, map[string]bool{m1.ManifestID: false, m2.ManifestID: true, m3.ManifestID: true}, contributed,
 		"the kept transcript and the carried token counts come from the previous projection")
+}
+
+func TestRawProjectionCodexCloudPreserveUsesCurrentAutomationAfterAudit(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	initial := codexCloudProjection(2, false, nil)
+	initial.Outcome.Results[0].Result.Messages[0].Content = prompt
+	initial.Outcome.Results[0].Result.Messages[1].Content = "Looks good."
+
+	m1, accepted := f.accept(t, "device-a", "codex-cloud-review", "", parser.AgentCodexCloud)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m1), m1, initial))
+	before, err := f.sink.Resolve(ctx, "codex-cloud:thread-a")
+	require.NoError(t, err)
+
+	// Simulate pre-upgrade state where this two-message Codex Cloud review was
+	// stored as non-automated with completed/medium outcome and a scored health
+	// grade, including an obsolete IsAutomated=false in both the retained
+	// payload and the branch's prior_payload.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE sessions
+		 SET is_automated = FALSE,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     health_score = 100,
+		     health_grade = 'A'
+		 WHERE id = $1`, before.SessionID,
+	)
+	require.NoError(t, err)
+	var rawBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id = $1`, before.SessionID,
+	).Scan(&rawBytes))
+	preUpgrade, err := decodeRawPayload(rawBytes)
+	require.NoError(t, err)
+	preUpgrade.Session.IsAutomated = false
+	preUpgradeBytes, err := encodeRawPayload(preUpgrade)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_content_revisions
+		 SET payload = $2,
+		     recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
+		 WHERE session_id = $1`, before.SessionID, preUpgradeBytes,
+	)
+	require.NoError(t, err)
+	priorMetaBytes, err := encodeRawPayload(ingest.PreparedSession{Session: preUpgrade.Session})
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_session_branches SET prior_payload = $2 WHERE session_id = $1`, before.SessionID, priorMetaBytes,
+	)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+
+	// Uploading a shorter rebuilt mirror triggers HistoryPreserve and must keep
+	// the audited unknown/low outcome and nil health without rewriting payload.
+	m2, _ := f.accept(t, "device-a", "codex-cloud-mirror", accepted.Receipt, parser.AgentCodexCloud)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m2), m2, codexCloudProjection(0, false,
+		&parser.ParsedPlanUsage{OutcomeKind: "left_out"})))
+
+	after, err := f.sink.Resolve(ctx, "codex-cloud:thread-a")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, after.SessionID, "preserving history must keep the same session ID")
+
+	var afterBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id = $1`, after.SessionID,
+	).Scan(&afterBytes))
+	assert.Equal(t, preUpgradeBytes, afterBytes, "preserving history must leave stored payload unchanged")
+
+	var isAutomated bool
+	var gotOutcome, gotConfidence string
+	var gotScore *int
+	var gotGrade *string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade
+		 FROM sessions WHERE id = $1`, after.SessionID,
+	).Scan(&isAutomated, &gotOutcome, &gotConfidence, &gotScore, &gotGrade))
+	assert.True(t, isAutomated)
+	assert.Equal(t, "unknown", gotOutcome)
+	assert.Equal(t, "low", gotConfidence)
+	assert.Nil(t, gotScore)
+	assert.Nil(t, gotGrade)
 }

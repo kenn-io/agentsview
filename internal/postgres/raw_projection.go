@@ -206,6 +206,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		var prepared ingest.PreparedSession
+		var signalSession db.Session
+		var hasSignalSession bool
 		if decision.Action == ingest.HistoryPreserve {
 			if err := loadOld(ctx); err != nil {
 				return err
@@ -216,6 +218,22 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			} else if prepared.Signals.ToolObservations == nil {
 				prepared.Signals.ToolObservations = ingest.ComputeToolObservations(prepared.Session, ingest.ExtractToolCallRows(prepared.Messages))
 			}
+			// Refresh preserved signals with current automation status under the
+			// group lock while keeping prepared.Session, payload, and content
+			// revision unchanged.
+			signalSession = prepared.Session
+			var currentAutomated bool
+			err = tx.QueryRowContext(ctx, `SELECT is_automated FROM sessions WHERE id=$1`, previous.CapturedSession).Scan(&currentAutomated)
+			if err == nil {
+				signalSession.IsAutomated = currentAutomated
+			} else if errors.Is(err, sql.ErrNoRows) {
+				signalSession.IsAutomated = refreshRawSessionAutomation(
+					prepared.Session, prepared.Messages, s.options.Content.ArchiveContent.UsageOnly(),
+				)
+			} else {
+				return err
+			}
+			hasSignalSession = true
 		} else {
 			prepared, err = ingest.Finalize(ctx, decision.Candidate, s.options.Content)
 			if err != nil {
@@ -231,7 +249,10 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				}
 			}
 		}
-		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
+		if !hasSignalSession {
+			signalSession = prepared.Session
+		}
+		prepared.Signals = ingest.RefreshSignalRecencyAt(signalSession, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
 		if err != nil {
 			return err

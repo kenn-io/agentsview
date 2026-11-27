@@ -156,13 +156,7 @@ func backfillIsAutomatedPGCore(
 	var verdicts []automationVerdictPG
 	var candidateIDs []string
 	var changedAutomationIDs []string
-	appendChanged := func(batch []automationVerdictPG) {
-		for _, v := range batch {
-			if v.changed {
-				changedAutomationIDs = append(changedAutomationIDs, v.id)
-			}
-		}
-	}
+	var reconciled bool
 	var err error
 	fullReconcile := stored != current
 	if tracking {
@@ -180,21 +174,12 @@ func backfillIsAutomatedPGCore(
 			if err != nil {
 				return err
 			}
-			var batchChanged []string
-			for _, v := range batch {
-				if v.changed {
-					batchChanged = append(batchChanged, v.id)
-				}
-			}
-			if err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
-				if err := writeAutomationVerdictsPG(ctx, exec, batch, column, current); err != nil {
-					return err
-				}
-				return refreshSessionSignalsPG(ctx, exec, batchChanged, true, current, hosted)
-			}); err != nil {
+			ids, chunkReconciled, err := applyVerdictBatchPG(ctx, pg, batch, chunk, column, current, true, hosted)
+			if err != nil {
 				return err
 			}
-			appendChanged(batch)
+			changedAutomationIDs = append(changedAutomationIDs, ids...)
+			reconciled = reconciled || chunkReconciled
 			return nil
 		}); err != nil {
 			return progress, false, nil, err
@@ -209,26 +194,17 @@ func backfillIsAutomatedPGCore(
 	}
 	for start := 0; start < len(verdicts); start += 500 {
 		batch := verdicts[start:min(start+500, len(verdicts))]
-		var batchChanged []string
-		for _, v := range batch {
-			if v.changed {
-				batchChanged = append(batchChanged, v.id)
-			}
-		}
-		if err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
-			if err := writeAutomationVerdictsPG(ctx, exec, batch, column, ""); err != nil {
-				return err
-			}
-			return refreshSessionSignalsPG(ctx, exec, batchChanged, false, "", hosted)
-		}); err != nil {
+		ids, _, err := applyVerdictBatchPG(ctx, pg, batch, nil, column, "", false, hosted)
+		if err != nil {
 			return progress, false, nil, err
 		}
-		appendChanged(batch)
+		changedAutomationIDs = append(changedAutomationIDs, ids...)
 	}
-	reconciled, err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, column, fullReconcile, candidateIDs, hosted)
+	remainingReconciled, err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, column, fullReconcile, hosted)
 	if err != nil {
 		return progress, false, nil, err
 	}
+	reconciled = reconciled || remainingReconciled
 
 	if _, err := pg.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
@@ -244,6 +220,39 @@ func backfillIsAutomatedPGCore(
 	return progress, len(changedAutomationIDs) > 0 || reconciled, changedAutomationIDs, nil
 }
 
+func applyVerdictBatchPG(
+	ctx context.Context, pg storeExecutor, batch []automationVerdictPG, chunk []string,
+	column, hash string, tracking, hosted bool,
+) ([]string, bool, error) {
+	var batchChanged []string
+	for _, v := range batch {
+		if v.changed {
+			batchChanged = append(batchChanged, v.id)
+		}
+	}
+	var reconciled bool
+	err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
+		if err := writeAutomationVerdictsPG(ctx, exec, batch, column, hash); err != nil {
+			return err
+		}
+		if err := refreshSessionSignalsPG(ctx, exec, batchChanged, tracking, hash, hosted); err != nil {
+			return err
+		}
+		if tracking {
+			chunkReconciled, err := reconcileParentlessWorkersChunkPG(ctx, exec, chunk, hash, column, hosted)
+			if err != nil {
+				return err
+			}
+			reconciled = chunkReconciled
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return batchChanged, reconciled, nil
+}
+
 func withOptionalTxPG(ctx context.Context, pg storeExecutor, fn func(storeExecutor) error) error {
 	dbConn, ok := pg.(*sql.DB)
 	if !ok {
@@ -251,13 +260,16 @@ func withOptionalTxPG(ctx context.Context, pg storeExecutor, fn func(storeExecut
 	}
 	tx, err := dbConn.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("starting PG automation update transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing PG automation update batch: %w", err)
+	}
+	return nil
 }
 
 func refreshSessionSignalsPG(
@@ -477,53 +489,75 @@ func parentlessWorkerStepsPG(hosted bool) []parentlessWorkerStepPG {
 	}
 }
 
-// reconcileParentlessWorkersPG applies relationship changes that follow the
-// automation verdicts. With audit tracking it touches only rows whose current
-// version the audit verified (automation_audit_hash = hash), and restamps the
-// rows it changed through their new row versions, so a push that lands in
-// between leaves its row unstamped for the next audit.
-func reconcileParentlessWorkersPG(
-	ctx context.Context, pg storeExecutor, tracking bool, hash, column string, fullReconcile bool, candidateIDs []string, hosted bool,
+// reconcileParentlessWorkersChunkPG reconciles parentless-worker relationships
+// for one audited chunk inside the same transaction that wrote the chunk's
+// automation verdicts, refreshed signals, and audit hash stamp.
+func reconcileParentlessWorkersChunkPG(
+	ctx context.Context, exec storeExecutor, chunk []string, hash, column string, hosted bool,
 ) (bool, error) {
+	if len(chunk) == 0 {
+		return false, nil
+	}
 	var verdicts []automationVerdictPG
-	var reconciled bool
+	returning := ` RETURNING id, ` + column + `::text, is_automated`
 	for _, step := range parentlessWorkerStepsPG(hosted) {
-		query := step.query
-		if !tracking {
-			res, err := pg.ExecContext(ctx, query)
+		changed, err := queryAutomationVerdictsPG(
+			ctx, exec, step.query+` AND automation_audit_hash = $1 AND id = ANY($2)`+returning, hash, chunk,
+		)
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", step.action, err)
+		}
+		verdicts = append(verdicts, changed...)
+	}
+	if err := writeAutomationVerdictsPG(ctx, exec, verdicts, column, hash); err != nil {
+		return false, err
+	}
+	return len(verdicts) > 0, nil
+}
+
+// reconcileParentlessWorkersPG applies remaining relationship changes after
+// chunk verdicts. With audit tracking, every candidate chunk has already been
+// reconciled atomically inside applyVerdictBatchPG, so this only covers
+// bounded/full-reconcile steps on already-stamped rows inside one transaction.
+func reconcileParentlessWorkersPG(
+	ctx context.Context, pg storeExecutor, tracking bool, hash, column string, fullReconcile bool, hosted bool,
+) (bool, error) {
+	if !tracking {
+		var reconciled bool
+		for _, step := range parentlessWorkerStepsPG(hosted) {
+			res, err := pg.ExecContext(ctx, step.query)
 			if err != nil {
 				return false, fmt.Errorf("%s: %w", step.action, err)
 			}
 			if n, err := res.RowsAffected(); err == nil && n > 0 {
 				reconciled = true
 			}
-			continue
 		}
-		query += ` AND automation_audit_hash = $1`
+		return reconciled, nil
+	}
+	var reconciled bool
+	err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
+		var verdicts []automationVerdictPG
 		returning := ` RETURNING id, ` + column + `::text, is_automated`
-		if step.bounded || fullReconcile {
-			changed, err := queryAutomationVerdictsPG(ctx, pg, query+returning, hash)
-			if err != nil {
-				return false, fmt.Errorf("%s: %w", step.action, err)
+		for _, step := range parentlessWorkerStepsPG(hosted) {
+			if !step.bounded && !fullReconcile {
+				continue
 			}
-			verdicts = append(verdicts, changed...)
-			continue
-		}
-		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
-			changed, err := queryAutomationVerdictsPG(ctx, pg, query+` AND id = ANY($2)`+returning, hash, chunk)
+			changed, err := queryAutomationVerdictsPG(
+				ctx, exec, step.query+` AND automation_audit_hash = $1`+returning, hash,
+			)
 			if err != nil {
 				return fmt.Errorf("%s: %w", step.action, err)
 			}
 			verdicts = append(verdicts, changed...)
-			return nil
-		}); err != nil {
-			return false, err
 		}
-	}
-	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, hash); err != nil {
-		return false, err
-	}
-	return reconciled || len(verdicts) > 0, nil
+		if err := writeAutomationVerdictsPG(ctx, exec, verdicts, column, hash); err != nil {
+			return err
+		}
+		reconciled = len(verdicts) > 0
+		return nil
+	})
+	return reconciled, err
 }
 
 // reconcileRawSpawnLinks updates materialized raw sessions in the affected

@@ -4797,9 +4797,6 @@ func (db *DB) ForceBackfillIsAutomated(ctx context.Context) error {
 func batchUpdateAutomated(ctx context.Context,
 	w *writerHandle, ids []string, val int,
 ) error {
-	if len(ids) == 0 {
-		return nil
-	}
 	const batchSize = 500
 	now := time.Now().UTC()
 	for i := 0; i < len(ids); i += batchSize {

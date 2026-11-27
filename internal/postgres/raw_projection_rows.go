@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"reflect"
 	"strings"
 	"time"
@@ -386,9 +385,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 		return err
 	}
 	if !s.options.Content.ArchiveContent.UsageOnly() {
-		// Standalone callers such as TestRawProjectionTranscriptsOnlyToolCoverage
-		// invoke writePayload before inserting a raw_content_revisions row.
-		if _, err := publishRawRecency(ctx, tx, id, p.Signals); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if _, err := publishRawRecency(ctx, tx, id, p.Signals); err != nil {
 			return err
 		}
 	}

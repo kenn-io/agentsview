@@ -586,18 +586,25 @@ func TestAutomationAuditPGLeavesConcurrentPushUnstamped(t *testing.T) {
 	cfg, err := pgx.ParseConfig(url)
 	require.NoError(t, err)
 	cfg.RuntimeParams["search_path"] = "agentsview"
-	// A push lands between the audit's clear and its stamp, replacing the
-	// prompt the audit classified.
+	// A push lands concurrently while the audit's transaction clears the worker,
+	// replacing the prompt the audit classified.
+	pushDone := make(chan error, 1)
 	tracer := &reconcileClearTracer{after: func() {
-		_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
-			SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
-		require.NoError(t, err)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
+				SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
+			pushDone <- err
+		}()
+		<-started
 	}}
 	cfg.Tracer = tracer
 	audit := stdlib.OpenDB(*cfg)
 	defer audit.Close()
 	require.NoError(t, backfillIsAutomatedPG(t.Context(), audit))
 	require.Nil(t, tracer.after, "the audit cleared the worker")
+	require.NoError(t, <-pushDone)
 
 	var hash *string
 	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
@@ -762,4 +769,77 @@ func TestAutomationAuditPGSignalRefreshFailureRollsBackAndRetries(t *testing.T) 
 	assert.Equal(t, "low", confidence)
 	assert.Nil(t, score)
 	assert.Nil(t, grade)
+}
+
+func TestAutomationAuditPGRelationshipFailureRollsBackAndRetries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	// Classifier hash is already current so a retry only revisits unstamped rows.
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, relationship_type, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-rel-retry', 'host', 'project', 'claude', 'sdk-cli', 'subagent', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-rel-retry', 0, 'user', $1),
+		('review-rel-retry', 1, 'assistant', 'Looks good.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = ps.DB().ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION fail_pg_rel_clear() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = 'review-rel-retry' AND COALESCE(NEW.relationship_type, '') = '' THEN
+				RAISE EXCEPTION 'simulated PG relationship reconciliation failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER trg_fail_pg_rel_clear
+		BEFORE UPDATE OF relationship_type ON sessions
+		FOR EACH ROW EXECUTE FUNCTION fail_pg_rel_clear();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.Error(t, err)
+
+	var automated bool
+	var rel, outcome string
+	var auditHash *string
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, relationship_type, outcome, automation_audit_hash FROM sessions WHERE id = 'review-rel-retry'`,
+	).Scan(&automated, &rel, &outcome, &auditHash))
+	assert.False(t, automated, "failed relationship update must roll back is_automated")
+	assert.Equal(t, "subagent", rel)
+	assert.Equal(t, "completed", outcome)
+	assert.Nil(t, auditHash, "failed relationship update must leave automation_audit_hash unstamped")
+
+	_, err = ps.DB().ExecContext(ctx, `DROP TRIGGER trg_fail_pg_rel_clear ON sessions; DROP FUNCTION fail_pg_rel_clear();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, relationship_type, outcome, automation_audit_hash FROM sessions WHERE id = 'review-rel-retry'`,
+	).Scan(&automated, &rel, &outcome, &auditHash))
+	assert.True(t, automated)
+	assert.Empty(t, rel)
+	assert.Equal(t, "unknown", outcome)
+	assert.NotNil(t, auditHash)
 }
