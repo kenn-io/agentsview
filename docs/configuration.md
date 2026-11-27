@@ -783,8 +783,9 @@ AgentsView reads without writing to or migrating the database.
 `<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. Roborev can
 record the run's label in `roborev.json` inside the run home. AgentsView uses
 that label as the project on a full parse. A later incremental sync, repository
-project repair, or archive rebuild can replace it until the next full parse. Older runs and runs without a valid
-label use the label path. If the file cannot be read, sync retries the session.
+project repair, or archive rebuild can replace it until the next full parse.
+If the file is missing or its label is invalid, AgentsView uses the label path.
+If an existing file cannot be read, parsing fails and sync retries the session.
 A worktree mapping or an assigned project takes precedence.
 
 **Augure Code.** Augure Code reads Codex-format JSONL from
