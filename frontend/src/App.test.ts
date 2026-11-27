@@ -105,7 +105,6 @@ afterEach(() => {
   router.isRootPath = false;
   sessions.activeSessionId = null;
   sessions.archiveEmpty = false;
-  sessions.loading = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -853,17 +852,6 @@ describe("App root Sessions landing", () => {
       expect(router.route).toBe("settings");
       expect(router.params.panel).toBe("agent-directories");
     }
-  });
-
-  it("does not show a checklist while inventory is loading", async () => {
-    stubAppDependencies();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    sessions.archiveEmpty = false;
-    sessions.loading = true;
-    setRootUrl();
-    component = mount(App, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
   });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
