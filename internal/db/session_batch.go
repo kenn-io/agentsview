@@ -74,7 +74,6 @@ func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrit
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.ArchiveContent().OmitsToolContent() {
 		write.Signals.ToolObservations = []ToolObservation{}
-		write.Checkpoint, write.CheckpointBlobs = nil, nil
 	}
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(write.Session, write.Messages)
 	if db.usageOnlyStorage() {
@@ -737,7 +736,7 @@ func (db *DB) writeOneSessionBatchTx(
 			blobs := *write.CheckpointBlobs
 			checkpoint.SessionID = write.Session.ID
 			blobs.SessionID = write.Session.ID
-			if err := upsertParserCheckpointTx(tx, checkpoint, blobs); err != nil {
+			if err := db.upsertParserCheckpointTx(ctx, tx, checkpoint, blobs); err != nil {
 				return 0, err
 			}
 		}

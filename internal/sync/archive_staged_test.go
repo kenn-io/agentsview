@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,10 +57,19 @@ func TestCodexStagedArchiveProjection(t *testing.T) {
 			findings, err := database.SessionSecretFindings(t.Context(), id)
 			require.NoError(t, err)
 			assert.Empty(t, findings)
-			// Resumable SHA state may include raw trailing transcript bytes.
-			_, found, err := database.GetParserCheckpointBlobs(t.Context(), id)
+			// Usage archives keep no Codex cursor. Transcript archives keep the
+			// SHA state only at a block boundary, where it buffers no bytes.
+			blobs, found, err := database.GetParserCheckpointBlobs(t.Context(), id)
 			require.NoError(t, err)
-			assert.False(t, found)
+			if policy.UsageOnly() {
+				assert.False(t, found)
+				return
+			}
+			require.True(t, found)
+			paths, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "*.jsonl"))
+			require.NoError(t, err)
+			require.Len(t, paths, 1)
+			requireBlockAlignedState(t, paths[0], blobs.HashState)
 		})
 	}
 }

@@ -1840,7 +1840,6 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	update.ToolCallResultUpdates = db.toolCallResultUpdatesForStorage(update.ToolCallResultUpdates)
 	if db.ArchiveContent().OmitsToolContent() {
 		policy = config.ToolResultImagesKeep
-		update.Checkpoint, update.CheckpointBlobs = nil, nil
 	}
 
 	t := time.Now()
@@ -1959,8 +1958,8 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		return false, err
 	}
 	if update.Checkpoint != nil && update.CheckpointBlobs != nil {
-		if err := upsertParserCheckpointTx(
-			tx, *update.Checkpoint, *update.CheckpointBlobs,
+		if err := db.upsertParserCheckpointTx(
+			ctx, tx, *update.Checkpoint, *update.CheckpointBlobs,
 		); err != nil {
 			return false, err
 		}
@@ -2613,7 +2612,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if db.ArchiveContent().OmitsToolContent() {
 		signals.ToolObservations = []ToolObservation{}
-		cp, blobs = nil, nil
 	}
 
 	db.mu.Lock()
@@ -2733,7 +2731,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		// shares the same native id.
 		c.SessionID = sessionID
 		b.SessionID = sessionID
-		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+		if err := db.upsertParserCheckpointTx(ctx, tx, c, b); err != nil {
 			return err
 		}
 	}

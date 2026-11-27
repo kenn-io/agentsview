@@ -55,8 +55,8 @@ type codexCheckpointResult struct {
 	// seed is the persisted parser cursor for the append resume; loaded
 	// lazily from the checkpoint blobs only on the append branch.
 	seed []byte
-	// hashState is the resumable SHA-256 state through the committed
-	// prefix, ready for the incremental resume to continue from.
+	// hashState is the resumable SHA-256 state, ready for the incremental
+	// resume to continue from the offset it records.
 	hashState []byte
 }
 
@@ -76,7 +76,7 @@ func (e *Engine) codexCheckpointFingerprint(
 	file parser.DiscoveredFile,
 ) (codexCheckpointResult, error) {
 	res := codexCheckpointResult{decision: codexCheckpointFallback}
-	if e.db.ArchiveContent().OmitsToolContent() ||
+	if !e.checkpointKept(file.Agent) ||
 		e.forceParseRequested(file) || e.checkpointAudit.Load() {
 		// Audit mode deliberately bypasses the checkpoint gate so the
 		// provider's full-source fingerprint can verify content and repair
@@ -215,15 +215,17 @@ func (e *Engine) codexCheckpointFingerprint(
 		res.decision = codexCheckpointInvalid
 		return res, nil
 	}
-	stateDigest, err := codexHashStateDigest(blobs.HashState)
-	if err != nil || stateDigest != cp.Hash {
+	// Restricted archives save the state at the last block boundary before
+	// the offset; resuming re-reads the bytes between them.
+	stateOffset, ok := db.SHA256StateOffset(blobs.HashState)
+	if !ok || stateOffset > cp.Offset || cp.Offset-stateOffset >= sha256.BlockSize {
 		res.decision = codexCheckpointInvalid
-		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
+		return res, nil
 	}
-	_, hash, err := codexResumeHash(
-		path, cp.Offset, info.Size(), blobs.HashState,
+	prefixHash, hash, err := resumeHashDigests(
+		path, stateOffset, cp.Offset, info.Size(), blobs.HashState,
 	)
-	if err != nil {
+	if err != nil || prefixHash != cp.Hash {
 		res.decision = codexCheckpointInvalid
 		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
 	}
@@ -341,6 +343,43 @@ func codexResumeHash(
 	return newState, hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// checkpointKept reports whether the archive policy keeps the agent's
+// checkpoints. Archives that omit tool content keep Claude's cursorless
+// checkpoints, and transcript archives also keep Codex cursors, which hold
+// only metadata those archives already store.
+func (e *Engine) checkpointKept(agent parser.AgentType) bool {
+	content := e.db.ArchiveContent()
+	return !content.OmitsToolContent() || agent == parser.AgentClaude ||
+		(isCodexFormatAgent(agent) && !content.UsageOnly())
+}
+
+// resumeHashDigests restores state at stateOffset and reads the file once,
+// returning the digests through prefixEnd and through size.
+func resumeHashDigests(
+	path string, stateOffset, prefixEnd, size int64, state []byte,
+) (string, string, error) {
+	h := sha256.New()
+	if err := h.(encoding.BinaryUnmarshaler).UnmarshalBinary(state); err != nil {
+		return "", "", fmt.Errorf("restoring hash state: %w", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+	if _, err := f.Seek(stateOffset, io.SeekStart); err != nil {
+		return "", "", err
+	}
+	if _, err := io.CopyN(h, f, prefixEnd-stateOffset); err != nil {
+		return "", "", fmt.Errorf("hashing %s to %d: %w", path, prefixEnd, err)
+	}
+	prefix := hex.EncodeToString(h.Sum(nil))
+	if _, err := io.CopyN(h, f, size-prefixEnd); err != nil {
+		return "", "", fmt.Errorf("hashing %s to %d: %w", path, size, err)
+	}
+	return prefix, hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // codexHashStateDigest finalizes a resumable SHA-256 state into its digest.
 func codexHashStateDigest(state []byte) (string, error) {
 	h := sha256.New()
@@ -361,8 +400,7 @@ func codexHashStateDigest(state []byte) (string, error) {
 func (e *Engine) buildCodexFullParseCheckpoint(
 	path string, pw pendingWrite,
 ) (*db.ParserCheckpoint, *db.ParserCheckpointBlobs, error) {
-	if e.db.ArchiveContent().OmitsToolContent() ||
-		len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
+	if len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
 		pw.checkpointAnchorDigest == "" {
 		return nil, nil, nil
 	}
