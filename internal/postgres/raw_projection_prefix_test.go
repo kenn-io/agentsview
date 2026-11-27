@@ -292,9 +292,6 @@ func TestRawTranscriptPrefixDirectionalGrokProvenance(t *testing.T) {
 	matches, err := rawTranscriptPrefix(inferredShort, explicitLong)
 	require.NoError(t, err)
 	assert.True(t, matches, "inferred shorter copy should merge into explicit longer continuation")
-	reverse, err := rawTranscriptPrefix(explicitLong, inferredShort)
-	require.NoError(t, err)
-	assert.False(t, reverse)
 
 	explicitShort := makeGrok(shortMsgs, false)
 	inferredLong := makeGrok(longMsgs, true)

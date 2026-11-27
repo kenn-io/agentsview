@@ -209,21 +209,25 @@ func TestRawProjectionUpgradeIdenticalHeadlessReviewResolvesUniquely(t *testing.
 	assert.Equal(t, 1, distinctSelected, "both branches converge on one selected revision")
 }
 
+func withExtraTurn(o rawderive.ParsedManifest, user, assistant string) rawderive.ParsedManifest {
+	next := o
+	msgs := append([]parser.ParsedMessage(nil), o.Outcome.Results[0].Result.Messages...)
+	msgs = append(msgs,
+		parser.ParsedMessage{Ordinal: len(msgs), Role: parser.RoleUser, Content: user},
+		parser.ParsedMessage{Ordinal: len(msgs) + 1, Role: parser.RoleAssistant, Content: assistant},
+	)
+	next.Outcome.Results = []parser.ParseResultOutcome{{Result: o.Outcome.Results[0].Result}}
+	next.Outcome.Results[0].Result.Messages = msgs
+	return next
+}
+
 func TestRawProjectionWithdrawalRestoresLegacyAutomatedReview(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 
 	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-restore", "review-restore")
-
-	longOutcome := shortOutcome
-	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
-	longMessages = append(longMessages,
-		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Check error paths too."},
-		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Checked."},
-	)
-	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
-	longOutcome.Outcome.Results[0].Result.Messages = longMessages
+	longOutcome := withExtraTurn(shortOutcome, "Check error paths too.", "Checked.")
 
 	b, accepted := f.accept(t, "device-b", "longer-capture", "", parser.AgentClaude)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
@@ -263,15 +267,7 @@ func TestRawProjectionWithdrawalPreservesLegacyAgentSubagent(t *testing.T) {
 	// SourceSessionID has no agent-* prefix, so only the original Session.ID
 	// marks this legacy capture as an explicit Claude subagent.
 	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "agent-legacy-child", "shared-child")
-
-	longOutcome := shortOutcome
-	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
-	longMessages = append(longMessages,
-		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Follow-up turn."},
-		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Done."},
-	)
-	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
-	longOutcome.Outcome.Results[0].Result.Messages = longMessages
+	longOutcome := withExtraTurn(shortOutcome, "Follow-up turn.", "Done.")
 
 	b, accepted := f.accept(t, "device-b", "longer-agent", "", parser.AgentClaude)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
@@ -360,14 +356,7 @@ func TestRawProjectionExplicitProvenanceSplitsMergedGrokCapture(t *testing.T) {
 	a, ar := f.accept(t, "device-a", "grok-short-inferred", "", parser.AgentGrok)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, shortOutcome))
 
-	longOutcome := shortOutcome
-	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
-	longMessages = append(longMessages,
-		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Second turn."},
-		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Second reply."},
-	)
-	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
-	longOutcome.Outcome.Results[0].Result.Messages = longMessages
+	longOutcome := withExtraTurn(shortOutcome, "Second turn.", "Second reply.")
 
 	b, _ := f.accept(t, "device-b", "grok-long-inferred", "", parser.AgentGrok)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
