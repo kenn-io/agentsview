@@ -2491,6 +2491,13 @@ func copySessionDataForIDs(
 			return fmt.Errorf("copying Codex fork provenance: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "codex_cloud_accounts") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO codex_cloud_accounts (session_id, account_key)
+ SELECT copied.id, account.account_key FROM old_db.codex_cloud_accounts account
+ JOIN `+tempIDsTable+` copied ON copied.source_id = account.session_id`); err != nil {
+			return fmt.Errorf("copying Codex cloud accounts: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT OR IGNORE INTO claude_subagent_sources (session_id, file_path) "+

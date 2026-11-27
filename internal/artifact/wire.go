@@ -42,11 +42,13 @@ const (
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session group_key,
-	// v6 adds session pr_links, and v7 adds plan_usage and capture_coverage.
+	// v6 adds session pr_links, v7 adds plan_usage and capture_coverage, and
+	// v8 adds codex_cloud_account.
 	// Older manifests decode with missing fields empty. Export writes the
 	// lowest version that holds the session's fields.
 	manifestPRLinksVersion   = 6
-	manifestFormatVersion    = 7
+	manifestPlanUsageVersion = 7
+	manifestFormatVersion    = 8
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
@@ -149,6 +151,10 @@ type manifest struct {
 	// omit only when nil, so a present but empty value still round-trips.
 	PlanUsage       *artifactPlanUsage       `json:"plan_usage,omitzero"`
 	CaptureCoverage *artifactCaptureCoverage `json:"capture_coverage,omitzero"`
+	// CodexCloudAccount is the account key of the Codex cloud login the chat
+	// was fetched for. The exporter's mirror path names it, and the path
+	// itself stays off the wire.
+	CodexCloudAccount string `json:"codex_cloud_account,omitempty"`
 }
 
 // artifactPlanUsage is the wire form of a session's plan usage report and

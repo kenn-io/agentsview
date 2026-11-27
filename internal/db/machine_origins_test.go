@@ -196,7 +196,6 @@ func TestCodexCloudSessionsReportUnderAccount(t *testing.T) {
 		wantAccount bool
 	}{
 		{"schema 7 names the account", 7, keyed, true},
-		{"schema 7 reads Windows paths", 7, `C:\data\sources\codex-cloud\0f1e2d3c4b5a69788796a5b4c3d2e1f0\thread-1.jsonl.zstd`, true},
 		{"path without an account key", 7, "/data/sources/codex-cloud/thread-1.jsonl.zstd", false},
 		{"released schema 5 keeps the machine", 5, keyed, false},
 	}

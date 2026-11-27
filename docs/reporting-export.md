@@ -47,8 +47,9 @@ agentsview export day --schema-version 5 --by-machine 2026-07-28
 ```
 
 With `--by-machine`, each hour adds `local_machine_id` and a `machines` object.
-The keys in `machines` are originating machine identities, and each value is a
-complete schema 5 hour without nested machine metadata. `local_machine_id` comes
+The keys in `machines` are originating machine identities, apart from the
+reserved `archive:`, `cursor-account:`, and `codex-cloud-account:` keys described
+below. Each value is a complete schema 5 hour without nested machine metadata. `local_machine_id` comes
 from the archive's recorded installation rather than its display label, and any
 recorded machine aliases resolve to their canonical identities. If your archive
 has not recorded its installation identity yet, run `agentsview source sync`
@@ -111,21 +112,30 @@ events once. Schemas 5 and 6 lack the event identities needed for it. Use one
 schema version across reporters. Schema 7 uses the same machine ID hashing as
 schema 6, and also hashes machine IDs starting with `codex-cloud-account:`.
 
+Events without a conversation ID and older rows that have not been fetched
+again retain fingerprint-only ambiguity. Each archive stores one row per
+fingerprint, so two events with the same fingerprint and different conversation
+IDs in one archive still count as one. A later fetch fills a missing conversation
+ID without replacing one already stored.
+
 Schema 7 reports Codex Cloud chats under `codex-cloud-account:<key>`. These
 chats run on OpenAI's servers, and every computer that syncs the same ChatGPT
 login downloads the same chats. `<key>` is the 32-character hex account key
 that AgentsView derives from the login's workspace and user IDs, and it names
 the folder that holds the login's chats under `<data dir>/sources/codex-cloud/`.
 Every computer that syncs the login uses the same key, so a consumer that keeps
-one snapshot per origin and UTC hour counts each chat once. A chat whose stored
-file path does not name its account key, and every Codex Cloud chat in schemas
-5 and 6, stays under the machine that synced it.
+one snapshot per origin and UTC hour counts each chat once. A chat imported
+through [artifact folder sync](artifact-sync.md) keeps the key of the computer
+that fetched it. A chat with no recorded key, and every Codex Cloud chat in
+schemas 5 and 6, stays under the machine that synced it.
 
-Events without a conversation ID and older rows that have not been fetched
-again retain fingerprint-only ambiguity. Each archive stores one row per
-fingerprint, so two events with the same fingerprint and different conversation
-IDs in one archive still count as one. A later fetch fills a missing conversation
-ID without replacing one already stored.
+A `codex-cloud-account:<key>` part is not a machine identity. Computers that
+sync the same login can hold different chats for an hour, for example when one
+has not synced recently, so their parts for that key can differ. The parts carry
+no fetch time, so AgentsView gives no rule for choosing between them. A copy
+from a computer that synced less recently can be missing chats. Project keys
+for projects known only by label differ between archives, so the digests of
+two complete copies can differ too.
 
 Your downstream integration can pick one snapshot per originating machine and
 UTC hour before summing totals. Dropping an entire overlapping archive would

@@ -115,10 +115,16 @@ func codexCloudThreadIDFromPath(_, path string) string {
 func CodexCloudAccountFromPath(path string) string {
 	dir := path[:max(strings.LastIndexAny(path, `/\`), 0)]
 	key := dir[strings.LastIndexAny(dir, `/\`)+1:]
-	if len(key) != 32 || strings.Trim(key, "0123456789abcdef") != "" {
+	if !IsCodexCloudAccountKey(key) {
 		return ""
 	}
 	return key
+}
+
+// IsCodexCloudAccountKey reports whether key has the form of a Codex cloud
+// account key: 32 lowercase hex characters.
+func IsCodexCloudAccountKey(key string) bool {
+	return len(key) == 32 && strings.Trim(key, "0123456789abcdef") == ""
 }
 
 func codexCloudParseFile(

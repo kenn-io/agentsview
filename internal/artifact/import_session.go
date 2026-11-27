@@ -7,6 +7,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type importClosureOutcome uint8
@@ -221,6 +222,10 @@ func validateImportedManifest(
 	if len(m.UsageEvents) > limits.manifestUsageEvents {
 		return errors.New("manifest usage event limit exceeded")
 	}
+	if m.CodexCloudAccount != "" && (m.Session.Agent != string(parser.AgentCodexCloud) ||
+		!parser.IsCodexCloudAccountKey(m.CodexCloudAccount)) {
+		return errors.New("manifest Codex cloud account is invalid")
+	}
 	return ValidateRawSource(m.RawSource)
 }
 
@@ -333,13 +338,14 @@ func rewriteManifestForImport(
 	signals := signalsFromImportedSession(session)
 	signals.ToolObservations = ingest.ComputeToolObservations(session, ingest.ExtractToolCallRows(messages))
 	return db.SessionBatchWrite{
-		Session:         session,
-		Messages:        messages,
-		UsageEvents:     importedUsageEvents(m.UsageEvents, importedID),
-		PlanUsage:       importedPlanUsage(m),
-		Signals:         signals,
-		DataVersion:     m.DataVersion,
-		ReplaceMessages: true,
+		Session:           session,
+		Messages:          messages,
+		UsageEvents:       importedUsageEvents(m.UsageEvents, importedID),
+		PlanUsage:         importedPlanUsage(m),
+		CodexCloudAccount: m.CodexCloudAccount,
+		Signals:           signals,
+		DataVersion:       m.DataVersion,
+		ReplaceMessages:   true,
 	}
 }
 

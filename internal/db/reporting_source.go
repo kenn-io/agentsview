@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -402,9 +403,10 @@ func reportingCreatedAtFrom(
 	return rawValues, parsedValues, nil
 }
 
-// reportingCodexCloudAccountsFrom maps each Codex cloud session to the
-// account key named by its mirror file's directory. A session whose stored
-// path names no key is left out and stays under its machine.
+// reportingCodexCloudAccountsFrom maps each Codex cloud session to its
+// account key: the directory of its mirror file, or for a chat imported
+// from another computer's artifacts, the key import recorded. A session
+// with neither is left out and stays under its machine.
 func reportingCodexCloudAccountsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
@@ -420,7 +422,9 @@ func reportingCodexCloudAccountsFrom(
 	err := queryChunked(ids, func(chunk []string) error {
 		placeholders, args := InPlaceholders(chunk)
 		rows, err := q.QueryContext(ctx,
-			`SELECT id, COALESCE(file_path, '') FROM sessions WHERE id IN `+placeholders,
+			`SELECT s.id, COALESCE(s.file_path, ''), COALESCE(a.account_key, '')
+			FROM sessions s LEFT JOIN codex_cloud_accounts a ON a.session_id = s.id
+			WHERE s.id IN `+placeholders,
 			args...,
 		)
 		if err != nil {
@@ -428,11 +432,11 @@ func reportingCodexCloudAccountsFrom(
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, path string
-			if err := rows.Scan(&id, &path); err != nil {
+			var id, path, imported string
+			if err := rows.Scan(&id, &path, &imported); err != nil {
 				return fmt.Errorf("scanning reporting Codex cloud account: %w", err)
 			}
-			if account := parser.CodexCloudAccountFromPath(path); account != "" {
+			if account := cmp.Or(parser.CodexCloudAccountFromPath(path), imported); account != "" {
 				accounts[id] = account
 			}
 		}

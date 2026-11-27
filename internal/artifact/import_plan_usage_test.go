@@ -1,7 +1,9 @@
 package artifact
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,4 +138,72 @@ func TestArtifactExportRepublishesSessionWhenPlanUsageArrives(t *testing.T) {
 	assert.Equal(t, &artifactCaptureCoverage{
 		LastCaptureAt: "2026-06-14T01:02:30Z", UncapturedTurns: 1,
 	}, after.CaptureCoverage)
+}
+
+// A computer that imports another computer's Codex cloud chats through the
+// artifact folder reports them under the same account key as the computer
+// that fetched them, so a consumer that keeps one copy per origin counts
+// each chat once. Project keys for label-only projects are salted per
+// archive, so the two parts' digests can differ.
+func TestArtifactImportReportsCodexCloudChatUnderAccount(t *testing.T) {
+	const origin = "codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	source := testExportDB(t)
+	require.NoError(t, source.ConfigureArtifactLocalMachine(t.Context(), contractOrigin))
+	seedSession(t, source, "task", "codex_cloud", func(s *db.Session) {
+		s.Agent = "codex-cloud"
+		s.FilePath = new("/data/sources/codex-cloud/0f1e2d3c4b5a69788796a5b4c3d2e1f0/task.jsonl.zstd")
+		s.StartedAt = new("2026-06-14T01:00:00Z")
+		s.EndedAt = new("2026-06-14T01:03:00Z")
+	})
+	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "task", []db.Message{
+		{SessionID: "task", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2026-06-14T01:00:00Z"},
+		{SessionID: "task", Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5, Timestamp: "2026-06-14T01:03:00Z", Model: "gpt-5-codex"},
+	}))
+	store := newTestArtifactStore(t)
+	_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+
+	destination := testDB(t)
+	require.NoError(t, destination.ConfigureArtifactLocalMachine(t.Context(), importLocalOrigin))
+	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+	recordAllImportEntries(t, coordinator, store, contractOrigin)
+	_, err = coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+
+	for _, archive := range []*db.DB{source, destination} {
+		day, err := archive.ExportReportingDay(t.Context(), db.ReportingExportOptions{
+			Date:          time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC),
+			Now:           time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC),
+			SchemaVersion: 7,
+			ByMachine:     true,
+		})
+		require.NoError(t, err)
+		hour := day.Hours[1]
+		require.Contains(t, hour.Machines, origin)
+		assert.InDelta(t, 3, hour.Machines[origin].Activity.Totals.AgentMinutes, 0.001)
+		assert.Zero(t, hour.Machines[contractOrigin].Activity.Totals.AgentMinutes)
+	}
+}
+
+func TestArtifactImportRejectsInvalidCodexCloudAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		agent   string
+		account string
+	}{
+		{"not a key", "codex-cloud", "../other"},
+		{"not a Codex cloud chat", "claude", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := manifest{
+				Version: manifestFormatVersion, Origin: contractOrigin, NativeSessionID: "task",
+				Session:           manifestSession{ID: "task", Machine: contractOrigin, Agent: tt.agent},
+				Segments:          []string{strings.Repeat("a", 64)},
+				CodexCloudAccount: tt.account,
+			}
+			err := validateImportedManifest(m, contractOrigin, contractOrigin+"~task", productionArtifactLimits())
+			require.EqualError(t, err, "manifest Codex cloud account is invalid")
+		})
+	}
 }
