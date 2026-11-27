@@ -275,3 +275,60 @@ func TestCodexCloudAccountPrefixReservedForAccounts(t *testing.T) {
 	require.Contains(t, hour.Machines, hashed)
 	assert.InDelta(t, 2, hour.Machines[hashed].Activity.Totals.AgentMinutes, 0.001)
 }
+
+func TestCodexCloudCopiesMatchBetweenDayAndDigest(t *testing.T) {
+	const imported = testRemoteInstallation + "~codex-cloud:thread-1"
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
+	// The other computer watched the chat's first morning and captured its
+	// usage. This computer's copy also holds the next day's turn, with a
+	// smaller captured total. A one-day export of the second day loads only
+	// this computer's copy, so it must still choose the copies that a digest
+	// of both days chooses.
+	_, err := d.rawWriter().ExecContext(ctx, `
+		INSERT INTO sessions(id,project,machine,agent,message_count,started_at,ended_at,file_path) VALUES
+		('codex-cloud:thread-1','project','local','codex-cloud',3,'2026-07-28T05:00:00Z','2026-07-29T00:10:00Z',
+			'/data/sources/codex-cloud/0f1e2d3c4b5a69788796a5b4c3d2e1f0/thread-1.jsonl.zstd'),
+		(?,'project',?,'codex-cloud',2,'2026-07-28T05:00:00Z','2026-07-28T05:05:00Z',NULL)`,
+		imported, testRemoteInstallation)
+	require.NoError(t, err)
+	_, err = d.rawWriter().ExecContext(ctx,
+		`INSERT INTO codex_cloud_accounts(session_id, account_key) VALUES (?, '0f1e2d3c4b5a69788796a5b4c3d2e1f0')`, imported)
+	require.NoError(t, err)
+	insertMessages(t, d,
+		Message{SessionID: "codex-cloud:thread-1", Ordinal: 0, Role: "user", Content: "start", Timestamp: "2026-07-28T05:00:00Z"},
+		Message{SessionID: "codex-cloud:thread-1", Ordinal: 1, Role: "assistant", Content: "first", Timestamp: "2026-07-28T05:05:00Z", Model: "gpt-5-codex"},
+		Message{SessionID: "codex-cloud:thread-1", Ordinal: 2, Role: "assistant", Content: "next", Timestamp: "2026-07-29T00:10:00Z", Model: "gpt-5-codex"},
+		Message{SessionID: imported, Ordinal: 0, Role: "user", Content: "start", Timestamp: "2026-07-28T05:00:00Z"},
+		Message{SessionID: imported, Ordinal: 1, Role: "assistant", Content: "first", Timestamp: "2026-07-28T05:05:00Z", Model: "gpt-5-codex"},
+	)
+	usage := func(session, key, at string, input, output int) UsageEvent {
+		return UsageEvent{
+			SessionID: session, Source: "codex-cloud", Model: "gpt-5-codex",
+			InputTokens: input, OutputTokens: output, OccurredAt: at, DedupKey: key,
+		}
+	}
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, imported, []UsageEvent{
+		usage(imported, "a", "2026-07-28T05:01:00Z", 100, 20),
+		usage(imported, "b", "2026-07-28T05:04:00Z", 100, 20),
+	}))
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "codex-cloud:thread-1", []UsageEvent{
+		usage("codex-cloud:thread-1", "c", "2026-07-29T00:10:00Z", 150, 30),
+	}))
+
+	from := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	digests, err := d.ExportReportingDigest(ctx, ReportingDigestExportOptions{
+		From: from, To: from.Add(24 * time.Hour), Now: now, SchemaVersion: 7, ByMachine: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, digests, 2)
+	for i, digest := range digests {
+		day, err := d.ExportReportingDay(ctx, ReportingExportOptions{
+			Date: from.Add(time.Duration(i) * 24 * time.Hour), Now: now, SchemaVersion: 7, ByMachine: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, reportingDigestDayFromDay(day), digest)
+	}
+}

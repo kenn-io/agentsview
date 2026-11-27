@@ -131,17 +131,21 @@ chat in schemas 5 and 6, stays under the machine that synced it.
 
 An archive can hold one chat more than once, such as its own copy and a copy
 imported from another computer. The account part then reports one copy's
-activity and one copy's usage:
+activity and one copy's usage. AgentsView chooses both from every copy in the
+archive, so a one-day export and a multi-day digest choose the same copies.
 
-- Activity comes from the copy that ends latest. When copies end at the same
-  time, the archive's own copy wins.
-- Usage comes from the copy with the most captured usage records. Only a
-  computer that watched the chat run captures its token usage, so this copy can
-  differ from the activity copy. Ties follow the activity rule.
+- Activity comes from the copy with the newest message. When copies tie, the
+  archive's own copy wins.
+- Usage comes from the copy with the most captured tokens. Only a computer that
+  watched the chat run captures its token usage, so this copy can differ from
+  the activity copy. Ties follow the activity rule. The account part reports
+  that usage under the activity copy, so the `activity` and `usage` sections
+  agree.
 
 The other copies appear in no `machines` part. The hour's archive-wide totals
-still include every copy, so sum the `machines` parts to count each Codex Cloud
-chat once.
+still include every copy, so take Codex Cloud figures from the `machines` parts
+to count each chat once. The parts omit Cursor events; add those from
+`cursor_events` as described above.
 
 A `codex-cloud-account:<key>` part is not a machine identity. Computers that
 sync the same login can hold different chats for an hour, for example when one

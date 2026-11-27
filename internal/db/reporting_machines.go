@@ -101,10 +101,32 @@ func (s reportingDaySource) sessionOrigin(session activity.SessionMeta, schema i
 	return s.origin(session, schema, s.codexCloudRepeats.activity)
 }
 
-// usageOrigin returns the key a session's usage is reported under, like
-// sessionOrigin. A repeated chat can report its usage from another copy.
+// usageOrigin returns the key a usage row's session reports under. Usage
+// of a repeated Codex cloud chat has already been narrowed to one copy by
+// codexCloudUsage, so that copy reports under its account.
 func (s reportingDaySource) usageOrigin(session activity.SessionMeta, schema int) string {
-	return s.origin(session, schema, s.codexCloudRepeats.usage)
+	return s.origin(session, schema, nil)
+}
+
+// codexCloudUsage keeps the usage of one copy of each repeated Codex cloud
+// chat and reports it under the copy chosen for activity, when this range
+// loaded that copy, so the activity and usage sections agree.
+func (s reportingDaySource) codexCloudUsage(rows []activity.UsageRow, sessions map[string]activity.SessionMeta) []activity.UsageRow {
+	if len(s.codexCloudRepeats.usageOwner) == 0 {
+		return rows
+	}
+	out := make([]activity.UsageRow, 0, len(rows))
+	for _, row := range rows {
+		owner, repeated := s.codexCloudRepeats.usageOwner[row.SessionID]
+		if repeated && owner == "" {
+			continue
+		}
+		if _, loaded := sessions[owner]; repeated && loaded {
+			row.SessionID = owner
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func (s reportingDaySource) origin(session activity.SessionMeta, schema int, repeats map[string]bool) string {

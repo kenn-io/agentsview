@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,11 +76,13 @@ type reportingDaySource struct {
 	codexCloudRepeats  reportingCodexCloudRepeats
 }
 
-// reportingCodexCloudRepeats holds the copies of repeated Codex cloud chats
-// whose activity and whose usage no origin reports. The two sets differ when
-// the copy that ends latest is not the copy that captured the most usage.
+// reportingCodexCloudRepeats records how a Codex cloud chat that the
+// archive holds more than once is reported. activity holds the copies whose
+// activity no origin reports. usageOwner maps every copy of such a chat to
+// the copy its usage reports under, or to empty when its usage is dropped.
 type reportingCodexCloudRepeats struct {
-	activity, usage map[string]bool
+	activity   map[string]bool
+	usageOwner map[string]string
 }
 
 func (db *DB) loadReportingExportSource(
@@ -421,99 +424,123 @@ func reportingCreatedAtFrom(
 // with neither is left out and stays under its machine.
 //
 // An archive that fetched a chat and also imported another computer's copy
-// holds it under several session IDs. The account reports the activity of
-// the copy that ends latest, or the local copy when they end together. Only
-// the computer that watched a chat run captures its token usage, so the
-// account reports the usage of the copy with the most usage events, with
-// the same tie-breaks.
+// holds it under several session IDs. Every copy in the archive is a
+// candidate, whatever range the export covers, so a daily export and a
+// multi-day digest choose the same copies. The account reports the
+// activity of the copy with the newest message, or the local copy when
+// they tie. Only the computer that watched a chat run captures its token
+// usage, and each copy's usage events add up to the running total that
+// computer saw. The account therefore reports the usage of the copy with
+// the most tokens, with the same tie-breaks, under the activity copy's ID.
 func reportingCodexCloudAccountsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
 	sessions []activity.SessionMeta,
 ) (map[string]string, reportingCodexCloudRepeats, error) {
-	var ids []string
-	ends := make(map[string]time.Time)
+	// Imported IDs are the origin, "~", and the fetching computer's ID.
+	native := func(id string) string { return id[strings.LastIndex(id, "~")+1:] }
+	inRange := make(map[string]bool)
 	for _, session := range sessions {
 		if session.Agent == string(parser.AgentCodexCloud) {
-			ids = append(ids, session.SessionID)
-			ends[session.SessionID], _ = time.Parse(time.RFC3339Nano, session.EndedAt)
+			inRange[native(session.SessionID)] = true
 		}
 	}
-	accounts := make(map[string]string, len(ids))
-	usageEvents := make(map[string]int, len(ids))
-	err := queryChunked(ids, func(chunk []string) error {
+	accounts := make(map[string]string)
+	copies := make(map[[2]string][]string)
+	if len(inRange) == 0 {
+		return accounts, reportingCodexCloudRepeats{}, nil
+	}
+	rows, err := q.QueryContext(ctx,
+		`SELECT s.id, COALESCE(s.file_path, ''), COALESCE(a.account_key, '')
+		FROM sessions s LEFT JOIN codex_cloud_accounts a ON a.session_id = s.id
+		WHERE s.agent = ? AND s.deleted_at IS NULL`,
+		string(parser.AgentCodexCloud),
+	)
+	if err != nil {
+		return nil, reportingCodexCloudRepeats{}, fmt.Errorf("querying reporting Codex cloud accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, path, imported string
+		if err := rows.Scan(&id, &path, &imported); err != nil {
+			return nil, reportingCodexCloudRepeats{}, fmt.Errorf("scanning reporting Codex cloud account: %w", err)
+		}
+		account := cmp.Or(parser.CodexCloudAccountFromPath(path), imported)
+		if account == "" || !inRange[native(id)] {
+			continue
+		}
+		accounts[id] = account
+		chat := [2]string{account, native(id)}
+		copies[chat] = append(copies[chat], id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, reportingCodexCloudRepeats{}, fmt.Errorf("iterating reporting Codex cloud accounts: %w", err)
+	}
+	var repeated []string
+	for _, ids := range copies {
+		if len(ids) > 1 {
+			repeated = append(repeated, ids...)
+		}
+	}
+	newest := make(map[string]time.Time, len(repeated))
+	tokens := make(map[string]int64, len(repeated))
+	err = queryChunked(repeated, func(chunk []string) error {
 		placeholders, args := InPlaceholders(chunk)
 		rows, err := q.QueryContext(ctx,
-			`SELECT s.id, COALESCE(s.file_path, ''), COALESCE(a.account_key, ''),
-				(SELECT COUNT(*) FROM usage_events ue WHERE ue.session_id = s.id)
-			FROM sessions s LEFT JOIN codex_cloud_accounts a ON a.session_id = s.id
-			WHERE s.id IN `+placeholders,
+			`SELECT s.id,
+				COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id), ''),
+				(SELECT COALESCE(SUM(ue.input_tokens + ue.output_tokens +
+					ue.cache_creation_input_tokens + ue.cache_read_input_tokens), 0)
+					FROM usage_events ue WHERE ue.session_id = s.id)
+			FROM sessions s WHERE s.id IN `+placeholders,
 			args...,
 		)
 		if err != nil {
-			return fmt.Errorf("querying reporting Codex cloud accounts: %w", err)
+			return fmt.Errorf("querying reporting Codex cloud copies: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, path, imported string
-			var events int
-			if err := rows.Scan(&id, &path, &imported, &events); err != nil {
-				return fmt.Errorf("scanning reporting Codex cloud account: %w", err)
+			var id, last string
+			var total int64
+			if err := rows.Scan(&id, &last, &total); err != nil {
+				return fmt.Errorf("scanning reporting Codex cloud copy: %w", err)
 			}
-			if account := cmp.Or(parser.CodexCloudAccountFromPath(path), imported); account != "" {
-				accounts[id] = account
-				usageEvents[id] = events
-			}
+			newest[id], _ = time.Parse(time.RFC3339Nano, last)
+			tokens[id] = total
 		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterating reporting Codex cloud accounts: %w", err)
-		}
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		return nil, reportingCodexCloudRepeats{}, err
 	}
-	// later reports whether copy a of a chat ranks above copy b: it ends
-	// later, or it is local while b is imported, or its ID sorts first.
-	later := func(a, b string) bool {
+	// Each rank is positive when copy a should be reported over copy b.
+	activityRank := func(a, b string) int {
 		return cmp.Or(
-			ends[a].Compare(ends[b]),
+			newest[a].Compare(newest[b]),
 			cmp.Compare(strings.Count(b, "~"), strings.Count(a, "~")),
 			strings.Compare(b, a),
-		) > 0
+		)
 	}
-	richer := func(a, b string) bool {
-		if usageEvents[a] != usageEvents[b] {
-			return usageEvents[a] > usageEvents[b]
+	usageRank := func(a, b string) int {
+		return cmp.Or(cmp.Compare(tokens[a], tokens[b]), activityRank(a, b))
+	}
+	repeats := reportingCodexCloudRepeats{
+		activity:   make(map[string]bool),
+		usageOwner: make(map[string]string),
+	}
+	for _, ids := range copies {
+		if len(ids) < 2 {
+			continue
 		}
-		return later(a, b)
-	}
-	return accounts, reportingCodexCloudRepeats{
-		activity: codexCloudRepeatsBy(accounts, later),
-		usage:    codexCloudRepeatsBy(accounts, richer),
-	}, nil
-}
-
-// codexCloudRepeatsBy returns every copy of a repeated chat except the one
-// that ranks highest under better.
-func codexCloudRepeatsBy(accounts map[string]string, better func(a, b string) bool) map[string]bool {
-	// Imported IDs are the origin, "~", and the fetching computer's ID.
-	chat := func(id string) [2]string {
-		return [2]string{accounts[id], id[strings.LastIndex(id, "~")+1:]}
-	}
-	reported := make(map[[2]string]string, len(accounts))
-	for id := range accounts {
-		if current, ok := reported[chat(id)]; !ok || better(id, current) {
-			reported[chat(id)] = id
+		activityCopy := slices.MaxFunc(ids, activityRank)
+		usageCopy := slices.MaxFunc(ids, usageRank)
+		for _, id := range ids {
+			repeats.activity[id] = id != activityCopy
+			repeats.usageOwner[id] = ""
 		}
+		repeats.usageOwner[usageCopy] = activityCopy
 	}
-	repeats := make(map[string]bool)
-	for id := range accounts {
-		if reported[chat(id)] != id {
-			repeats[id] = true
-		}
-	}
-	return repeats
+	return accounts, repeats, nil
 }
 
 func reportingTerminalTimestampsFrom(

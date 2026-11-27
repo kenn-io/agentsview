@@ -478,7 +478,7 @@ func reportingHoursFromMachineSource(
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
 			return source.sessionOrigin(sessionByID[e.SessionID], schemaVersion) != machine
 		})
-		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
+		usage = slices.DeleteFunc(source.codexCloudUsage(slices.Clone(usage), sessionByID), func(u activity.UsageRow) bool {
 			return source.usageOrigin(sessionByID[u.SessionID], schemaVersion) != machine
 		})
 	}
