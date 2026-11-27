@@ -185,6 +185,49 @@ func TestArtifactImportReportsCodexCloudChatUnderAccount(t *testing.T) {
 	}
 }
 
+func TestArtifactImportCountsCodexCloudChatOnceWithLocalCopy(t *testing.T) {
+	const origin = "codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	seed := func(archive *db.DB, end string) {
+		seedSession(t, archive, "task", "codex_cloud", func(s *db.Session) {
+			s.Agent = "codex-cloud"
+			s.FilePath = new("/data/sources/codex-cloud/0f1e2d3c4b5a69788796a5b4c3d2e1f0/task.jsonl.zstd")
+			s.StartedAt = new("2026-06-14T01:00:00Z")
+			s.EndedAt = new(end)
+		})
+		require.NoError(t, archive.ReplaceSessionMessages(t.Context(), "task", []db.Message{
+			{SessionID: "task", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2026-06-14T01:00:00Z"},
+			{SessionID: "task", Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5, Timestamp: end, Model: "gpt-5-codex"},
+		}))
+	}
+	source := testExportDB(t)
+	require.NoError(t, source.ConfigureArtifactLocalMachine(t.Context(), contractOrigin))
+	seed(source, "2026-06-14T01:03:00Z")
+	store := newTestArtifactStore(t)
+	_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+
+	// The importing computer fetched the same chat before its last turn.
+	destination := testDB(t)
+	require.NoError(t, destination.ConfigureArtifactLocalMachine(t.Context(), importLocalOrigin))
+	seed(destination, "2026-06-14T01:02:00Z")
+	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+	recordAllImportEntries(t, coordinator, store, contractOrigin)
+	_, err = coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+
+	day, err := destination.ExportReportingDay(t.Context(), db.ReportingExportOptions{
+		Date:          time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC),
+		Now:           time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC),
+		SchemaVersion: 7,
+		ByMachine:     true,
+	})
+	require.NoError(t, err)
+	hour := day.Hours[1]
+	assert.InDelta(t, 3, hour.Machines[origin].Activity.Totals.AgentMinutes, 0.001)
+	assert.Zero(t, hour.Machines[importLocalOrigin].Activity.Totals.AgentMinutes)
+	assert.Zero(t, hour.Machines[contractOrigin].Activity.Totals.AgentMinutes)
+}
+
 func TestArtifactImportRejectsInvalidCodexCloudAccount(t *testing.T) {
 	tests := []struct {
 		name    string

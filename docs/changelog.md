@@ -20,9 +20,10 @@ The latest release is
   one copy per origin counts every chat once per computer. Schema 7 reports
   them under `codex-cloud-account:<key>`, a key that is the same on every
   computer for that login. Chats imported through artifact folder sync keep
-  the key, so upgrade every computer that imports from the folder: older
-  versions skip these chats until upgraded. See
-  [Reporting Export](/docs/reporting-export/).
+  the key, so upgrade every computer that imports from the folder: computers
+  that run an older version skip these chats until AgentsView on them is
+  upgraded. An archive that holds its own copy of a chat and an imported copy
+  counts it once. See [Reporting Export](/docs/reporting-export/).
 
 - `agentsview source import --type gemini-apps` now imports real Google
   Takeout exports. It used to reject every export with `input does not contain

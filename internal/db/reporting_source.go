@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -23,6 +24,7 @@ type reportingExportSource struct {
 	localMachineID      string
 	machineAliases      map[string]string
 	codexCloudAccounts  map[string]string
+	codexCloudRepeats   map[string]bool
 	activitySessions    []reportingSourceSession
 	activityEvents      []activity.ActivityEvent
 	usageSessions       []activity.SessionMeta
@@ -67,8 +69,10 @@ type reportingDaySource struct {
 
 	// codexCloudAccounts maps each Codex cloud session ID to the account
 	// key it was fetched for, in schemas that report those sessions by
-	// account.
+	// account. codexCloudRepeats holds the other copies of chats the
+	// archive holds more than once, which no origin reports.
 	codexCloudAccounts map[string]string
+	codexCloudRepeats  map[string]bool
 }
 
 func (db *DB) loadReportingExportSource(
@@ -178,7 +182,7 @@ func (db *DB) loadReportingExportSource(
 
 	allSessions := mergeReportingSessions(sessions, usageSessions)
 	if schemaVersion == export.ReportingCursorSchemaVersion {
-		source.codexCloudAccounts, err = reportingCodexCloudAccountsFrom(ctx, tx, allSessions)
+		source.codexCloudAccounts, source.codexCloudRepeats, err = reportingCodexCloudAccountsFrom(ctx, tx, allSessions)
 		if err != nil {
 			return source, err
 		}
@@ -322,6 +326,7 @@ func (src reportingExportSource) forDate(
 		references:       references,
 
 		codexCloudAccounts: src.codexCloudAccounts,
+		codexCloudRepeats:  src.codexCloudRepeats,
 	}
 }
 
@@ -407,15 +412,22 @@ func reportingCreatedAtFrom(
 // account key: the directory of its mirror file, or for a chat imported
 // from another computer's artifacts, the key import recorded. A session
 // with neither is left out and stays under its machine.
+//
+// An archive that fetched a chat and also imported another computer's copy
+// holds it under several session IDs. The account reports the copy that
+// ends latest, or the local copy when they end together, and the returned
+// set holds the other copies.
 func reportingCodexCloudAccountsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
 	sessions []activity.SessionMeta,
-) (map[string]string, error) {
+) (map[string]string, map[string]bool, error) {
 	var ids []string
+	ends := make(map[string]time.Time)
 	for _, session := range sessions {
 		if session.Agent == string(parser.AgentCodexCloud) {
 			ids = append(ids, session.SessionID)
+			ends[session.SessionID], _ = time.Parse(time.RFC3339Nano, session.EndedAt)
 		}
 	}
 	accounts := make(map[string]string, len(ids))
@@ -445,7 +457,31 @@ func reportingCodexCloudAccountsFrom(
 		}
 		return nil
 	})
-	return accounts, err
+	if err != nil {
+		return nil, nil, err
+	}
+	// Imported IDs are the origin, "~", and the fetching computer's ID.
+	chat := func(id string) [2]string {
+		return [2]string{accounts[id], id[strings.LastIndex(id, "~")+1:]}
+	}
+	reported := make(map[[2]string]string, len(accounts))
+	for id := range accounts {
+		current, ok := reported[chat(id)]
+		if !ok || cmp.Or(
+			ends[id].Compare(ends[current]),
+			cmp.Compare(strings.Count(current, "~"), strings.Count(id, "~")),
+			strings.Compare(current, id),
+		) > 0 {
+			reported[chat(id)] = id
+		}
+	}
+	repeats := make(map[string]bool)
+	for id := range accounts {
+		if reported[chat(id)] != id {
+			repeats[id] = true
+		}
+	}
+	return accounts, repeats, nil
 }
 
 func reportingTerminalTimestampsFrom(

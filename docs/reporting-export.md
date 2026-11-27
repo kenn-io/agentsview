@@ -48,12 +48,12 @@ agentsview export day --schema-version 5 --by-machine 2026-07-28
 
 With `--by-machine`, each hour adds `local_machine_id` and a `machines` object.
 The keys in `machines` are originating machine identities, apart from the
-reserved `archive:`, `cursor-account:`, and `codex-cloud-account:` keys described
-below. Each value is a complete schema 5 hour without nested machine metadata. `local_machine_id` comes
-from the archive's recorded installation rather than its display label, and any
-recorded machine aliases resolve to their canonical identities. If your archive
-has not recorded its installation identity yet, run `agentsview source sync`
-first.
+reserved `archive:`, `cursor-account:`, and `codex-cloud-account:` keys
+described below. Each value is a complete schema 5 hour without nested machine
+metadata. `local_machine_id` comes from the archive's recorded installation
+rather than its display label, and any recorded machine aliases resolve to their
+canonical identities. If your archive has not recorded its installation
+identity yet, run `agentsview source sync` first.
 
 Every machine snapshot uses the same read transaction, bucket resolution,
 project selection, pricing, and usage-survivor selection as the combined hour.
@@ -125,9 +125,11 @@ that AgentsView derives from the login's workspace and user IDs, and it names
 the folder that holds the login's chats under `<data dir>/sources/codex-cloud/`.
 Every computer that syncs the login uses the same key, so a consumer that keeps
 one snapshot per origin and UTC hour counts each chat once. A chat imported
-through [artifact folder sync](artifact-sync.md) keeps the key of the computer
-that fetched it. A chat with no recorded key, and every Codex Cloud chat in
-schemas 5 and 6, stays under the machine that synced it.
+through [artifact folder sync](artifact-sync.md) keeps the account key that the
+fetching computer recorded. When an archive holds one chat more than once, such
+as its own copy and an imported copy, the account reports the copy that ends
+latest. A chat with no recorded key, and every Codex Cloud chat in schemas 5
+and 6, stays under the machine that synced it.
 
 A `codex-cloud-account:<key>` part is not a machine identity. Computers that
 sync the same login can hold different chats for an hour, for example when one

@@ -321,7 +321,9 @@ func reportingHoursFromSource(
 	localMachineID := source.machineID("local", schemaVersion)
 	machines := map[string]bool{localMachineID: true}
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
-		machines[source.sessionOrigin(session, schemaVersion)] = true
+		if origin := source.sessionOrigin(session, schemaVersion); origin != "" {
+			machines[origin] = true
+		}
 	}
 	if len(source.standaloneUsage) > 0 {
 		machines[source.machineID("", schemaVersion)] = true

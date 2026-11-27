@@ -125,5 +125,5 @@ database from backup, keep only one active writer for that restored origin.
   name the same account as the computer that fetched it. A chat that an older
   version published gets the key the next time it changes, or after
   `agentsview source sync --full --target <folder>` on the computer that
-  fetched it. Older AgentsView versions skip these chats until you upgrade
-  them.
+  fetched it. Computers that run an older AgentsView version skip these
+  chats until AgentsView on those computers is upgraded.
