@@ -151,7 +151,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
-	provenanceChanged := false
 	fresh := make(map[string][]byte)
 	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
@@ -267,8 +266,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if err != nil {
 				return err
 			}
-			provenanceChanged = provenanceChanged || provChanged
-			derivedChanged = derivedChanged || provChanged
+			changed = changed || provChanged
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
@@ -378,7 +376,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	if changed || provenanceChanged {
+	if changed {
 		spawnChanged, err := reconcileRawSpawnLinks(ctx, tx)
 		if err != nil {
 			return err
@@ -422,7 +420,8 @@ func loadRawPayload(ctx context.Context, tx *sql.Tx, id string) (ingest.Prepared
 // syncRawRelationshipProvenance updates stored relationship provenance when a
 // re-projected subagent has an unchanged content revision (for example, a Grok
 // run that gains an explicit subagent summary marker without changing messages).
-// Explicit child provenance is never downgraded back to an inferred worker role.
+// Explicit child provenance (including conservative legacy Grok recoveries) is
+// never downgraded back to an inferred worker role.
 func syncRawRelationshipProvenance(
 	ctx context.Context, tx *sql.Tx, sessionID string, prepared ingest.PreparedSession, payload []byte,
 ) (bool, error) {
@@ -440,11 +439,9 @@ func syncRawRelationshipProvenance(
 	if err != nil {
 		return false, err
 	}
-	storedRel, storedInferred, storedOK := stored.Session.RelationshipProvenance()
-	if storedOK && storedRel == inRel && storedInferred == inInferred {
-		return false, nil
-	}
-	if storedOK && !storedInferred && inInferred && storedRel == inRel {
+	storedRel := db.PersistedParserRelationship(stored.Session)
+	storedInferred := db.SessionRelationshipInferred(stored.Session)
+	if storedRel == inRel && (!storedInferred || inInferred) {
 		return false, nil
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -453,7 +450,7 @@ func syncRawRelationshipProvenance(
 		return false, err
 	}
 	effectiveRel := db.SessionRelationship(prepared.Session)
-	res, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions
 		 SET parser_relationship_type=$2,
 		     relationship_inferred=$3,
@@ -464,15 +461,10 @@ func syncRawRelationshipProvenance(
 		        OR relationship_inferred IS DISTINCT FROM $3
 		        OR (NOT $3 AND relationship_type IS DISTINCT FROM $4))`,
 		sessionID, inRel, inInferred, effectiveRel,
-	)
-	if err != nil {
+	); err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
+	return true, nil
 }
 
 func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []byte) (ingest.PreparedSession, error) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
@@ -395,11 +394,8 @@ func rawPayloadHasPromptText(s db.Session, messages []db.Message) bool {
 	if s.FirstMessage != nil && strings.TrimSpace(*s.FirstMessage) != "" {
 		return true
 	}
-	return slices.ContainsFunc(messages, func(m db.Message) bool {
-		return m.Role == "user" && !m.IsSystem &&
-			m.SourceSubtype != parser.SourceSubtypeToolResult &&
-			strings.TrimSpace(m.Content) != ""
-	})
+	_, ok := db.FirstUserMessageContent(messages)
+	return ok
 }
 
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {

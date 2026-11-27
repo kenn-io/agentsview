@@ -241,9 +241,6 @@ func TestRawTranscriptPrefixMergesEqualLengthAutomatedUpgrade(t *testing.T) {
 			matches, err := rawTranscriptPrefix(legacy, cand)
 			require.NoError(t, err)
 			assert.False(t, matches)
-			reverse, err := rawTranscriptPrefix(cand, legacy)
-			require.NoError(t, err)
-			assert.False(t, reverse)
 		})
 	}
 
@@ -265,10 +262,45 @@ func TestRawTranscriptPrefixMergesEqualLengthAutomatedUpgrade(t *testing.T) {
 		matches, err := rawTranscriptPrefix(explicit, inferred)
 		require.NoError(t, err)
 		assert.False(t, matches)
-		reverse, err := rawTranscriptPrefix(inferred, explicit)
-		require.NoError(t, err)
-		assert.False(t, reverse)
 	})
+}
+
+func TestRawTranscriptPrefixDirectionalGrokProvenance(t *testing.T) {
+	makeGrok := func(msgs []db.Message, inferred bool) ingest.PreparedSession {
+		p := ingest.PreparedSession{
+			Session: db.Session{
+				ID: "grok:run-1", Agent: "grok", SessionKind: "non-interactive",
+				RelationshipType: "subagent", IsAutomated: false,
+				MessageCount: len(msgs), UserMessageCount: len(msgs) / 2,
+			},
+			Messages: msgs,
+		}
+		p.Session.RestoreRelationshipProvenance("subagent", inferred)
+		return p
+	}
+	shortMsgs := []db.Message{
+		{Ordinal: 0, Role: "user", Content: "Review this change."},
+		{Ordinal: 1, Role: "assistant", Content: "First pass."},
+	}
+	longMsgs := append(append([]db.Message(nil), shortMsgs...),
+		db.Message{Ordinal: 2, Role: "user", Content: "Check error handling."},
+		db.Message{Ordinal: 3, Role: "assistant", Content: "Done."},
+	)
+
+	inferredShort := makeGrok(shortMsgs, true)
+	explicitLong := makeGrok(longMsgs, false)
+	matches, err := rawTranscriptPrefix(inferredShort, explicitLong)
+	require.NoError(t, err)
+	assert.True(t, matches, "inferred shorter copy should merge into explicit longer continuation")
+	reverse, err := rawTranscriptPrefix(explicitLong, inferredShort)
+	require.NoError(t, err)
+	assert.False(t, reverse)
+
+	explicitShort := makeGrok(shortMsgs, false)
+	inferredLong := makeGrok(longMsgs, true)
+	matches, err = rawTranscriptPrefix(explicitShort, inferredLong)
+	require.NoError(t, err)
+	assert.False(t, matches, "explicit child must never merge into inferred longer worker")
 }
 
 func TestRefreshRawSessionAutomation(t *testing.T) {

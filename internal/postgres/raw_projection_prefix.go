@@ -81,9 +81,13 @@ func reconcileRawPrefixes(ctx context.Context, tx *sql.Tx, group string) error {
 // just rendered text. Metadata disagreements remain conflicts; only aggregate
 // and signal fields that naturally change on append are excluded.
 func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
-	if len(short.Messages) > len(long.Messages) ||
-		len(short.UsageEvents) > len(long.UsageEvents) ||
-		db.SessionRelationshipInferred(short.Session) != db.SessionRelationshipInferred(long.Session) {
+	if len(short.Messages) > len(long.Messages) || len(short.UsageEvents) > len(long.UsageEvents) {
+		return false, nil
+	}
+	shortInferred := db.SessionRelationshipInferred(short.Session)
+	longInferred := db.SessionRelationshipInferred(long.Session)
+	// Never merge an explicit child into an inferred worker.
+	if !shortInferred && longInferred {
 		return false, nil
 	}
 	sameTotalEqualLength := false
@@ -93,6 +97,7 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 		}
 		if !rawSessionTotalGrew(short.SessionTotal, long.SessionTotal) {
 			if rawSessionTotalGrew(long.SessionTotal, short.SessionTotal) ||
+				shortInferred != longInferred ||
 				rawAutomationNormalizationRank(short.Session) >= rawAutomationNormalizationRank(long.Session) {
 				return false, nil
 			}

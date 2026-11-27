@@ -360,14 +360,16 @@ func IsAutomatedTranscript(
 	if userMessageCount > 1 {
 		return false
 	}
-	if firstUser, ok := firstUserMessageContent(msgs); ok &&
+	if firstUser, ok := FirstUserMessageContent(msgs); ok &&
 		IsAutomatedSession(firstUser) {
 		return true
 	}
 	return firstMessage != nil && IsAutomatedSession(*firstMessage)
 }
 
-func firstUserMessageContent(msgs []Message) (string, bool) {
+// FirstUserMessageContent returns the content of the first non-system,
+// non-tool-result user message with non-whitespace text.
+func FirstUserMessageContent(msgs []Message) (string, bool) {
 	for _, m := range msgs {
 		if m.Role != "user" || m.IsSystem || m.SourceSubtype == parser.SourceSubtypeToolResult {
 			continue

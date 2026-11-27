@@ -111,13 +111,13 @@ func TestRawProjectionPrefixDoesNotChooseDivergentContinuation(t *testing.T) {
 	}
 }
 
-func seedLegacyRawReviewCapture(t *testing.T, f projectionFixture, sessionID string) (rawderive.ParsedManifest, string) {
+func seedLegacyRawReviewCapture(t *testing.T, f projectionFixture, sessionID, sourceSessionID string) (rawderive.ParsedManifest, string) {
 	t.Helper()
 	ctx := t.Context()
 	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
 	outcome := projectionOutcome(prompt)
 	outcome.Outcome.Results[0].Result.Session.ID = sessionID
-	outcome.Outcome.Results[0].Result.Session.SourceSessionID = sessionID
+	outcome.Outcome.Results[0].Result.Session.SourceSessionID = sourceSessionID
 	outcome.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
 	outcome.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
 	outcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
@@ -136,6 +136,8 @@ func seedLegacyRawReviewCapture(t *testing.T, f projectionFixture, sessionID str
 
 	prepared, err := decodeRawPayload(currentPayload)
 	require.NoError(t, err)
+	prepared.Session.ID = sessionID
+	prepared.Session.SourceSessionID = sourceSessionID
 	prepared.Session.IsAutomated = false
 	prepared.Session.RelationshipType = string(parser.RelSubagent)
 
@@ -179,7 +181,7 @@ func TestRawProjectionUpgradeIdenticalHeadlessReviewResolvesUniquely(t *testing.
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 
-	outcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-unique")
+	outcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-unique", "review-unique")
 
 	b, _ := f.accept(t, "device-b", "upgraded-capture", "", parser.AgentClaude)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, outcome))
@@ -212,7 +214,7 @@ func TestRawProjectionWithdrawalRestoresLegacyAutomatedReview(t *testing.T) {
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 
-	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-restore")
+	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-restore", "review-restore")
 
 	longOutcome := shortOutcome
 	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
@@ -258,74 +260,34 @@ func TestRawProjectionWithdrawalPreservesLegacyAgentSubagent(t *testing.T) {
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 
-	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
-	shortOutcome := projectionOutcome(prompt)
-	shortOutcome.Outcome.Results[0].Result.Session.ID = "agent-legacy-child"
-	shortOutcome.Outcome.Results[0].Result.Session.SourceSessionID = ""
-	shortOutcome.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
-	shortOutcome.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
-	shortOutcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	// SourceSessionID has no agent-* prefix, so only the original Session.ID
+	// marks this legacy capture as an explicit Claude subagent.
+	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "agent-legacy-child", "shared-child")
 
-	a, _ := f.accept(t, "device-a", "agent-legacy", "", parser.AgentClaude)
-	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, shortOutcome))
-
-	var groupID, currentID string
-	var currentPayload []byte
-	require.NoError(t, f.runtime.QueryRowContext(ctx,
-		`SELECT r.group_id, r.session_id, r.payload
-		 FROM raw_session_branches b
-		 JOIN raw_content_revisions r ON r.session_id = b.captured_session_id
-		 WHERE b.member_id = $1`, "agent-legacy-child",
-	).Scan(&groupID, &currentID, &currentPayload))
-
-	prepared, err := decodeRawPayload(currentPayload)
-	require.NoError(t, err)
-	prepared.Session.ID = "agent-legacy-child"
-	prepared.Session.SourceSessionID = ""
-	prepared.Session.IsAutomated = false
-	prepared.Session.RelationshipType = string(parser.RelSubagent)
-
-	// Encode without a provenance trailer, matching a pre-upgrade capture whose
-	// only child marker is its agent-* session ID.
-	var legacyBuf bytes.Buffer
-	require.NoError(t, gob.NewEncoder(&legacyBuf).Encode(prepared))
-	legacyRev, err := rawContentRevision(prepared)
-	require.NoError(t, err)
-	legacyID := "raw-row-" + rawDigest("row-v1", groupID, legacyRev)
-
-	_, err = f.runtime.ExecContext(ctx,
-		`INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4)`,
-		legacyID, groupID, legacyRev, legacyBuf.Bytes(),
+	longOutcome := shortOutcome
+	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
+	longMessages = append(longMessages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Follow-up turn."},
+		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Done."},
 	)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx,
-		`UPDATE raw_session_branches SET session_id=$1, captured_session_id=$1, content_revision=$2 WHERE member_id=$3`,
-		legacyID, legacyRev, "agent-legacy-child",
-	)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx,
-		`UPDATE session_sources SET session_id=$1, physical_session_id=NULL, content_revision=$2 WHERE physical_session_id=$3`,
-		legacyID, legacyRev, currentID,
-	)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx, `DELETE FROM sessions WHERE id=$1`, currentID)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx, `DELETE FROM raw_message_dialogue WHERE session_id=$1`, currentID)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx, `DELETE FROM raw_embedding_outbox WHERE session_id=$1`, currentID)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx, `DELETE FROM raw_content_revisions WHERE session_id=$1`, currentID)
-	require.NoError(t, err)
+	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
+	longOutcome.Outcome.Results[0].Result.Messages = longMessages
 
-	// Restore the legacy agent-* capture through writePayload and verify it
-	// keeps Subagents even though its prompt matches an automation rule.
-	tx, err := f.runtime.BeginTx(ctx, nil)
+	b, accepted := f.accept(t, "device-b", "longer-agent", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
+
+	// Withdrawing device-b restores device-a's legacy agent-* capture through
+	// materializeGroup and writePayload; it must stay in Subagents even though
+	// its prompt matches an automation rule.
+	b, _ = f.accept(t, "device-b", "withdrawn-agent", accepted.Receipt, parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, rawderive.ParsedManifest{
+		Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true},
+	}))
+
+	resolved, err := f.sink.Resolve(ctx, "agent-legacy-child")
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-	restored, err := loadRawPayload(ctx, tx, legacyID)
-	require.NoError(t, err)
-	require.NoError(t, f.sink.writePayload(ctx, tx, legacyID, groupID, legacyRev, restored))
-	require.NoError(t, tx.Commit())
+	assert.Equal(t, RawIdentityUnique, resolved.State)
+	assert.Equal(t, legacyID, resolved.SessionID)
 
 	var rel string
 	var inferred bool
@@ -381,4 +343,132 @@ func TestRawProjectionUpdatesGrokExplicitSubagentProvenance(t *testing.T) {
 	stored, err := decodeRawPayload(storedBytes)
 	require.NoError(t, err)
 	assert.False(t, db.SessionRelationshipInferred(stored.Session), "stored raw payload must retain explicit provenance")
+}
+
+func TestRawProjectionExplicitProvenanceSplitsMergedGrokCapture(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	shortOutcome := projectionOutcome("Human prompt for Grok run.")
+	shortOutcome.Outcome.Results[0].Result.Session.ID = "grok:split-1"
+	shortOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "split-1"
+	shortOutcome.Outcome.Results[0].Result.Session.Agent = parser.AgentGrok
+	shortOutcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+	shortOutcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelNone
+
+	a, ar := f.accept(t, "device-a", "grok-short-inferred", "", parser.AgentGrok)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, shortOutcome))
+
+	longOutcome := shortOutcome
+	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
+	longMessages = append(longMessages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Second turn."},
+		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Second reply."},
+	)
+	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
+	longOutcome.Outcome.Results[0].Result.Messages = longMessages
+
+	b, _ := f.accept(t, "device-b", "grok-long-inferred", "", parser.AgentGrok)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
+
+	resolved, err := f.sink.Resolve(ctx, "grok:split-1")
+	require.NoError(t, err)
+	assert.Equal(t, RawIdentityUnique, resolved.State, "inferred shorter copy merges into inferred longer copy")
+
+	var beforeCorpus, beforeIdentity int64
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT corpus_revision, identity_revision FROM raw_corpus_state WHERE singleton=1`,
+	).Scan(&beforeCorpus, &beforeIdentity))
+
+	// Re-project device-a's shorter copy with an explicit subagent marker.
+	// Its content revision is unchanged, so syncRawRelationshipProvenance must
+	// trigger group reconciliation to split the explicit child from device-b's
+	// inferred longer copy and publish the identity change.
+	explicitShort := shortOutcome
+	explicitShort.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
+	explicitShort.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	a2, _ := f.accept(t, "device-a", "grok-short-explicit", ar.Receipt, parser.AgentGrok)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, a2), a2, explicitShort))
+
+	resolved, err = f.sink.Resolve(ctx, "grok:split-1")
+	require.NoError(t, err)
+	assert.Equal(t, RawIdentityAmbiguous, resolved.State, "explicit shorter child must split from inferred longer copy")
+	require.Len(t, resolved.Variants, 2)
+
+	var afterCorpus, afterIdentity int64
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT corpus_revision, identity_revision FROM raw_corpus_state WHERE singleton=1`,
+	).Scan(&afterCorpus, &afterIdentity))
+	assert.Greater(t, afterCorpus, beforeCorpus)
+	assert.Greater(t, afterIdentity, beforeIdentity)
+
+	var explicitSessionID string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT session_id FROM raw_session_branches WHERE member_id=$1 AND source_id=$2`,
+		"grok:split-1", rawSourceID(a2),
+	).Scan(&explicitSessionID))
+	var rel string
+	var inferred bool
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT relationship_type, relationship_inferred FROM sessions WHERE id=$1`, explicitSessionID,
+	).Scan(&rel, &inferred))
+	assert.Equal(t, "subagent", rel)
+	assert.False(t, inferred)
+}
+
+func TestRawProjectionLegacyGrokPreservesExplicitStatusOnInferredUpload(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	outcome := projectionOutcome("Human prompt for legacy Grok child.")
+	outcome.Outcome.Results[0].Result.Session.ID = "grok:legacy-1"
+	outcome.Outcome.Results[0].Result.Session.SourceSessionID = "legacy-1"
+	outcome.Outcome.Results[0].Result.Session.Agent = parser.AgentGrok
+	outcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+	outcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+
+	a, _ := f.accept(t, "device-a", "grok-legacy", "", parser.AgentGrok)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, outcome))
+
+	resolved, err := f.sink.Resolve(ctx, "grok:legacy-1")
+	require.NoError(t, err)
+	var currentPayload []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id=$1`, resolved.SessionID,
+	).Scan(&currentPayload))
+
+	// Strip the provenance trailer to match a legacy pre-upgrade Grok capture
+	// where recovery conservatively treats the child role as explicit.
+	prepared, err := decodeRawPayload(currentPayload)
+	require.NoError(t, err)
+	var legacyBuf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&legacyBuf).Encode(prepared))
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, resolved.SessionID, legacyBuf.Bytes(),
+	)
+	require.NoError(t, err)
+
+	// Uploading an identical non-automated copy without the explicit marker
+	// must not overwrite the legacy Grok child's preserved explicit status.
+	inferredCopy := outcome
+	inferredCopy.Outcome.Results = []parser.ParseResultOutcome{{Result: outcome.Outcome.Results[0].Result}}
+	inferredCopy.Outcome.Results[0].Result.Session.RelationshipType = parser.RelNone
+	b, _ := f.accept(t, "device-b", "grok-inferred-copy", "", parser.AgentGrok)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, inferredCopy))
+
+	var inferred bool
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT relationship_inferred FROM sessions WHERE id=$1`, resolved.SessionID,
+	).Scan(&inferred))
+	assert.False(t, inferred, "legacy Grok child must keep relationship_inferred=false")
+
+	var storedBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id=$1`, resolved.SessionID,
+	).Scan(&storedBytes))
+	stored, err := decodeRawPayload(storedBytes)
+	require.NoError(t, err)
+	assert.False(t, db.SessionRelationshipInferred(stored.Session))
 }
