@@ -415,12 +415,23 @@ func TestRawProjectionRollsBackWhenLeaseExpiresWaitingForCorpusRevision(t *testi
 
 func TestRawProjectionConcurrentLauncherDeletionAndFirstWorkerImport(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"exclude", "empty_trash"} {
+	for _, mode := range []string{"exclude", "exclude_merged_short_variant", "empty_trash"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			f := newProjectionFixture(t)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
+
+			deleteAlias := "codex:launcher"
+			if mode == "exclude_merged_short_variant" {
+				shortManifest, _ := f.acceptScoped(t, "device-short", "launcher-short", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+				shortOutcome := projectionOutcome("launcher prompt")
+				shortOutcome.Outcome.Results[0].Result.Session.ID = "codex:launcher"
+				shortOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "launcher"
+				shortOutcome.Outcome.Results[0].Result.Messages = shortOutcome.Outcome.Results[0].Result.Messages[:1]
+				require.NoError(t, f.sink.Project(ctx, f.lease(t, shortManifest), shortManifest, shortOutcome))
+				deleteAlias = f.alias(t, shortManifest)
+			}
 
 			launcherManifest, _ := f.acceptScoped(t, "device-a", "launcher", "", parser.AgentCodex, "root-a", "launcher.jsonl")
 			launcherOutcome := projectionOutcome("launcher prompt")
@@ -464,10 +475,10 @@ func TestRawProjectionConcurrentLauncherDeletionAndFirstWorkerImport(t *testing.
 
 			deleted := make(chan error, 1)
 			go func() {
-				if mode == "exclude" {
-					ok, err := f.sink.ExcludeTrashedSession(ctx, "codex:launcher")
+				if mode != "empty_trash" {
+					ok, err := f.sink.ExcludeTrashedSession(ctx, deleteAlias)
 					if err == nil && !ok {
-						err = fmt.Errorf("expected ExcludeTrashedSession to exclude codex:launcher")
+						err = fmt.Errorf("expected ExcludeTrashedSession to exclude %s", deleteAlias)
 					}
 					deleted <- err
 					return
