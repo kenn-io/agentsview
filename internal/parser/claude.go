@@ -1165,9 +1165,27 @@ func claudeParseSessionFrom(
 	if err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
+	for _, link := range links {
+		if link.HasResult && hasLaunchedOutputID(DecodeContent(link.ResultContentRaw)) {
+			found := false
+			for _, msg := range msgs {
+				for _, call := range msg.ToolCalls {
+					if call.ToolUseID == link.ToolUseID {
+						found = true
+					}
+				}
+			}
+			if !found {
+				return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+			}
+		}
+	}
 	if err := annotateSubagentSessionsContext(
 		ctx, msgs, subagentMap,
 	); err != nil {
+		return nil, nil, time.Time{}, 0, err
+	}
+	if err := annotateClaudeLaunchedRuns(ctx, msgs); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
 	if len(attachments) > 0 {
@@ -1649,6 +1667,9 @@ func parseLinear(
 	if err := annotateSubagentSessionsContext(ctx, messages, subagentMap); err != nil {
 		return nil, err
 	}
+	if err := annotateClaudeLaunchedRuns(ctx, messages); err != nil {
+		return nil, err
+	}
 
 	// Promoted system messages carry Role=user so role-keyed analytics
 	// ignore them, but they are not real user turns;
@@ -1871,6 +1892,9 @@ func parseDAG(
 		if err := annotateSubagentSessionsContext(
 			ctx, messages, subagentMap,
 		); err != nil {
+			return nil, nil, err
+		}
+		if err := annotateClaudeLaunchedRuns(ctx, messages); err != nil {
 			return nil, nil, err
 		}
 

@@ -169,8 +169,10 @@ func validateProviderParseResultSessionIDs(def parser.AgentDef, result parser.Pa
 	}
 	for _, message := range result.Messages {
 		for _, toolCall := range message.ToolCalls {
-			if err := validateProviderSessionID(def, toolCall.SubagentSessionID, "tool call subagent session id"); err != nil {
-				return err
+			if !(def.Type == parser.AgentCodex && toolCall.Category == "Bash" && parser.IsLaunchedClaudeSessionID(toolCall.SubagentSessionID)) {
+				if err := validateProviderSessionID(def, toolCall.SubagentSessionID, "tool call subagent session id"); err != nil {
+					return err
+				}
 			}
 			for _, event := range toolCall.ResultEvents {
 				if err := validateProviderSessionID(def, event.SubagentSessionID, "tool result event subagent session id"); err != nil {

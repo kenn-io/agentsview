@@ -84,35 +84,7 @@ func oneShotRun(ctx context.Context, p launchProcess, agent string) bool {
 	if err != nil {
 		return false
 	}
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			return false
-		}
-		if agent == "codex" && (arg == "exec" || arg == "e") || agent == "claude" && (arg == "-p" || arg == "--print") {
-			return true
-		}
-		if !strings.HasPrefix(arg, "-") {
-			if agent == "codex" {
-				return false
-			}
-			continue
-		}
-		if !strings.Contains(arg, "=") {
-			if agent == "codex" {
-				switch arg {
-				case "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--enable", "--disable", "--remote", "--remote-auth-token-env", "--local-provider":
-					i++
-				}
-			} else {
-				switch arg {
-				case "--model", "--add-dir", "--append-system-prompt", "--append-system-prompt-file", "--system-prompt", "--system-prompt-file", "--agent", "--agents", "--settings", "--setting-sources", "--session-id", "--permission-mode", "--output-format", "--input-format", "--json-schema", "--effort", "--fallback-model", "--name", "-n", "--max-budget-usd", "--mcp-config", "--plugin-dir", "--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools":
-					i++
-				}
-			}
-		}
-	}
-	return false
+	return parser.OneShotRunArgs(agent, args)
 }
 
 // launcherVariables lists the variables an agent sets for commands it runs,

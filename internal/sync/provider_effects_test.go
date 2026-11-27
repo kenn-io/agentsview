@@ -162,3 +162,14 @@ func TestProviderResultAdmissionKeepsIdentityOfDroppedMembers(t *testing.T) {
 		assert.Empty(t, admission.kept)
 	})
 }
+
+func TestValidateCodexLaunchedClaudeSessionID(t *testing.T) {
+	def := parser.AgentDef{Type: parser.AgentCodex, IDPrefix: "codex:"}
+	result := parser.ParseResult{Session: parser.ParsedSession{ID: "codex:parent"}, Messages: []parser.ParsedMessage{{ToolCalls: []parser.ParsedToolCall{{Category: "Bash", SubagentSessionID: "12345678-1234-1234-1234-123456789abc"}}}}}
+	require.NoError(t, validateProviderParseResultSessionIDs(def, result))
+	result.Messages[0].ToolCalls[0].Category = "Task"
+	require.Error(t, validateProviderParseResultSessionIDs(def, result))
+	result.Messages[0].ToolCalls[0].Category = "Bash"
+	result.Messages[0].ToolCalls[0].ResultEvents = []parser.ParsedToolResultEvent{{SubagentSessionID: "wrong"}}
+	require.Error(t, validateProviderParseResultSessionIDs(def, result))
+}

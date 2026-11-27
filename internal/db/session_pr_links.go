@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 // PRLink is a pull or merge request named in a structured record or retained
@@ -402,42 +401,7 @@ func shellInputCommands(input string) ([]string, bool) {
 		text := strings.TrimSpace(input)
 		return []string{input}, text != ""
 	}
-	var payload struct {
-		Command     jsontext.Value `json:"command"`
-		CommandLine string         `json:"CommandLine"`
-		Cmd         string         `json:"cmd"`
-		Commands    []string       `json:"commands"`
-	}
-	if json.Unmarshal([]byte(input), &payload) != nil {
-		return nil, false
-	}
-	if len(payload.Command) > 0 && string(payload.Command) != "null" {
-		command, ok := commandValue(payload.Command)
-		return []string{command}, ok
-	}
-	if payload.CommandLine != "" {
-		return []string{payload.CommandLine}, true
-	}
-	if payload.Commands != nil {
-		return payload.Commands, true
-	}
-	return []string{payload.Cmd}, true
-}
-
-// commandValue decodes a command given as shell text or as an argv list.
-func commandValue(raw jsontext.Value) (string, bool) {
-	var command string
-	if json.Unmarshal(raw, &command) == nil {
-		return command, true
-	}
-	var argv []string
-	if json.Unmarshal(raw, &argv) != nil || len(argv) == 0 {
-		return "", false
-	}
-	for i, arg := range argv {
-		argv[i] = shellquote.POSIX(arg)
-	}
-	return strings.Join(argv, " "), true
+	return parser.ShellInputCommands(input)
 }
 
 // ToolCallPRLinks derives links from each independent tool call.

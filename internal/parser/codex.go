@@ -94,6 +94,7 @@ type codexSessionBuilder struct {
 	gitBranch                   string
 	gitRemote                   string
 	callNames                   map[string]string
+	launchedCalls               map[string]string
 	agentSpawnCalls             map[string]string
 	agentWaitCalls              map[string]string
 	pendingAgentEvents          map[string][]codexPendingEvent
@@ -327,6 +328,7 @@ func (b *codexSessionBuilder) rememberToolCall(
 }
 
 func (b *codexSessionBuilder) forgetToolCall(id string) {
+	delete(b.launchedCalls, id)
 	b.codexCursorState.forgetToolCall(id)
 	delete(b.overflowPendingCalls, id)
 	for key, pending := range b.overflowPendingCalls {
@@ -936,6 +938,13 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		}
 	}
 
+	if b.agent == AgentCodex && callID != "" && call.Category == "Bash" && (strings.Contains(strings.ToLower(inputJSON), "codex") || strings.Contains(strings.ToLower(inputJSON), "claude")) {
+		if b.launchedCalls == nil {
+			b.launchedCalls = make(map[string]string)
+		}
+		b.launchedCalls[callID] = inputJSON
+	}
+
 	if isCodexWaitAgentCall(name) && callID != "" {
 		for _, agentID := range waitAgentIDs {
 			b.agentWaitCalls[agentID] = callID
@@ -1011,10 +1020,14 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	defer b.forgetToolCall(callID)
 
 	output, raw := parseCodexFunctionOutput(payload, b.agent)
-	if !output.Exists() {
-		if strings.TrimSpace(raw) == "" {
-			return
+	if input := b.launchedCalls[callID]; input != "" {
+		if id := launchedRunID(ctx, input, raw); id != "" {
+			position, _ := b.toolCallPosition(callID)
+			b.sink.SetCallSubagentSessionID(callID, position, id)
 		}
+	}
+	if !output.Exists() && strings.TrimSpace(raw) == "" {
+		return
 	}
 
 	switch b.toolCallNameForOutput(callID) {
@@ -1153,6 +1166,12 @@ func (b *codexSessionBuilder) claimPendingAgentEventsContext(
 func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 	ctx context.Context,
 ) error {
+	for callID, input := range b.launchedCalls {
+		if id := launchedRunID(ctx, input, ""); id != "" {
+			position, _ := b.toolCallPosition(callID)
+			b.sink.SetCallSubagentSessionID(callID, position, id)
+		}
+	}
 	if len(b.pendingAgentEvents) == 0 {
 		return ctx.Err()
 	}
@@ -3245,6 +3264,9 @@ func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Resu
 		return !isCodexExecCellWait(name, args)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
+		if b.agent == AgentCodex && hasLaunchedOutputID(raw) && b.launchedCalls[payload.Get("call_id").Str] == "" {
+			return true
+		}
 		if isCodexSubagentFunctionOutput(output) {
 			return true
 		}
