@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -68,7 +67,16 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		log.Printf("%s summaries %s: %v", agent, store, digestErr)
 		return nil, digestErr, nil, nil
 	}
-	records, listErr := e.db.ListSessionPathRecordsForAgents(ctx, []string{string(agent)})
+	if e.pathRewriter != nil && e.storedPathResolver == nil {
+		return nil, nil, nil, nil
+	}
+	queryRoot := storeRoot
+	if e.pathRewriter != nil {
+		queryRoot = e.pathRewriter(storeRoot)
+	}
+	identities, listErr := e.db.ListSessionSummaryIdentitiesUnderPathContext(
+		ctx, string(agent), queryRoot,
+	)
 	if listErr != nil {
 		if errors.Is(listErr, context.Canceled) ||
 			errors.Is(listErr, context.DeadlineExceeded) {
@@ -76,18 +84,19 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		}
 		return nil, nil, listErr, nil
 	}
+	if len(identities) == 0 {
+		return nil, nil, nil, nil
+	}
 	sessionRoot := parser.AntigravitySessionRoot
 	if agent == parser.AgentAntigravityCLI {
 		sessionRoot = parser.AntigravityCLISessionRoot
 	}
 	prefix := e.idPrefix + string(agent) + ":"
-	ids := make([]string, 0, len(records))
-	localPaths := make(map[string]string, len(records))
-	for _, rec := range records {
-		if !strings.HasPrefix(rec.ID, prefix) {
+	for _, stored := range identities {
+		if !strings.HasPrefix(stored.ID, prefix) {
 			continue
 		}
-		resolved, ok := e.resolveStoredNativePath(rec.FilePath)
+		resolved, ok := e.resolveStoredNativePath(stored.FilePath)
 		if !ok {
 			continue
 		}
@@ -95,27 +104,7 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		if !ok || !sameReconciliationSourcePath(owner, storeRoot) {
 			continue
 		}
-		ids = append(ids, rec.ID)
-		localPaths[rec.ID] = resolved
-	}
-	if len(ids) == 0 {
-		return nil, nil, nil, nil
-	}
-	slices.Sort(ids)
-	identities, idErr := e.db.ListSessionWriteIdentitiesByID(ctx, ids)
-	if idErr != nil {
-		if errors.Is(idErr, context.Canceled) ||
-			errors.Is(idErr, context.DeadlineExceeded) {
-			return nil, nil, nil, idErr
-		}
-		return nil, nil, idErr, nil
-	}
-	for _, id := range ids {
-		stored, ok := identities[id]
-		if !ok {
-			continue
-		}
-		rawID := strings.TrimPrefix(id, prefix)
+		rawID := strings.TrimPrefix(stored.ID, prefix)
 		summaryID := rawID
 		if agent == parser.AgentAntigravityCLI {
 			summaryID = parser.AntigravityCLISummaryID(rawID)
@@ -125,7 +114,7 @@ func (e *Engine) classifyAntigravitySummariesPath(
 		}
 		source, found, findErr := provider.FindSource(ctx, parser.FindSourceRequest{
 			RawSessionID:       rawID,
-			StoredFilePath:     localPaths[id],
+			StoredFilePath:     resolved,
 			RequireFreshSource: true,
 		})
 		if findErr != nil {
