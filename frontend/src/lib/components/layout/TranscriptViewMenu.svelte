@@ -10,6 +10,7 @@
   } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { CheckIcon, ChevronDownIcon, LayoutListIcon } from "../../icons.js";
+  import { readingWidthOptions } from "../shared/readingWidthOptions.js";
   import {
     ALL_BLOCK_TYPES,
     ui,
@@ -35,11 +36,7 @@
     { id: "focused", name: m.header_view_mode_focused },
   ];
 
-  const WIDTHS: { id: ReadingWidth; name: () => string }[] = [
-    { id: "default", name: m.appearance_reading_width_default },
-    { id: "wider", name: m.appearance_reading_width_wider },
-    { id: "full", name: m.appearance_reading_width_full },
-  ];
+  const WIDTHS = $derived(readingWidthOptions());
 
   const BLOCK_LABELS: Record<BlockType, () => string> = {
     user: m.header_transcript_blocks_user,
@@ -166,9 +163,9 @@
       onchange={(value) => ui.setReadingWidth(value as ReadingWidth)}
       ariaLabel={m.appearance_reading_width()}
     >
-      {#each WIDTHS as width (width.id)}
-        <MenuRadioItem value={width.id} closeOnSelect={false} textValue={width.name()} class="view-option">
-          <span class="option-name">{width.name()}</span>
+      {#each WIDTHS as width (width.value)}
+        <MenuRadioItem value={width.value} closeOnSelect={false} textValue={width.label} class="view-option">
+          <span class="option-name">{width.label}</span>
         </MenuRadioItem>
       {/each}
     </MenuRadioGroup>

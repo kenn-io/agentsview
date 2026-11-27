@@ -19,8 +19,8 @@
     ZOOM_STEPS,
     type BlockType,
     type MessageLayout,
-    type ReadingWidth,
   } from "../../stores/ui.svelte.js";
+  import { readingWidthOptions } from "../shared/readingWidthOptions.js";
   import {
     isChartPalette,
     type ChartPalette,
@@ -66,11 +66,7 @@
     { value: "skim", label: m.appearance_layout_skim() },
   ]);
 
-  const READING_WIDTH_OPTIONS: { value: ReadingWidth; label: string }[] = $derived([
-    { value: "default", label: m.appearance_reading_width_default() },
-    { value: "wider", label: m.appearance_reading_width_wider() },
-    { value: "full", label: m.appearance_reading_width_full() },
-  ]);
+  const READING_WIDTH_OPTIONS = $derived(readingWidthOptions());
 
   const BLOCK_LABELS: Record<BlockType, string> = $derived({
     user: m.header_transcript_blocks_user(),
