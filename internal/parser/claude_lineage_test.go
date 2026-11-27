@@ -1199,9 +1199,10 @@ func TestClaudeDerivedFromClearAfterForkIsUnrelated(t *testing.T) {
 
 func TestClaudeBackgroundForkIgnoresRecordedDescendant(t *testing.T) {
 	t.Parallel()
-	// An older background fork carries no record; a newer fork of it
-	// records it as parent and holds all of its entries. Electing that
-	// descendant would drop the background fork's turns from both.
+	// An older background fork carries no record; newer forks of it,
+	// and forks of those, record their parents and hold all of its
+	// entries. Electing a descendant would drop the background fork's
+	// turns from both.
 	origPath, forkPath := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
 		"fork-2222.jsonl", lineageForkContent(),
@@ -1212,6 +1213,12 @@ func TestClaudeBackgroundForkIgnoresRecordedDescendant(t *testing.T) {
 		lineageUserLine("u3", "a2", "2026-01-01T12:00:00Z", "child-3333", "", "child question") + "\n"
 	require.NoError(t, os.WriteFile(
 		filepath.Join(filepath.Dir(origPath), "child-3333.jsonl"), []byte(child), 0o644))
+	grandchild := strings.ReplaceAll(child, "child-3333", "grand-4444")
+	grandchild = strings.Replace(grandchild,
+		lineageDerivedFromLine("grand-4444", "fork:fork-2222"),
+		lineageDerivedFromLine("grand-4444", "fork:fork-2222", "fork:child-3333"), 1)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(origPath), "grand-4444.jsonl"), []byte(grandchild), 0o644))
 
 	results, _, err := claudeParseFile(t.Context(),
 		forkPath, "my_app", "local",
