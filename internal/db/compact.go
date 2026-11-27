@@ -742,10 +742,13 @@ func (db *DB) restoreOriginalAfterSwapFailureLocked(primary error, op *compactOp
 // restoring the backup is lossless.
 func (db *DB) rollbackCompactInstall(ctx context.Context, primary error, op *compactOperation) error {
 	db.mu.Lock()
+	resumeReads := db.pauseReadsLocked()
+	defer resumeReads()
 	if err := db.closeConnectionsLocked(ctx); err != nil {
 		// The installed candidate keeps serving reads; the barrier stays up
 		// and the prepared manifest lets startup recovery finish the decision.
 		reopenErr := db.reopenLockedWithBarrier(true)
+		db.clearReadPause()
 		db.mu.Unlock()
 		return errors.Join(primary,
 			fmt.Errorf("close archive connections for rollback: %w", err), reopenErr)
