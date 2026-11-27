@@ -26,7 +26,7 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 		require.NoError(t, err)
 		for _, query := range []struct{ name, sql string }{
 			{"version", maxDataVersionSQL},
-			{"workers", repairParentlessWorkersSQL},
+			{"workers", parentlessWorkerStepsPG(false)[0].query},
 			{"source missing", repairLegacySourceMissingDeletionSQL},
 		} {
 			var encoded []byte

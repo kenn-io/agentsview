@@ -62,16 +62,22 @@ sessions, so **Total Cost** lines up with `agentsview report usage daily` for
 the same day and timezone. Usage rows that recur across related sessions are
 deduplicated before totaling, following the same rule the Usage page applies.
 
-Subagents include native child sessions and eligible `claude -p`, `codex exec`,
-or Grok headless runs. Claude Code `sdk-cli` workers qualify when their first
-real normalized prompt records `turnOrigin=sdk`, and a human origin wins over
-conflicting markers. A queued first prompt, missing or unknown origin, SDK
-library entrypoints, or an explicit provider kind blocks this inference. Human
-SDK conversations stay Interactive unless their prompts match an automation
-pattern, while known subagents keep that category even when their prompts match
-built-in or user `[automated]` patterns. Runs without a subagent relationship
-count as Automated when they carry a roborev tag or a matching first prompt,
-and prompt matching requires one or fewer real user messages.
+Subagents include native child sessions, externally linked runs, and
+non-automated parentless `claude -p`, `codex exec`, or Grok headless runs.
+Claude Code `sdk-cli` workers qualify when their first real normalized prompt
+records `turnOrigin=sdk`, and a human origin wins over conflicting markers. A
+queued first prompt, missing or unknown origin, SDK library entrypoints, or an
+explicit provider kind blocks this inference. Human SDK conversations stay
+Interactive unless their prompts match an automation pattern. Real subagents
+keep the Subagents category even when scripted or their parent disappears:
+sessions with a parent, native subagent identities, Grok runs that their
+summary marks as subagents, and runs that a spawning session or launcher link
+ever gave a parent. A spawned run stays a subagent after its spawner is
+deleted; removing its launcher link with no spawn record left returns it to
+its own category. Other parentless headless runs whose prompts match built-in
+or user `[automated]` patterns, or sessions tagged with `roborev` metadata
+(Codex `thread_source=roborev` or Claude `entrypoint=roborev`), count as
+Automated; prompt matching requires one or fewer real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and
@@ -83,9 +89,11 @@ their sources are unreadable. Historical worker repair can fail when sources are
 unreadable or deleted and archived rows, including replicas, lack worker
 evidence such as Claude SDK origin needed to distinguish workers from human SDK
 conversations or native Grok child-kind evidence omitted by older clients.
-Ambiguous rows keep their existing relationship. Classification audits preserve
-stored automation flags in usage-only archives, and new writes classify current
-evidence.
+Ambiguous rows keep their existing relationship. Usage-only archives do not
+keep prompt text. Each classification audit still marks sessions tagged
+`roborev` (as kind or entrypoint) as Automated. Other sessions keep their
+stored automation setting. AgentsView classifies new session data when it
+saves it.
 
 The session count separates subagents from interactive and automated
 conversations. Every known subagent counts as Subagents, including scripted

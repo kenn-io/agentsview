@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -305,12 +306,28 @@ SELECT (SELECT count(*) FROM upserted)+(SELECT count(*) FROM pruned),
 }
 
 func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, group, revision string, p ingest.PreparedSession) error {
+	// Capture parser provenance while p.Session.ID still holds the original
+	// identifier (such as agent-*), before replacing it with the hosted row ID.
+	if _, _, ok := p.Session.RelationshipProvenance(); !ok {
+		p.Session.RecordParserRelationship()
+	}
 	p.Session.ID = id
 	p.Session.FilePath = nil
 	p.Session.Machine = "hosted"
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
+	p.Session.IsAutomated = refreshRawSessionAutomation(
+		p.Session, p.Messages, s.options.Content.ArchiveContent.UsageOnly(),
+	)
+	p.Session.RelationshipType = db.SessionRelationship(p.Session)
+	if !s.options.Content.ArchiveContent.UsageOnly() {
+		priorPending := p.Signals.SignalsPendingSince
+		p.Signals = ingest.RefreshSignalRecencyAt(p.Session, p.Messages, p.Signals, s.options.Now())
+		if priorPending != nil && p.Signals.SignalsPendingSince != nil {
+			p.Signals.SignalsPendingSince = priorPending
+		}
+	}
 	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
 		return err
 	}
@@ -367,7 +384,30 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err := bulkInsertSecretFindings(ctx, tx, id, p.Findings); err != nil {
 		return err
 	}
+	if !s.options.Content.ArchiveContent.UsageOnly() {
+		if _, err := publishRawRecency(ctx, tx, id, p.Signals); err != nil {
+			return err
+		}
+	}
 	return insertPGFrictionFindings(ctx, tx, id, p.Friction.Findings)
+}
+
+func refreshRawSessionAutomation(s db.Session, messages []db.Message, usageOnly bool) bool {
+	if db.IsAutomatedSessionMetadata(s.SessionKind, s.Entrypoint) {
+		return true
+	}
+	if usageOnly || !rawPayloadHasPromptText(s, messages) {
+		return s.IsAutomated
+	}
+	return db.IsAutomatedTranscript(s.UserMessageCount, messages, s.FirstMessage)
+}
+
+func rawPayloadHasPromptText(s db.Session, messages []db.Message) bool {
+	if s.FirstMessage != nil && strings.TrimSpace(*s.FirstMessage) != "" {
+		return true
+	}
+	_, ok := db.FirstUserMessageContent(messages)
+	return ok
 }
 
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {

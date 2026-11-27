@@ -97,31 +97,25 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		ordered = append(ordered, group)
 	}
 	slices.Sort(ordered)
-	// Lock known and newly introduced public aliases before sorted group locks.
-	// This includes first publication, where legacy validation cannot lock a row.
-	var aliases []string
-	rows, err := tx.QueryContext(ctx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=ANY($1) ORDER BY alias_id`, ordered)
+	// Lock known and newly introduced public aliases, plus outgoing spawn
+	// targets, before sorted group locks. This includes first publication,
+	// where legacy validation cannot lock a row, and serializes concurrent
+	// launcher/worker imports and link removals in one lock order.
+	aliases, err := queryStrings(ctx, tx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=ANY($1) ORDER BY alias_id`, ordered)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var alias string
-		if err = rows.Scan(&alias); err != nil {
-			rows.Close()
-			return err
-		}
-		aliases = append(aliases, alias)
-	}
-	err = rows.Err()
-	rows.Close()
+	priorTargets, err := queryStrings(ctx, tx, rawGroupSpawnTargetsSQL, ordered)
 	if err != nil {
 		return err
 	}
+	aliases = append(aliases, priorTargets...)
 	for group, base := range groups {
 		if base != "" {
-			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), candidates[group].Session.ID)
-			aliases = append(aliases, pgSessionAliasIDs(candidates[group].Session)...)
+			c := candidates[group]
+			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), c.Session.ID)
+			aliases = append(aliases, pgSessionAliasIDs(c.Session)...)
+			aliases = append(aliases, rawCandidateSpawnTargets(c.Messages)...)
 		}
 	}
 	if err = lockHostedAliases(ctx, tx, aliases); err != nil {
@@ -212,6 +206,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		var prepared ingest.PreparedSession
+		var signalSession db.Session
 		if decision.Action == ingest.HistoryPreserve {
 			if err := loadOld(ctx); err != nil {
 				return err
@@ -221,6 +216,21 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				prepared.Signals.ToolObservations = []db.ToolObservation{}
 			} else if prepared.Signals.ToolObservations == nil {
 				prepared.Signals.ToolObservations = ingest.ComputeToolObservations(prepared.Session, ingest.ExtractToolCallRows(prepared.Messages))
+			}
+			// Refresh preserved signals with current automation status under the
+			// group lock while keeping prepared.Session, payload, and content
+			// revision unchanged.
+			signalSession = prepared.Session
+			var currentAutomated bool
+			err = tx.QueryRowContext(ctx, `SELECT is_automated FROM sessions WHERE id=$1`, previous.CapturedSession).Scan(&currentAutomated)
+			if err == nil {
+				signalSession.IsAutomated = currentAutomated
+			} else if errors.Is(err, sql.ErrNoRows) {
+				signalSession.IsAutomated = refreshRawSessionAutomation(
+					prepared.Session, prepared.Messages, s.options.Content.ArchiveContent.UsageOnly(),
+				)
+			} else {
+				return err
 			}
 		} else {
 			prepared, err = ingest.Finalize(ctx, decision.Candidate, s.options.Content)
@@ -236,8 +246,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 					prepared.Signals.ToolObservations = []db.ToolObservation{}
 				}
 			}
+			signalSession = prepared.Session
 		}
-		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
+		prepared.Signals = ingest.RefreshSignalRecencyAt(signalSession, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
 		if err != nil {
 			return err
@@ -257,9 +268,16 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 		// Reuse only bytes inserted by this transaction. Conflicts retain
-		// their stored payload and mutable derived state.
+		// their stored payload and mutable derived state, except when a
+		// re-projected subagent supplies updated relationship provenance.
 		if count == 1 {
 			fresh[sessionID] = payload
+		} else {
+			provChanged, err := syncRawRelationshipProvenance(ctx, tx, sessionID, prepared, payload)
+			if err != nil {
+				return err
+			}
+			changed = changed || provChanged
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
@@ -369,6 +387,13 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
+	if changed {
+		spawnChanged, err := reconcileRawSpawnLinks(ctx, tx, ordered, aliases)
+		if err != nil {
+			return err
+		}
+		derivedChanged = derivedChanged || spawnChanged
+	}
 
 	diagnostics := fmt.Sprintf("results=%d errors=%d complete=%t", len(parsed.Outcome.Results), len(parsed.Outcome.SourceErrors), complete)
 	if parsed.Tombstone {
@@ -401,6 +426,73 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 // loadRawPayload is transaction-bound and does not use alias resolution.
 func loadRawPayload(ctx context.Context, tx *sql.Tx, id string) (ingest.PreparedSession, error) {
 	return loadRawPayloadBytes(ctx, tx, id, nil)
+}
+
+func rawCandidateSpawnTargets(messages []db.Message) []string {
+	var targets []string
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			if tc.SubagentSessionID != "" {
+				targets = append(targets, tc.SubagentSessionID)
+			}
+			for _, ev := range tc.ResultEvents {
+				if ev.SubagentSessionID != "" {
+					targets = append(targets, ev.SubagentSessionID)
+				}
+			}
+		}
+	}
+	return targets
+}
+
+// syncRawRelationshipProvenance updates stored relationship provenance when a
+// re-projected subagent has an unchanged content revision (for example, a Grok
+// run that gains an explicit subagent summary marker without changing messages).
+// Explicit child provenance (including conservative legacy Grok recoveries) is
+// never downgraded back to an inferred worker role.
+func syncRawRelationshipProvenance(
+	ctx context.Context, tx *sql.Tx, sessionID string, prepared ingest.PreparedSession, payload []byte,
+) (bool, error) {
+	inRel, inInferred, ok := prepared.Session.RelationshipProvenance()
+	if !ok || inRel != string(parser.RelSubagent) {
+		return false, nil
+	}
+	var storedBytes []byte
+	if err := tx.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id=$1 FOR UPDATE`, sessionID,
+	).Scan(&storedBytes); err != nil {
+		return false, err
+	}
+	stored, err := decodeRawPayload(storedBytes)
+	if err != nil {
+		return false, err
+	}
+	storedRel := db.PersistedParserRelationship(stored.Session)
+	storedInferred := db.SessionRelationshipInferred(stored.Session)
+	if storedRel == inRel && (!storedInferred || inInferred) {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, payload,
+	); err != nil {
+		return false, err
+	}
+	effectiveRel := db.SessionRelationship(prepared.Session)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions
+		 SET parser_relationship_type=$2,
+		     relationship_inferred=$3,
+		     relationship_type=CASE WHEN $3 THEN relationship_type ELSE $4 END,
+		     updated_at=NOW()
+		 WHERE id=$1
+		   AND (parser_relationship_type IS DISTINCT FROM $2
+		        OR relationship_inferred IS DISTINCT FROM $3
+		        OR (NOT $3 AND relationship_type IS DISTINCT FROM $4))`,
+		sessionID, inRel, inInferred, effectiveRel,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []byte) (ingest.PreparedSession, error) {

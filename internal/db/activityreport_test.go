@@ -115,7 +115,10 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 				s.Entrypoint = "sdk-cli"
 			}
 			if tc.id == "worker" {
+				// A parentless headless run has no parser relationship; the
+				// write promotes it from its shape.
 				s.SessionKind = "non-interactive"
+				s.RelationshipType = ""
 			}
 			s.FirstMessage = Ptr("You are a code reviewer. Review this change.")
 			s.UserMessageCount = 1
@@ -135,8 +138,8 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 	require.True(t, dangling.IsAutomated)
 	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 3, report.Totals.SubagentSessions)
-	assert.Zero(t, report.Totals.AutomatedSessions)
+	assert.Equal(t, 2, report.Totals.SubagentSessions)
+	assert.Equal(t, 1, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
 }
 

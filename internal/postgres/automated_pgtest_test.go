@@ -119,32 +119,50 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	defer cancel()
 	require.NoError(t, ps.EnsureSchema(ctx))
 	for _, tc := range []struct {
-		id, prompt, kind, relationship string
-		parent                         *string
+		id, agent, entrypoint, prompt, kind, relationship string
+		parent, parserParent                              *string
+		userCount                                         int
 	}{
-		{"plain", "Explain this function.", "non-interactive", "", nil},
-		{"script", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
-		{"child", "Explain this function.", "non-interactive", "", new("plain")},
-		{"fork", "Explain this function.", "non-interactive", "fork", nil},
-		{"review", "Explain this function.", "roborev", "", nil},
+		{"plain", "codex", "", "Explain this function.", "non-interactive", "", nil, nil, 1},
+		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "subagent", nil, nil, 1},
+		{"claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"legacy-claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"origin~agent-child", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"claude-roborev", "claude", "roborev", "# UX review\nCheck the CLI output.", "", "", nil, nil, 2},
+		{"real-child", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, new("plain"), 1},
+		{"child", "codex", "", "Explain this function.", "non-interactive", "", new("plain"), new("plain"), 1},
+		{"fork", "codex", "", "Explain this function.", "non-interactive", "fork", nil, nil, 1},
+		{"review", "codex", "", "Explain this function.", "roborev", "", nil, nil, 1},
 	} {
 		_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (
-			id, machine, project, agent, first_message, session_kind, relationship_type,
-			parent_session_id, user_message_count, is_automated, updated_at
-		) VALUES ($1, 'host', 'project-a', 'codex', $2, $3, $4, $5, 1, true, '2000-01-01T00:00:00Z')`,
-			tc.id, tc.prompt, tc.kind, tc.relationship, tc.parent)
+			id, machine, project, agent, entrypoint, first_message, session_kind, relationship_type,
+			parent_session_id, parser_parent_session_id, user_message_count, is_automated, updated_at
+		) VALUES ($1, 'host', 'project-a', $2, $3, $4, $5, $6, $7, $8, $9, true, '2000-01-01T00:00:00Z')`,
+			tc.id, tc.agent, tc.entrypoint, tc.prompt, tc.kind, tc.relationship, tc.parent, tc.parserParent, tc.userCount)
 		require.NoError(t, err)
 	}
+	// Current pushers send the parser provenance; older ones leave it NULL
+	// (tested by legacy-claude-panel and origin~agent-child).
+	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions
+		SET parser_relationship_type = 'subagent', relationship_inferred = TRUE
+		WHERE id = 'claude-panel'`)
+	require.NoError(t, err)
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	for _, tc := range []struct {
 		id, relationship string
 		automated        bool
+		bumped           bool
 	}{
-		{"plain", "subagent", false},
-		{"script", "subagent", true},
-		{"child", "", false},
-		{"fork", "fork", false},
-		{"review", "", true},
+		{"plain", "subagent", false, true},
+		{"script", "", true, true},
+		{"claude-panel", "", true, true},
+		{"legacy-claude-panel", "", true, true},
+		{"origin~agent-child", "subagent", true, false},
+		{"claude-roborev", "", true, false},
+		{"real-child", "subagent", true, false},
+		{"child", "", false, false},
+		{"fork", "fork", false, false},
+		{"review", "", true, false},
 	} {
 		var relationship string
 		var automated bool
@@ -152,10 +170,13 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 		require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type, is_automated, updated_at FROM sessions WHERE id = $1`, tc.id).Scan(&relationship, &automated, &updated))
 		assert.Equal(t, tc.relationship, relationship, tc.id)
 		assert.Equal(t, tc.automated, automated, tc.id)
-		if tc.relationship == "subagent" {
-			assert.True(t, updated.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)))
+		if tc.bumped {
+			assert.True(t, updated.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)), tc.id)
 		}
 	}
+	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+	assert.Zero(t, progress.RowsPrefetched, "reconciled rows stay stamped for incremental audits")
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
@@ -409,17 +430,411 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 	require.NoError(t, err)
 	// Legacy headless rows predate non-interactive session metadata.
-	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
-		('codex-headless', 'other-machine', 'project', 'codex', 'headless', 2, true, true),
-		('codex-interactive', 'other-machine', 'project', 'codex', '', 2, false, true),
-		('headless-full', 'other-machine', 'project', 'codex', 'headless', 2, true, false)`)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, entrypoint, user_message_count, is_automated, prompt_evidence_discarded) VALUES
+		('codex-headless', 'other-machine', 'project', 'codex', 'headless', '', 2, true, true),
+		('codex-interactive', 'other-machine', 'project', 'codex', '', '', 2, false, true),
+		('claude-roborev-discarded', 'other-machine', 'project', 'claude', '', 'roborev', 2, false, true),
+		('headless-full', 'other-machine', 'project', 'codex', 'headless', '', 2, true, false)`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
-	for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "codex-interactive": false, "headless-full": false} {
+	for id, want := range map[string]bool{
+		"automated":                true,
+		"interactive":              false,
+		"empty-full":               false,
+		"codex-headless":           true,
+		"codex-interactive":        false,
+		"claude-roborev-discarded": true,
+		"headless-full":            false,
+	} {
 		var got bool
 		require.NoError(t, ps.DB().QueryRowContext(ctx,
 			`SELECT is_automated FROM sessions WHERE id = $1`, id,
 		).Scan(&got))
 		assert.Equal(t, want, got, id)
 	}
+}
+
+func TestAutomationAuditPGRestoresClaudeSDKWorker(t *testing.T) {
+	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
+	pgURL := testPGSchemaURL(t, "agentsview")
+	local := testDB(t)
+	// The pusher has no rule for this prompt, so the run stays a subagent.
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "panel", Machine: "local", Project: "project", Agent: "claude",
+		Entrypoint: "sdk-cli", RelationshipType: "subagent",
+		FirstMessage: new("# UX review\nCheck the CLI output."), UserMessageCount: 1, MessageCount: 1,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}))
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "panel-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	stored := func() (string, bool) {
+		t.Helper()
+		var relationship string
+		var automated bool
+		require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+			`SELECT relationship_type, is_automated FROM sessions WHERE id = 'panel'`,
+		).Scan(&relationship, &automated))
+		return relationship, automated
+	}
+
+	// A server audit with a matching rule counts the run as Automated.
+	db.SetUserAutomationPrefixes([]string{"# UX review"})
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	relationship, automated := stored()
+	assert.True(t, automated)
+	assert.Empty(t, relationship)
+
+	// Without the rule, the audit restores the parser's subagent role.
+	db.SetUserAutomationPrefixes(nil)
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	relationship, automated = stored()
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
+
+	// Legacy sdk-cli rows (NULL parser_relationship_type) also clear and restore.
+	_, err = ps.DB().ExecContext(t.Context(), `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, relationship_type, first_message, user_message_count)
+		VALUES ('legacy-panel', 'host', 'project', 'claude', 'sdk-cli', 'subagent', '# UX review\nCheck the CLI output.', 1)`)
+	require.NoError(t, err)
+	db.SetUserAutomationPrefixes([]string{"# UX review"})
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'legacy-panel'`,
+	).Scan(&relationship, &automated))
+	assert.True(t, automated)
+	assert.Empty(t, relationship)
+
+	db.SetUserAutomationPrefixes(nil)
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'legacy-panel'`,
+	).Scan(&relationship, &automated))
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
+}
+
+func TestAutomationAuditPGKeepsWaitingLauncherLinkAutomated(t *testing.T) {
+	pgURL := testPGSchemaURL(t, "agentsview")
+	local := testDB(t)
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "review", Machine: "local", Project: "project", Agent: "codex",
+		SessionKind:  "non-interactive",
+		FirstMessage: new("You are a code reviewer. Review this change."), UserMessageCount: 1, MessageCount: 1,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}))
+	// The launcher's session is not in the archive, so the link waits.
+	link, err := local.SetSessionExternalParent(t.Context(), "review", "missing-launcher")
+	require.NoError(t, err)
+	require.False(t, link.Changed)
+	sqliteRow, err := local.GetSessionFull(t.Context(), "review")
+	require.NoError(t, err)
+	require.True(t, sqliteRow.IsAutomated)
+	require.Empty(t, sqliteRow.RelationshipType)
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "review-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	var relationship, externalParent string
+	var automated bool
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated, COALESCE(external_parent_session_id, '')
+		 FROM sessions WHERE id = 'review'`,
+	).Scan(&relationship, &automated, &externalParent))
+	require.Equal(t, "missing-launcher", externalParent)
+	assert.True(t, automated)
+	assert.Empty(t, relationship, "SQLite counts a run with a waiting launcher link as Automated")
+}
+
+// auditReadTracer runs after the audit's candidate evidence SELECT finishes,
+// before applyVerdictBatchPG starts its write transaction.
+type auditReadTracer struct{ after func() }
+
+func (tracer *auditReadTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "convert_to(first_user.content, 'UTF8')") {
+		return context.WithValue(ctx, tracer, true)
+	}
+	return ctx
+}
+
+func (tracer *auditReadTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+	if ctx.Value(tracer) == true && tracer.after != nil {
+		after := tracer.after
+		tracer.after = nil
+		after()
+	}
+}
+
+func TestAutomationAuditPGLeavesConcurrentPushUnstamped(t *testing.T) {
+	t.Parallel()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(t.Context(), url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(t.Context()))
+	_, err = ps.DB().ExecContext(t.Context(), `INSERT INTO sessions
+		(id, machine, project, agent, session_kind, relationship_type, first_message, user_message_count)
+		VALUES ('race', 'host', 'project', 'codex', 'non-interactive', 'subagent', 'You are a code reviewer. Review this change.', 1)`)
+	require.NoError(t, err)
+	cfg, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	cfg.RuntimeParams["search_path"] = "agentsview"
+	// A push lands after the audit reads the candidate's evidence and before
+	// applyVerdictBatchPG writes verdicts, replacing the prompt the audit
+	// classified. writeAutomationVerdictsPG must skip the moved row version so
+	// the pushed row stays unstamped for the next audit.
+	tracer := &auditReadTracer{after: func() {
+		_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
+			SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
+		require.NoError(t, err)
+	}}
+	cfg.Tracer = tracer
+	audit := stdlib.OpenDB(*cfg)
+	defer audit.Close()
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), audit))
+	require.Nil(t, tracer.after, "the audit read the candidate")
+
+	var hash *string
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT automation_audit_hash FROM sessions WHERE id = 'race'`).Scan(&hash))
+	assert.Nil(t, hash, "the pushed version was never audited")
+	progress, err := backfillIsAutomatedPGWithProgress(t.Context(), audit)
+	require.NoError(t, err)
+	assert.Equal(t, 1, progress.RowsPrefetched)
+	var relationship string
+	var automated bool
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'race'`).Scan(&relationship, &automated))
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
+}
+
+func TestAutomationAuditPGRefreshesSignals(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-pg', 'host', 'project', 'claude', 'sdk-cli', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2),
+		('human-pg', 'host', 'project', 'codex', '', 'Explain this function.', 2, 1,
+		 TRUE, 'unknown', 'low', 'assistant', NULL, NULL, $2),
+		('usage-only-pg', 'host', 'project', 'codex', '', NULL, 2, 1,
+		 FALSE, '', '', '', NULL, NULL, $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx,
+		`UPDATE sessions SET session_kind = 'roborev', prompt_evidence_discarded = TRUE WHERE id = 'usage-only-pg'`)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-pg', 0, 'user', $1),
+		('review-pg', 1, 'assistant', 'Looks good.'),
+		('human-pg', 0, 'user', 'Explain this function.'),
+		('human-pg', 1, 'assistant', 'It adds two numbers.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	var (
+		automated           bool
+		outcome, confidence string
+		score               *int
+		grade               *string
+	)
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'review-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Equal(t, "unknown", outcome)
+	assert.Equal(t, "low", confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'human-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.False(t, automated)
+	assert.Equal(t, "completed", outcome)
+	assert.Equal(t, "medium", confidence)
+	require.NotNil(t, score)
+	assert.Equal(t, 100, *score)
+	require.NotNil(t, grade)
+	assert.Equal(t, "A", *grade)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'usage-only-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Empty(t, outcome)
+	assert.Empty(t, confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+
+	// Signal refresh must not clear automation_audit_hash.
+	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+	assert.Zero(t, progress.RowsPrefetched)
+}
+
+func TestAutomationAuditPGSignalRefreshFailureRollsBackAndRetries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-pg-retry', 'host', 'project', 'claude', 'sdk-cli', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-pg-retry', 0, 'user', $1),
+		('review-pg-retry', 1, 'assistant', 'Looks good.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = ps.DB().ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION fail_pg_signal_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = 'review-pg-retry' AND NEW.outcome = 'unknown' THEN
+				RAISE EXCEPTION 'simulated PG signal refresh failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER trg_fail_pg_signal_refresh
+		BEFORE UPDATE OF outcome ON sessions
+		FOR EACH ROW EXECUTE FUNCTION fail_pg_signal_refresh();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.Error(t, err)
+
+	var automated bool
+	var outcome, confidence string
+	var auditHash *string
+	var score *int
+	var grade *string
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, automation_audit_hash FROM sessions WHERE id = 'review-pg-retry'`,
+	).Scan(&automated, &outcome, &auditHash))
+	assert.False(t, automated, "failed signal refresh must roll back is_automated")
+	assert.Equal(t, "completed", outcome)
+	assert.Nil(t, auditHash, "failed signal refresh must roll back automation_audit_hash")
+
+	_, err = ps.DB().ExecContext(ctx, `DROP TRIGGER trg_fail_pg_signal_refresh ON sessions; DROP FUNCTION fail_pg_signal_refresh();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'review-pg-retry'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Equal(t, "unknown", outcome)
+	assert.Equal(t, "low", confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+}
+
+func TestAutomationAuditPGRelationshipFailureRollsBackAndRetries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	// Classifier hash is already current so a retry only revisits unstamped rows.
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, relationship_type, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-rel-retry', 'host', 'project', 'claude', 'sdk-cli', 'subagent', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-rel-retry', 0, 'user', $1),
+		('review-rel-retry', 1, 'assistant', 'Looks good.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = ps.DB().ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION fail_pg_rel_clear() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = 'review-rel-retry' AND COALESCE(NEW.relationship_type, '') = '' THEN
+				RAISE EXCEPTION 'simulated PG relationship reconciliation failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER trg_fail_pg_rel_clear
+		BEFORE UPDATE OF relationship_type ON sessions
+		FOR EACH ROW EXECUTE FUNCTION fail_pg_rel_clear();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.Error(t, err)
+
+	var automated bool
+	var rel, outcome string
+	var auditHash *string
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, relationship_type, outcome, automation_audit_hash FROM sessions WHERE id = 'review-rel-retry'`,
+	).Scan(&automated, &rel, &outcome, &auditHash))
+	assert.False(t, automated, "failed relationship update must roll back is_automated")
+	assert.Equal(t, "subagent", rel)
+	assert.Equal(t, "completed", outcome)
+	assert.Nil(t, auditHash, "failed relationship update must leave automation_audit_hash unstamped")
+
+	_, err = ps.DB().ExecContext(ctx, `DROP TRIGGER trg_fail_pg_rel_clear ON sessions; DROP FUNCTION fail_pg_rel_clear();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, relationship_type, outcome, automation_audit_hash FROM sessions WHERE id = 'review-rel-retry'`,
+	).Scan(&automated, &rel, &outcome, &auditHash))
+	assert.True(t, automated)
+	assert.Empty(t, rel)
+	assert.Equal(t, "unknown", outcome)
+	assert.NotNil(t, auditHash)
 }

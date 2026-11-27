@@ -2778,10 +2778,12 @@ func sessionAutomationStateTx(
 		firstUserMessage sql.NullString
 		userMsgCount     int
 		sessionKind      string
+		entrypoint       string
 	)
 	err = tx.QueryRow(`
 		SELECT
 			s.session_kind,
+			s.entrypoint,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -2801,6 +2803,7 @@ func sessionAutomationStateTx(
 		sessionID,
 	).Scan(
 		&sessionKind,
+		&entrypoint,
 		&firstMessage, &userMsgCount,
 		&rowAutomated, &firstUserMessage,
 	)
@@ -2814,7 +2817,7 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = IsAutomatedSessionMetadata(sessionKind) ||
+	want = IsAutomatedSessionMetadata(sessionKind, entrypoint) ||
 		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }
@@ -2822,12 +2825,28 @@ func sessionAutomationStateTx(
 func setSessionAutomationTx(
 	tx transactionQueries, sessionID string, isAutomated bool,
 ) error {
+	clearable := clearableHeadlessWorkerSQL("? = 1")
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		   SET is_automated = ?,
+		       relationship_type = CASE
+		           WHEN relationship_type = 'subagent' AND `+clearable+`
+		           THEN ''
+		           WHEN COALESCE(relationship_type, '') = ''
+		            AND COALESCE(parent_session_id, '') = ''
+		            AND `+parserRelationshipSQL+` = 'subagent'
+		            AND NOT (`+clearable+`)
+		           THEN 'subagent'
+		           ELSE relationship_type
+		       END,
+		       parser_relationship_type = CASE
+		           WHEN relationship_type = 'subagent' AND `+clearable+`
+		           THEN COALESCE(parser_relationship_type, 'subagent')
+		           ELSE parser_relationship_type
+		       END,
 		       local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ?`,
-		isAutomated, sessionID,
+		isAutomated, isAutomated, isAutomated, isAutomated, sessionID,
 	); err != nil {
 		return fmt.Errorf(
 			"updating is_automated from messages for %s: %w",

@@ -3186,6 +3186,19 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"session_project_identity_snapshots", "recorded_git_remote",
 			"ALTER TABLE session_project_identity_snapshots ADD COLUMN recorded_git_remote TEXT NOT NULL DEFAULT ''",
 		},
+		{
+			// These follow the columns their backfills read. Backfill once
+			// when the column is added; later writes compute it.
+			"sessions", "relationship_inferred",
+			"ALTER TABLE sessions ADD COLUMN relationship_inferred INTEGER NOT NULL DEFAULT 0;" +
+				" UPDATE sessions SET relationship_inferred = 1 WHERE " + legacyRelationshipInferredSQL,
+		},
+		{
+			// Backfill once from current links; later linking sets it.
+			"sessions", "spawn_linked",
+			"ALTER TABLE sessions ADD COLUMN spawn_linked INTEGER NOT NULL DEFAULT 0;" +
+				" UPDATE sessions SET spawn_linked = 1 WHERE " + legacySpawnLinkedSQL,
+		},
 	}
 }
 
@@ -4150,8 +4163,9 @@ END;
 const automationAuditSchemaSQL = `
 DROP TRIGGER IF EXISTS trg_sessions_automation_audit;
 CREATE TRIGGER IF NOT EXISTS trg_sessions_automation_audit
-AFTER UPDATE OF session_kind, first_message, user_message_count, is_automated, transcript_revision ON sessions
+AFTER UPDATE OF session_kind, entrypoint, first_message, user_message_count, is_automated, transcript_revision ON sessions
 WHEN NEW.session_kind IS NOT OLD.session_kind
+  OR NEW.entrypoint IS NOT OLD.entrypoint
   OR NEW.first_message IS NOT OLD.first_message
   OR NEW.user_message_count IS NOT OLD.user_message_count
   OR NEW.is_automated IS NOT OLD.is_automated
@@ -4641,11 +4655,28 @@ const clearAutomationAuditSQL = `UPDATE sessions SET automation_audit = 0 WHERE 
 // classifier changes. The writer is exclusively owned during the audit, and
 // interrupted audits leave stale rows for retry.
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
-	if err := repairParentlessWorkers(ctx, w); err != nil {
-		return err
-	}
 	current := ClassifierHash()
+	var stored string
+	err := w.QueryRow(ctx,
+		`SELECT value FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf(
+			"probing classifier hash: %w", err,
+		)
+	}
+	matchingHash := stored == current
 	if db.usageOnlyStorage() {
+		if err := applyUsageOnlyMetadataAutomation(ctx, w, matchingHash); err != nil {
+			return err
+		}
+		if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
+			return err
+		}
+		if _, err := w.Exec(ctx, clearAutomationAuditSQL); err != nil {
+			return fmt.Errorf("marking automation audit rows fresh: %w", err)
+		}
 		// Usage-only archives deliberately discard the text this migration
 		// audits. Session writes classify while raw parser/importer data is
 		// still available, so the stored flag is the durable authority here.
@@ -4659,20 +4690,10 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		}
 		return nil
 	}
-	var stored string
-	err := w.QueryRow(ctx,
-		`SELECT value FROM stats WHERE key = ?`,
-		ClassifierHashKey,
-	).Scan(&stored)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf(
-			"probing classifier hash: %w", err,
-		)
-	}
 
 	patterns := snapshotAutomationPatterns()
 	var setIDs, clearIDs []string
-	if stored == current {
+	if matchingHash {
 		setIDs, clearIDs, err = auditAutomatedMatchingHash(ctx, w, patterns)
 	} else {
 		setIDs, clearIDs, err = auditAutomatedFull(ctx, w, patterns)
@@ -4689,6 +4710,9 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	if err := batchUpdateAutomated(ctx,
 		w, clearIDs, 0,
 	); err != nil {
+		return err
+	}
+	if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
 		return err
 	}
 	if _, err := w.Exec(ctx,
@@ -4824,32 +4848,179 @@ func batchUpdateAutomated(ctx context.Context,
 	w *writerHandle, ids []string, val int,
 ) error {
 	const batchSize = 500
+	now := time.Now().UTC()
 	for i := 0; i < len(ids); i += batchSize {
-		end := min(i+batchSize, len(ids))
-		batch := ids[i:end]
-		args := make([]any, len(batch)+1)
-		phs := make([]string, len(batch))
-		args[0] = val
-		for j, id := range batch {
-			args[j+1] = id
-			phs[j] = "?"
-		}
-		_, err := w.Exec(ctx,
-			"UPDATE sessions"+
-				" SET is_automated = ?,"+
-				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
-				" WHERE id IN ("+
-				strings.Join(phs, ",")+
-				")",
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"updating is_automated: %w", err,
-			)
+		batch := ids[i:min(i+batchSize, len(ids))]
+		if err := applyAutomatedBatchLocked(ctx, w, batch, val, now); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+type automatedSignalRefresh struct {
+	id  string
+	res SessionSignalRefreshResult
+}
+
+func applyAutomatedBatchLocked(
+	ctx context.Context, w *writerHandle, batch []string, val int, now time.Time,
+) error {
+	tx, err := w.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting automation update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	args := make([]any, len(batch)+1)
+	phs := make([]string, len(batch))
+	args[0] = val
+	for j, id := range batch {
+		args[j+1] = id
+		phs[j] = "?"
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE sessions"+
+			" SET is_automated = ?,"+
+			"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
+			" WHERE id IN ("+
+			strings.Join(phs, ",")+
+			")",
+		args...,
+	); err != nil {
+		return fmt.Errorf("updating is_automated: %w", err)
+	}
+
+	updates, err := loadAutomatedSignalRefreshesTx(ctx, tx, batch, now)
+	if err != nil {
+		return err
+	}
+	for _, u := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sessions
+			 SET outcome = ?,
+			     outcome_confidence = ?,
+			     signals_pending_since = ?,
+			     health_score = ?,
+			     health_grade = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE id = ?`,
+			u.res.Outcome, u.res.OutcomeConfidence,
+			u.res.SignalsPendingSince, u.res.HealthScore,
+			u.res.HealthGrade, u.id,
+		); err != nil {
+			return fmt.Errorf("refreshing signals for automated session %s: %w", u.id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing automation update batch: %w", err)
+	}
+	return nil
+}
+
+func loadAutomatedSignalRefreshesTx(
+	ctx context.Context, tx *sql.Tx, batch []string, now time.Time,
+) ([]automatedSignalRefresh, error) {
+	args := make([]any, len(batch))
+	phs := make([]string, len(batch))
+	for j, id := range batch {
+		args[j] = id
+		phs[j] = "?"
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT s.id, s.is_automated, s.message_count, s.ended_at,
+		        s.ended_with_role, s.final_failure_streak,
+		        s.signals_pending_since, s.has_tool_calls,
+		        s.tool_failure_signal_count, s.tool_retry_count,
+		        s.edit_churn_count, s.consecutive_failure_max,
+		        s.has_context_data, s.compaction_count,
+		        s.mid_task_compaction_count, s.context_pressure_max,
+		        s.short_prompt_count, s.unstructured_start,
+		        s.missing_success_criteria_count,
+		        s.missing_verification_count, s.duplicate_prompt_count,
+		        s.no_code_context_count, s.runaway_tool_loop_count,
+		        s.outcome, s.outcome_confidence,
+		        s.health_score, s.health_grade,
+		        COALESCE((
+		            SELECT m.role FROM messages m
+		            WHERE m.session_id = s.id
+		              AND m.is_system = 0
+		              AND m.source_subtype <> 'tool_result'
+		            ORDER BY m.ordinal DESC
+		            LIMIT 1
+		        ), '') AS last_role,
+		        COALESCE((
+		            SELECT m.content FROM messages m
+		            WHERE m.session_id = s.id
+		              AND m.is_system = 0
+		              AND m.source_subtype <> 'tool_result'
+		            ORDER BY m.ordinal DESC
+		            LIMIT 1
+		        ), '') AS last_content
+		 FROM sessions s
+		 WHERE s.id IN (`+strings.Join(phs, ",")+`)
+		   AND NOT (
+		       s.outcome = '' AND s.outcome_confidence = ''
+		       AND s.health_score IS NULL AND s.health_grade IS NULL
+		       AND s.signals_pending_since IS NULL
+		   )
+		   AND (
+		       s.quality_signal_version > 0
+		       OR s.outcome <> 'unknown'
+		       OR s.outcome_confidence <> 'low'
+		       OR s.health_score IS NOT NULL
+		       OR s.health_grade IS NOT NULL
+		       OR s.signals_pending_since IS NOT NULL
+		   )`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading changed sessions for signal refresh: %w", err)
+	}
+	defer rows.Close()
+	var updates []automatedSignalRefresh
+	for rows.Next() {
+		var (
+			id, curOutcome, curConfidence string
+			lastRole, lastContent         string
+			isAutomated, hasToolCalls     int
+			hasContextData, unstructured  int
+			curScore                      *int
+			curGrade                      *string
+			in                            SessionSignalRefreshInput
+		)
+		if err := rows.Scan(
+			&id, &isAutomated, &in.MessageCount, &in.EndedAt,
+			&in.EndedWithRole, &in.FinalFailureStreak,
+			&in.SignalsPendingSince, &hasToolCalls,
+			&in.ToolFailureSignalCount, &in.ToolRetryCount,
+			&in.EditChurnCount, &in.ConsecutiveFailureMax,
+			&hasContextData, &in.CompactionCount,
+			&in.MidTaskCompactionCount, &in.ContextPressureMax,
+			&in.ShortPromptCount, &unstructured,
+			&in.MissingSuccessCriteriaCount,
+			&in.MissingVerificationCount, &in.DuplicatePromptCount,
+			&in.NoCodeContextCount, &in.RunawayToolLoopCount,
+			&curOutcome, &curConfidence,
+			&curScore, &curGrade,
+			&lastRole, &lastContent,
+		); err != nil {
+			return nil, fmt.Errorf("scanning changed session for signal refresh: %w", err)
+		}
+		in.IsAutomated = isAutomated != 0
+		in.HasToolCalls = hasToolCalls != 0
+		in.HasContextData = hasContextData != 0
+		in.UnstructuredStart = unstructured != 0
+		if next, changed := in.RefreshIfChanged(
+			lastRole, lastContent, curOutcome, curConfidence, curScore, curGrade, now,
+		); changed {
+			updates = append(updates, automatedSignalRefresh{id: id, res: next})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading changed sessions for signal refresh: %w", err)
+	}
+	return updates, nil
 }
 
 func (db *DB) shouldRunTokenCoverageRepairLocked(ctx context.Context,

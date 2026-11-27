@@ -170,10 +170,13 @@ func (db *DB) ClearSessionExternalParent(
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("deleting session parent: %w", err)
 	}
+	// An explicit unlink also drops the spawn record the link left, unless a
+	// spawn edge still names the session.
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = NULL,
-			relationship_type = `+parserRelationshipSQL+`,
+			relationship_type = `+unlinkedRelationshipSQL("0")+`,
+			spawn_linked = 0,
 			friction_rules_version = '',
 			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ? AND parent_session_id = ? AND relationship_type = 'subagent'
@@ -186,6 +189,26 @@ func (db *DB) ClearSessionExternalParent(
 	if err != nil {
 		return SessionExternalParent{}, fmt.Errorf("counting removed session parent: %w", err)
 	}
+	// A link that no longer applied, such as one whose parent was deleted,
+	// still left a spawn record.
+	unrecordedRelationship := `IIF(COALESCE(parent_session_id, '') = '' AND relationship_type = 'subagent',
+				` + unlinkedRelationshipSQL("0") + `, relationship_type)`
+	forgotten, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET relationship_type = `+unrecordedRelationship+`,
+			spawn_linked = 0,
+			friction_rules_version = IIF(relationship_type IS `+unrecordedRelationship+`, friction_rules_version, ''),
+			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ? AND spawn_linked = 1
+		AND NOT `+spawnEdgeExistsSQL("sessions"), sessionID)
+	if err != nil {
+		return SessionExternalParent{}, fmt.Errorf("removing session spawn record: %w", err)
+	}
+	unrecorded, err := forgotten.RowsAffected()
+	if err != nil {
+		return SessionExternalParent{}, fmt.Errorf("counting removed session spawn record: %w", err)
+	}
+	removed += unrecorded
 	// Dropping the link can release another link whose chain ran through it.
 	moved, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
 		func(ctx context.Context, query string, args ...any) rowScanner {
@@ -301,7 +324,10 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.blocked, NULL, l.parent_session_id),
-		relationship_type = IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent'),
+		relationship_type = IIF(l.blocked, ` + effectiveParentlessRelationshipSQL + `, 'subagent'),
+		-- A link that applied once keeps the session a spawned worker after
+		-- its parent is deleted.
+		spawn_linked = IIF(l.blocked, sessions.spawn_linked, 1),
 		-- Friction review reads the hierarchy; a moved session needs a new one.
 		friction_rules_version = '',
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -317,7 +343,8 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
-		OR sessions.relationship_type <> IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent')
+		OR sessions.relationship_type <> IIF(l.blocked, ` + effectiveParentlessRelationshipSQL + `, 'subagent')
+		OR (NOT l.blocked AND sessions.spawn_linked = 0)
 	)`
 }
 

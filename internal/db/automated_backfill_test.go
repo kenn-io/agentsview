@@ -9,23 +9,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	d := testDB(t)
 	for _, tc := range []struct {
-		id, prompt, kind, relationship string
-		parent                         *string
+		id, agent, entrypoint, prompt, kind, relationship string
+		parent                                            *string
 	}{
-		{"plain", "Explain this function.", "non-interactive", "", nil},
-		{"script", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
-		{"child", "Explain this function.", "non-interactive", "", Ptr("plain")},
-		{"fork", "Explain this function.", "non-interactive", "fork", nil},
-		{"review", "Explain this function.", "roborev", "", nil},
+		{"plain", "codex", "", "Explain this function.", "non-interactive", "", nil},
+		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
+		{"claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil},
+		{"child", "codex", "", "Explain this function.", "non-interactive", "", Ptr("plain")},
+		{"fork", "codex", "", "Explain this function.", "non-interactive", "fork", nil},
+		{"review", "codex", "", "Explain this function.", "roborev", "", nil},
+		{"claude-roborev", "claude", "roborev", "# UX review\nCheck the CLI output.", "", "", nil},
 	} {
 		insertSession(t, d, tc.id, "project-a", func(s *Session) {
-			s.Agent = "codex"
+			s.Agent = tc.agent
+			s.Entrypoint = tc.entrypoint
 			s.FirstMessage = Ptr(tc.prompt)
 			s.SessionKind = tc.kind
 			s.RelationshipType = tc.relationship
@@ -35,9 +39,13 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	}
 	_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER trg_sessions_classification_journal_update`)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id IN ('plain', 'script')`)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = 'subagent', parser_relationship_type = 'subagent' WHERE id IN ('script', 'claude-panel')`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1, local_modified_at = '2000-01-01T00:00:00.000Z'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'claude-roborev'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
 	require.NoError(t, err)
@@ -49,21 +57,24 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	for _, tc := range []struct {
 		id, relationship string
 		automated        bool
+		bumped           bool
 	}{
-		{"plain", "subagent", false},
-		{"script", "subagent", true},
-		{"child", "", false},
-		{"fork", "fork", false},
-		{"review", "", true},
+		{"plain", "subagent", false, true},
+		{"script", "", true, true},
+		{"claude-panel", "", true, true},
+		{"child", "", false, true},
+		{"fork", "fork", false, true},
+		{"review", "", true, false},
+		{"claude-roborev", "", true, true},
 	} {
 		stored, err := reopened.GetSessionFull(t.Context(), tc.id)
 		require.NoError(t, err)
 		require.NotNil(t, stored)
 		assert.Equal(t, tc.relationship, stored.RelationshipType, tc.id)
 		assert.Equal(t, tc.automated, stored.IsAutomated, tc.id)
-		if tc.relationship == "subagent" {
+		if tc.bumped {
 			require.NotNil(t, stored.LocalModifiedAt)
-			assert.Greater(t, *stored.LocalModifiedAt, "2000-01-01T00:00:00.000Z")
+			assert.Greater(t, *stored.LocalModifiedAt, "2000-01-01T00:00:00.000Z", tc.id)
 		}
 	}
 
@@ -73,6 +84,8 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, changes, "plain")
 	assert.Contains(t, changes, "script")
+	assert.Contains(t, changes, "claude-panel")
+	assert.Contains(t, changes, "claude-roborev")
 	_, err = reopened.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
@@ -83,6 +96,205 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "subagent", stored.RelationshipType, "matching-hash audits repair late arrivals")
+}
+
+func TestBackfillReconcilesClaudePanelBidirectionally(t *testing.T) {
+	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })
+
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "root", "project-a")
+	insertSession(t, d, "ux-review", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.RelationshipType = "subagent"
+		s.FirstMessage = Ptr("# UX review\nCheck the CLI output.")
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "snapshot-review", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.RelationshipType = "subagent"
+		s.FirstMessage = Ptr(`Read the complete task prompt from "/repo/.roborev/roborev-snapshot-1/prompt.md" and carry out its instructions.`)
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "agent-task", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+		s.FirstMessage = Ptr("You are a code reviewer. Review this change.")
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "launched-review", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.RelationshipType = "subagent"
+		s.FirstMessage = Ptr("You are a code reviewer. Review this change.")
+		s.UserMessageCount = 1
+	})
+
+	// Snapshot handoff starts automated and un-delegated immediately.
+	snap, err := d.GetSession(ctx, "snapshot-review")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	assert.True(t, snap.IsAutomated)
+	assert.Empty(t, snap.RelationshipType)
+
+	// UX review starts as a parentless subagent until the user adds its prefix.
+	ux, err := d.GetSession(ctx, "ux-review")
+	require.NoError(t, err)
+	require.NotNil(t, ux)
+	assert.False(t, ux.IsAutomated)
+	assert.Equal(t, "subagent", ux.RelationshipType)
+
+	// Real subagent keeps subagent status even if its parent is later cleared.
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET parent_session_id = NULL WHERE id = 'agent-task'`)
+	require.NoError(t, err)
+
+	// Externally linked automated worker stays subagent while linked, then
+	// returns to un-delegated automated when cleared.
+	link, err := d.SetSessionExternalParent(ctx, "launched-review", "root")
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+	launched, err := d.GetSession(ctx, "launched-review")
+	require.NoError(t, err)
+	assert.Equal(t, "subagent", launched.RelationshipType)
+
+	// Adding a user prefix flips ux-review to automated and clears subagent.
+	SetUserAutomationPrefixes([]string{"# UX review"})
+	path := d.Path()
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(ctx, path)
+	require.NoError(t, err)
+	ux, err = reopened.GetSession(ctx, "ux-review")
+	require.NoError(t, err)
+	assert.True(t, ux.IsAutomated)
+	assert.Empty(t, ux.RelationshipType)
+
+	task, err := reopened.GetSession(ctx, "agent-task")
+	require.NoError(t, err)
+	assert.True(t, task.IsAutomated)
+	assert.Equal(t, "subagent", task.RelationshipType, "real subagents stay subagents")
+
+	launched, err = reopened.GetSession(ctx, "launched-review")
+	require.NoError(t, err)
+	assert.Equal(t, "subagent", launched.RelationshipType, "externally linked workers stay subagents")
+
+	_, err = reopened.ClearSessionExternalParent(ctx, "launched-review")
+	require.NoError(t, err)
+	launched, err = reopened.GetSession(ctx, "launched-review")
+	require.NoError(t, err)
+	assert.Empty(t, launched.RelationshipType, "clearing external parent restores automated status")
+
+	// Removing the user prefix restores ux-review to subagent using stored parser_relationship_type.
+	SetUserAutomationPrefixes(nil)
+	require.NoError(t, reopened.Close())
+	reopened, err = Open(ctx, path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	ux, err = reopened.GetSession(ctx, "ux-review")
+	require.NoError(t, err)
+	assert.False(t, ux.IsAutomated)
+	assert.Equal(t, "subagent", ux.RelationshipType)
+}
+
+func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "legacy-panel", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.RelationshipType = "subagent"
+		s.IsAutomated = true
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "legacy-roborev", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "roborev"
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "prompt-automated", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.IsAutomated = true
+		s.UserMessageCount = 1
+	})
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_type = 'subagent', parser_relationship_type = 'subagent', is_automated = 1 WHERE id = 'legacy-panel'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0, local_modified_at = '2000-01-01T00:00:00Z' WHERE id = 'legacy-roborev'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 1 WHERE id = 'prompt-automated'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+	path := d.Path()
+	require.NoError(t, d.Close())
+
+	reopened, err := OpenWithArchiveContent(ctx, path, config.ArchiveContentUsage)
+	require.NoError(t, err)
+	defer reopened.Close()
+	stored, err := reopened.GetSession(ctx, "legacy-panel")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.True(t, stored.IsAutomated)
+	assert.Empty(t, stored.RelationshipType)
+
+	roborev, err := reopened.GetSessionFull(ctx, "legacy-roborev")
+	require.NoError(t, err)
+	require.NotNil(t, roborev)
+	assert.True(t, roborev.IsAutomated, "roborev entrypoint classifies without retained prompt text")
+	require.NotNil(t, roborev.LocalModifiedAt)
+	assert.NotEqual(t, "2000-01-01T00:00:00Z", *roborev.LocalModifiedAt)
+
+	promptOnly, err := reopened.GetSession(ctx, "prompt-automated")
+	require.NoError(t, err)
+	require.NotNil(t, promptOnly)
+	assert.True(t, promptOnly.IsAutomated, "stored prompt-derived verdict is preserved when metadata does not match")
+}
+
+func TestLegacyRelationshipInferredProtectsImportedClaudeSubagent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, tc := range []struct {
+		id, sourceID string
+	}{
+		{"origin~agent-sub1", "origin~agent-sub1"},
+		{"origin~panel-1", "origin~panel-1"},
+		{"agent-host~panel-2", "agent-host~panel-2"},
+		{"raw-row-child", "agent-sub2"},
+		{"agent-local1", "agent-local1"},
+	} {
+		_, err := d.getWriter().Exec(ctx, `INSERT INTO sessions
+			(id, machine, project, agent, entrypoint, source_session_id, relationship_type, is_automated, user_message_count, relationship_inferred)
+			VALUES (?, 'local', 'project-a', 'claude', 'sdk-cli', ?, 'subagent', 1, 1, 0)`, tc.id, tc.sourceID)
+		require.NoError(t, err)
+	}
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_inferred = 1 WHERE `+legacyRelationshipInferredSQL)
+	require.NoError(t, err)
+	require.NoError(t, reconcileParentlessWorkers(ctx, d.getWriter(), false))
+
+	for id, wantRel := range map[string]string{
+		"origin~agent-sub1":  "subagent",
+		"raw-row-child":      "subagent",
+		"agent-local1":       "subagent",
+		"origin~panel-1":     "",
+		"agent-host~panel-2": "",
+	} {
+		sess, err := d.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, sess, id)
+		assert.Equal(t, wantRel, sess.RelationshipType, id)
+	}
+
+	assert.True(t, SessionRelationshipInferred(Session{
+		ID: "agent-host~panel-2", SourceSessionID: "agent-host~panel-2",
+		Agent: "claude", Entrypoint: "sdk-cli", RelationshipType: "subagent",
+	}), "origin prefix starting with agent- does not mask a normal session")
+	assert.False(t, SessionRelationshipInferred(Session{
+		ID: "raw-row-child", SourceSessionID: "agent-sub2",
+		Agent: "claude", Entrypoint: "sdk-cli", RelationshipType: "subagent",
+	}), "native agent-* source_session_id protects renamed sessions")
 }
 
 func TestIncrementalAppendPreservesRoborevTag(t *testing.T) {
@@ -1032,4 +1244,245 @@ func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
 			assert.Equal(t, automated, stored.IsAutomated, "audit classification")
 		})
 	}
+}
+
+func TestSpawnedHeadlessWorkerStaysSubagentAfterParentDeletion(t *testing.T) {
+	for _, link := range []string{"spawn edge", "launcher"} {
+		t.Run(link, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			worker := func(s *Session) {
+				s.Agent = "codex"
+				s.SessionKind = parser.SessionKindNonInteractive
+				s.FirstMessage = Ptr(`Read the complete task prompt from "/tmp/prompt.md" and carry out its instructions.`)
+				s.UserMessageCount = 1
+			}
+			insertSession(t, d, "worker", "project-a", worker)
+			stored, err := d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.True(t, stored.IsAutomated)
+			require.Empty(t, stored.RelationshipType, "an unlinked automated headless run counts as Automated")
+
+			if link == "spawn edge" {
+				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+					Session:         Session{ID: "parent", Project: "project-a", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+					ReplaceMessages: true,
+					Messages: []Message{{
+						SessionID: "parent", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+						ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
+					}},
+				}})
+				require.NoError(t, err)
+				_, err = d.LinkSubagentSessionsContext(ctx)
+				require.NoError(t, err)
+			} else {
+				insertSession(t, d, "parent", "project-a")
+				_, err = d.SetSessionExternalParent(ctx, "worker", "parent")
+				require.NoError(t, err)
+			}
+			stored, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.Equal(t, Ptr("parent"), stored.ParentSessionID)
+			require.Equal(t, "subagent", stored.RelationshipType)
+
+			require.NoError(t, d.DeleteSession(ctx, "parent"))
+			if link == "spawn edge" {
+				_, err = d.getWriter().Exec(ctx, clearDanglingSubagentParentQuery("(?)"), "worker")
+				require.NoError(t, err)
+			}
+			// A later sync rewrites the worker from its source, which has no parent.
+			insertSession(t, d, "worker", "project-a", worker)
+			stored, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, stored.ParentSessionID)
+			assert.Equal(t, "subagent", stored.RelationshipType, "rewrite after parent deletion")
+
+			_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+			require.NoError(t, err)
+			path := d.Path()
+			require.NoError(t, d.Close())
+			reopened, err := Open(ctx, path)
+			require.NoError(t, err)
+			defer reopened.Close()
+			stored, err = reopened.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.True(t, stored.IsAutomated)
+			assert.Equal(t, "subagent", stored.RelationshipType, "classifier change after parent deletion")
+		})
+	}
+}
+
+func TestAutomatedBackfillRefreshesSignals(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	// 1. Two-message prompt-file review stored before upgrade as non-automated
+	//    with completed/medium outcome and a 100/A health score.
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	insertSession(t, d, "review-to-auto", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.FirstMessage = Ptr(reviewPrompt)
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "review-to-auto", Ordinal: 0, Role: "user", Content: reviewPrompt},
+		{SessionID: "review-to-auto", Ordinal: 1, Role: "assistant", Content: "Looks good."},
+	}))
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     ended_with_role = 'assistant',
+		     health_score = 100,
+		     health_grade = 'A',
+		     quality_signal_version = ?
+		 WHERE id = 'review-to-auto'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	// 2. Two-message interactive session previously marked automated with
+	//    unknown/low outcome and nil health.
+	insertSession(t, d, "auto-to-human", "project-a", func(s *Session) {
+		s.Agent = "codex"
+		s.FirstMessage = Ptr("Explain this function.")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "auto-to-human", Ordinal: 0, Role: "user", Content: "Explain this function."},
+		{SessionID: "auto-to-human", Ordinal: 1, Role: "assistant", Content: "It adds two numbers."},
+	}))
+	_, err = d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 1,
+		     outcome = 'unknown',
+		     outcome_confidence = 'low',
+		     ended_with_role = 'assistant',
+		     health_score = NULL,
+		     health_grade = NULL,
+		     quality_signal_version = ?
+		 WHERE id = 'auto-to-human'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	// 3. Row with intentionally empty signals whose metadata flips is_automated
+	//    to true must preserve empty signal fields.
+	insertSession(t, d, "usage-only-empty", "project-a", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionKind = parser.SessionKindRoborev
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	_, err = d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = '',
+		     outcome_confidence = '',
+		     ended_with_role = '',
+		     health_score = NULL,
+		     health_grade = NULL,
+		     quality_signal_version = ?
+		 WHERE id = 'usage-only-empty'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+	require.NoError(t, d.backfillIsAutomatedLocked(ctx, d.getWriter()))
+
+	review, err := d.GetSessionFull(ctx, "review-to-auto")
+	require.NoError(t, err)
+	assert.True(t, review.IsAutomated)
+	assert.Equal(t, "unknown", review.Outcome)
+	assert.Equal(t, "low", review.OutcomeConfidence)
+	assert.Nil(t, review.HealthScore)
+	assert.Nil(t, review.HealthGrade)
+
+	human, err := d.GetSessionFull(ctx, "auto-to-human")
+	require.NoError(t, err)
+	assert.False(t, human.IsAutomated)
+	assert.Equal(t, "completed", human.Outcome)
+	assert.Equal(t, "medium", human.OutcomeConfidence)
+	require.NotNil(t, human.HealthScore)
+	assert.Equal(t, 100, *human.HealthScore)
+	require.NotNil(t, human.HealthGrade)
+	assert.Equal(t, "A", *human.HealthGrade)
+
+	usageOnly, err := d.GetSessionFull(ctx, "usage-only-empty")
+	require.NoError(t, err)
+	assert.True(t, usageOnly.IsAutomated)
+	assert.Empty(t, usageOnly.Outcome)
+	assert.Empty(t, usageOnly.OutcomeConfidence)
+	assert.Nil(t, usageOnly.HealthScore)
+	assert.Nil(t, usageOnly.HealthGrade)
+}
+
+func TestAutomatedBackfillSignalRefreshFailureRollsBackAndRetries(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	insertSession(t, d, "review-retry", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.FirstMessage = Ptr(reviewPrompt)
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "review-retry", Ordinal: 0, Role: "user", Content: reviewPrompt},
+		{SessionID: "review-retry", Ordinal: 1, Role: "assistant", Content: "Looks good."},
+	}))
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     ended_with_role = 'assistant',
+		     health_score = 100,
+		     health_grade = 'A',
+		     quality_signal_version = ?
+		 WHERE id = 'review-retry'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+
+	// Fail the signal refresh UPDATE once to simulate an interrupted startup
+	// between flag write and signal refresh.
+	_, err = d.getWriter().Exec(ctx, `CREATE TRIGGER fail_signal_refresh
+		BEFORE UPDATE OF outcome ON sessions
+		WHEN NEW.id = 'review-retry' AND NEW.outcome = 'unknown'
+		BEGIN
+			SELECT RAISE(ABORT, 'simulated signal refresh failure');
+		END`)
+	require.NoError(t, err)
+
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
+	require.Error(t, err)
+
+	// Both is_automated and signals must have rolled back together.
+	mid, err := d.GetSessionFull(ctx, "review-retry")
+	require.NoError(t, err)
+	assert.False(t, mid.IsAutomated)
+	assert.Equal(t, "completed", mid.Outcome)
+
+	_, err = d.getWriter().Exec(ctx, `DROP TRIGGER fail_signal_refresh`)
+	require.NoError(t, err)
+
+	require.NoError(t, d.backfillIsAutomatedLocked(ctx, d.getWriter()))
+	after, err := d.GetSessionFull(ctx, "review-retry")
+	require.NoError(t, err)
+	assert.True(t, after.IsAutomated)
+	assert.Equal(t, "unknown", after.Outcome)
+	assert.Equal(t, "low", after.OutcomeConfidence)
+	assert.Nil(t, after.HealthScore)
+	assert.Nil(t, after.HealthGrade)
 }

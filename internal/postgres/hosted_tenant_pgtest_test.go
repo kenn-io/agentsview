@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -741,4 +742,51 @@ func TestHostedTenantUpgradeInstallsAutomationTracking(t *testing.T) {
 	current, err := automationAuditSchemaCurrentPG(t.Context(), f.admin)
 	require.NoError(t, err)
 	assert.True(t, current)
+}
+
+func TestHostedTenantUpgradeReconcilesAutomatedHeadlessReviews(t *testing.T) {
+	t.Parallel()
+	f := newHostedFixture(t, "tenant-a")
+	ctx := t.Context()
+
+	_, err := f.admin.ExecContext(ctx, `INSERT INTO raw_corpus_state(tenant_id, singleton, corpus_revision) VALUES ($1, 1, 10)
+		ON CONFLICT (singleton) DO UPDATE SET corpus_revision = 10`, f.tenant)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `INSERT INTO sessions (
+			tenant_id, id, machine, project, agent, entrypoint, source_session_id,
+			first_message, relationship_type,
+			user_message_count, is_automated, provenance_kind,
+			parser_relationship_type, relationship_inferred
+		) VALUES
+		($1, 'raw-row-panel', 'hosted', 'proj', 'claude', 'sdk-cli', 'panel-uuid-1',
+		 'You are a code reviewer. Review this change.', 'subagent',
+		 1, TRUE, 'raw', NULL, FALSE),
+		($1, 'raw-row-native-child', 'hosted', 'proj', 'claude', 'sdk-cli', 'agent-child-1',
+		 'You are a code reviewer. Review this change.', 'subagent',
+		 1, TRUE, 'raw', NULL, FALSE)`, f.tenant)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+
+	var rel, parserRel string
+	var inferred bool
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT relationship_type, COALESCE(parser_relationship_type, ''), relationship_inferred
+		FROM sessions WHERE id = 'raw-row-panel'`).Scan(&rel, &parserRel, &inferred))
+	assert.Empty(t, rel, "automated headless review moves to Automated")
+	assert.Equal(t, "subagent", parserRel)
+	assert.True(t, inferred)
+
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'raw-row-native-child'`).Scan(&rel))
+	assert.Equal(t, "subagent", rel, "raw-projected native agent-* child stays Subagents via source_session_id")
+
+	var revAfterUpgrade int64
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT corpus_revision FROM raw_corpus_state WHERE singleton = 1`).Scan(&revAfterUpgrade))
+	assert.Greater(t, revAfterUpgrade, int64(10), "reclassifying raw rows advances corpus_revision")
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+	var revAfterNoop int64
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT corpus_revision FROM raw_corpus_state WHERE singleton = 1`).Scan(&revAfterNoop))
+	assert.Equal(t, revAfterUpgrade, revAfterNoop, "idempotent upgrade without changes leaves corpus_revision unchanged")
 }

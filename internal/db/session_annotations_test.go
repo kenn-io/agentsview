@@ -887,10 +887,13 @@ func TestSessionExternalParentWaitsForParentArrival(t *testing.T) {
 func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 	for _, classification := range []struct {
 		kind, relationship, want string
-		legacy, spawned          bool
+		// exportEmpty marks a promoted headless run, which exports no
+		// relationship so the importer promotes it again.
+		exportEmpty     bool
+		legacy, spawned bool
 	}{
 		{relationship: "subagent", want: "subagent"},
-		{kind: "non-interactive", want: "subagent"},
+		{kind: "non-interactive", want: "subagent", exportEmpty: true},
 		{},
 		{spawned: true},
 		{relationship: "subagent", want: "subagent", spawned: true},
@@ -950,7 +953,11 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 				exported, err := d.GetArtifactExportSession(ctx, "worker")
 				require.NoError(t, err)
 				assert.Nil(t, exported.ParentSessionID)
-				assert.Equal(t, classification.want, exported.RelationshipType)
+				wantExport := classification.want
+				if classification.exportEmpty {
+					wantExport = ""
+				}
+				assert.Equal(t, wantExport, exported.RelationshipType)
 				switch action {
 				case "clear":
 					_, err = d.ClearSessionExternalParent(ctx, "worker")

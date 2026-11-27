@@ -20,7 +20,8 @@ import (
 // Without this bump, those DBs already have the v1 hash stored
 // and would skip the backfill on Open.)
 // Version 3 classifies headless runs from script evidence instead of launch mode.
-const classifierAlgorithmVersion = 3
+// Version 4 classifies roborev entrypoints and parentless automated headless runs as automated.
+const classifierAlgorithmVersion = 4
 
 // ClassifierHash returns a stable hex-encoded SHA-256 over
 // the algorithm version, all built-in pattern slices, and the

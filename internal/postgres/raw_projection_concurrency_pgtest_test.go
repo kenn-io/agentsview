@@ -5,12 +5,14 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/rawsync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/rawsync"
 )
 
 func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.T) {
@@ -409,4 +411,166 @@ func TestRawProjectionRollsBackWhenLeaseExpiresWaitingForCorpusRevision(t *testi
 	var count int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&count))
 	assert.Zero(t, count)
+}
+
+func TestRawProjectionConcurrentLauncherDeletionAndFirstWorkerImport(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"exclude", "exclude_merged_short_variant", "empty_trash"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			f := newProjectionFixture(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			deleteAlias := "codex:launcher"
+			if mode == "exclude_merged_short_variant" {
+				shortManifest, _ := f.acceptScoped(t, "device-short", "launcher-short", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+				shortOutcome := projectionOutcome("launcher prompt")
+				shortOutcome.Outcome.Results[0].Result.Session.ID = "codex:launcher"
+				shortOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "launcher"
+				shortOutcome.Outcome.Results[0].Result.Messages = shortOutcome.Outcome.Results[0].Result.Messages[:1]
+				require.NoError(t, f.sink.Project(ctx, f.lease(t, shortManifest), shortManifest, shortOutcome))
+				deleteAlias = f.alias(t, shortManifest)
+			}
+
+			launcherManifest, _ := f.acceptScoped(t, "device-a", "launcher", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+			launcherOutcome := projectionOutcome("launcher prompt")
+			launcherOutcome.Outcome.Results[0].Result.Session.ID = "codex:launcher"
+			launcherOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "launcher"
+			launcherOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+			launcherOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+			require.NoError(t, f.sink.Project(ctx, f.lease(t, launcherManifest), launcherManifest, launcherOutcome))
+			require.NoError(t, f.sink.SetCuration(ctx, "codex:launcher", "trashed", true))
+
+			workerManifest, _ := f.acceptScoped(t, "device-a", "worker", "", parser.AgentCodex, "root-a", "worker.jsonl")
+			workerOutcome := projectionOutcome("You are a code reviewer. Review this change.")
+			workerOutcome.Outcome.Results[0].Result.Session.ID = "codex:worker"
+			workerOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "worker"
+			workerOutcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+			workerLease := f.lease(t, workerManifest)
+
+			f.parkOn(t, "INSERT", "sessions", "NEW.is_automated")
+			gate, err := f.admin.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer func() { _ = gate.Rollback() }()
+			_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+			require.NoError(t, err)
+
+			advisoryWaiters := func(want int) func() bool {
+				return func() bool {
+					var parked int
+					err := f.admin.QueryRowContext(ctx,
+						`SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`,
+						f.role,
+					).Scan(&parked)
+					return err == nil && parked == want
+				}
+			}
+
+			projected := make(chan error, 1)
+			go func() {
+				projected <- f.sink.Project(ctx, workerLease, workerManifest, workerOutcome)
+			}()
+			require.Eventually(t, advisoryWaiters(1), 3*time.Second, 10*time.Millisecond)
+
+			deleted := make(chan error, 1)
+			go func() {
+				if mode != "empty_trash" {
+					ok, err := f.sink.ExcludeTrashedSession(ctx, deleteAlias)
+					if err == nil && !ok {
+						err = fmt.Errorf("expected ExcludeTrashedSession to exclude %s", deleteAlias)
+					}
+					deleted <- err
+					return
+				}
+				n, err := f.sink.EmptyTrash(ctx)
+				if err == nil && n != 1 {
+					err = fmt.Errorf("expected EmptyTrash to remove 1 session, got %d", n)
+				}
+				deleted <- err
+			}()
+
+			// Permanent deletion must wait on the spawned worker's alias lock
+			// instead of racing ahead of Project and missing the new worker row.
+			require.Eventually(t, advisoryWaiters(2), 3*time.Second, 10*time.Millisecond)
+
+			require.NoError(t, gate.Commit())
+			require.NoError(t, <-projected)
+			require.NoError(t, <-deleted)
+
+			h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+			require.NoError(t, err)
+			got, err := h.GetSessionFull(ctx, "codex:worker")
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.True(t, got.IsAutomated)
+			assert.Empty(t, got.RelationshipType, "worker must be Automated once concurrent launcher deletion finishes")
+		})
+	}
+}
+
+func TestRawProjectionConcurrentFirstLauncherAndWorkerImport(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	launcherManifest, _ := f.acceptScoped(t, "device-a", "launcher-first", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+	launcherOutcome := projectionOutcome("launcher prompt")
+	launcherOutcome.Outcome.Results[0].Result.Session.ID = "codex:launcher"
+	launcherOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "launcher"
+	launcherOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+	launcherOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	launcherLease := f.lease(t, launcherManifest)
+
+	workerManifest, _ := f.acceptScoped(t, "device-a", "worker-first", "", parser.AgentCodex, "root-a", "worker.jsonl")
+	workerOutcome := projectionOutcome("You are a code reviewer. Review this change.")
+	workerOutcome.Outcome.Results[0].Result.Session.ID = "codex:worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+	workerLease := f.lease(t, workerManifest)
+
+	f.parkOn(t, "INSERT", "sessions", "NEW.is_automated")
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = gate.Rollback() }()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+
+	advisoryWaiters := func(want int) func() bool {
+		return func() bool {
+			var parked int
+			err := f.admin.QueryRowContext(ctx,
+				`SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`,
+				f.role,
+			).Scan(&parked)
+			return err == nil && parked == want
+		}
+	}
+
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- f.sink.Project(ctx, workerLease, workerManifest, workerOutcome)
+	}()
+	require.Eventually(t, advisoryWaiters(1), 3*time.Second, 10*time.Millisecond)
+
+	launcherDone := make(chan error, 1)
+	go func() {
+		launcherDone <- f.sink.Project(ctx, launcherLease, launcherManifest, launcherOutcome)
+	}()
+	// Launcher import must wait on its outgoing spawn target alias lock so the
+	// two first imports cannot miss each other's uncommitted rows.
+	require.Eventually(t, advisoryWaiters(2), 3*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, gate.Commit())
+	require.NoError(t, <-workerDone)
+	require.NoError(t, <-launcherDone)
+
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.IsAutomated)
+	assert.Equal(t, "subagent", got.RelationshipType, "spawned worker must stay Subagents when imported concurrently with its launcher")
 }

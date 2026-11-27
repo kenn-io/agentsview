@@ -123,6 +123,55 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	require.NoError(t, tx.Commit())
 }
 
+func TestHostedRuntimeSettlesAfterAutomationRemoved(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	ended := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	now := ended.Add(time.Minute)
+	f.sink.options.Now = func() time.Time { return now }
+
+	// Project a recent three-message, one-user-turn session that starts out
+	// automated so raw_content_revisions.payload records IsAutomated=true.
+	out := projectionOutcome("You are a code reviewer. Review this change.")
+	out.Outcome.Results[0].Result.Session.EndedAt = ended
+	out.Outcome.Results[0].Result.Messages = append(out.Outcome.Results[0].Result.Messages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, Content: "All checks passed."},
+	)
+	m, _ := f.accept(t, "device-a", "recent-auto", "")
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, out))
+
+	before, err := f.sink.Resolve(ctx, "codex:portable")
+	require.NoError(t, err)
+
+	// Simulate an upgrade/audit removing a custom automation pattern while the
+	// session is still within the recency window: sessions.is_automated flips
+	// to false and signals_pending_since is set, while the immutable raw
+	// payload retains IsAutomated=true.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE sessions
+		 SET is_automated = FALSE,
+		     outcome = 'unknown',
+		     outcome_confidence = 'low',
+		     signals_pending_since = $2
+		 WHERE id = $1`, before.SessionID, now,
+	)
+	require.NoError(t, err)
+
+	now = ended.Add(11 * time.Minute)
+	_, err = f.sink.SettlePendingSignals(ctx, 1)
+	require.NoError(t, err)
+
+	var gotOutcome, gotConfidence string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT outcome, outcome_confidence FROM sessions WHERE id = $1`,
+		before.SessionID,
+	).Scan(&gotOutcome, &gotConfidence))
+	assert.Equal(t, "completed", gotOutcome, "settling must use current sessions.is_automated")
+	assert.Equal(t, "medium", gotConfidence)
+}
+
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)
