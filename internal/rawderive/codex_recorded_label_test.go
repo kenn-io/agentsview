@@ -13,17 +13,21 @@ import (
 )
 
 func TestCodexRawReplay(t *testing.T) {
-	for _, layout := range []string{"recorded", "symlinked sessions", "overlapping roots", "path label outer first", "path label inner first"} {
+	for _, layout := range []string{"recorded", "symlinked sessions", "overlapping roots", "path label outer first", "path label inner first", "unlabeled run home", "alias-homes label"} {
 		t.Run(layout, func(t *testing.T) {
 			base := t.TempDir()
 			const id = "019eb791-cf7d-75c1-8439-9ed74c122e04"
-			home := filepath.Join(base, "team", "case", ".codex-run-v1-test")
+			label := filepath.Join("team", "case")
+			if layout == "alias-homes label" {
+				label = filepath.Join("alias-homes", "case")
+			}
+			home := filepath.Join(base, label, ".codex-run-v1-test")
 			sessions := filepath.Join(home, "sessions")
 			rollout := filepath.Join(sessions, "2026", "01", "01", "rollout-2026-01-01T00-00-00-"+id+".jsonl")
 			require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
 			require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/work/project", "codex_exec").AddCodexMessage("2026-01-01T00:00:01Z", "user", "review").String()), 0o600))
 			pathLabel := layout == "path label outer first" || layout == "path label inner first"
-			if !pathLabel {
+			if !pathLabel && layout != "unlabeled run home" && layout != "alias-homes label" {
 				require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexRunMetadataFilename), []byte(`{"label":"recorded/label"}`), 0o600))
 			}
 			roots := []string{sessions}
@@ -50,6 +54,8 @@ func TestCodexRawReplay(t *testing.T) {
 				if layout == "path label inner first" {
 					roots[0], roots[1] = roots[1], roots[0]
 				}
+			} else if layout == "alias-homes label" {
+				roots = []string{base}
 			}
 			index := filepath.Join(primary, parser.CodexSessionIndexFilename)
 			require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"Primary title"}`+"\n"), 0o600))
@@ -72,6 +78,10 @@ func TestCodexRawReplay(t *testing.T) {
 			wantProject := "recorded/label"
 			if pathLabel {
 				wantProject = "team/case"
+			} else if layout == "unlabeled run home" {
+				wantProject = "project"
+			} else if layout == "alias-homes label" {
+				wantProject = "alias-homes/case"
 			}
 			assertCodexReplayMatchesDirect(t, provider, discovery.Sources[0], wantProject)
 		})
@@ -96,6 +106,8 @@ func assertCodexReplayMatchesDirect(t *testing.T, provider parser.Provider, sour
 	want, got := direct.Results[0].Result.Session, replayed.Outcome.Results[0].Result.Session
 	assert.Equal(t, want.Project, got.Project)
 	assert.Equal(t, want.SessionKind, got.SessionKind)
+	assert.Equal(t, want.ParentSessionID, got.ParentSessionID)
+	assert.Equal(t, want.RelationshipType, got.RelationshipType)
 	assert.Equal(t, want.SessionName, got.SessionName)
 	assert.Equal(t, want.File.Mtime, got.File.Mtime)
 }

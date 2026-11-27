@@ -273,12 +273,9 @@ func materializedProviderMetadataDirs(
 			continue
 		}
 		ordinal, ok := strings.CutPrefix(path.Dir(entry.Path), "alias-homes/")
-		if !ok {
-			homeDirs = append(homeDirs, filepath.Join(materialized.Root(), filepath.FromSlash(path.Dir(entry.Path))))
-			continue
-		}
 		index, err := strconv.Atoi(ordinal)
 		if !ok || err != nil || index <= 0 || strconv.Itoa(index) != ordinal {
+			homeDirs = append(homeDirs, filepath.Join(materialized.Root(), filepath.FromSlash(path.Dir(entry.Path))))
 			continue
 		}
 		aliases = append(aliases, aliasHome{

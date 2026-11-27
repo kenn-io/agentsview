@@ -1351,7 +1351,8 @@ fixtures retain this field; missing identities remain source-local.
   prefix in labels. Codex writes dated rollouts under the home's `sessions`
   directory and its `session_index.jsonl` beside that directory. The sandbox
   omits `--thread-source`, so Agentsview identifies parentless `codex_exec`
-  sessions in these homes as roborev runs from their path.
+  sessions in these homes as roborev runs from their path. Raw capture keeps
+  the marked home in its paths so replay preserves that classification.
 
 - **Roborev recorded labels (2026-11-26):** [Roborev's recorded-label
   change](https://github.com/kenn-io/roborev/pull/1865) makes `CodexSandbox.prepare` in

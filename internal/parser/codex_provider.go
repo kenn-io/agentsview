@@ -497,12 +497,10 @@ func (p *codexProvider) PlanRawCapture(
 			return RawCapturePlan{}, invalidRawCapturePlan("stat Codex run metadata: %s", rawCaptureFilesystemError(err))
 		case !info.Mode().IsRegular():
 			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is not a regular file")
-		default:
-			home := codexRunHome(src.Path)
-			if rawCapturePathWithin(home, captureRoot) {
-				captureRoot = filepath.Dir(home)
-			}
 		}
+	}
+	if home := codexRunHome(src.Path); home != "" && rawCapturePathWithin(home, captureRoot) {
+		captureRoot = filepath.Dir(home)
 	}
 	rel, err := filepath.Rel(captureRoot, src.Path)
 	if err != nil {
