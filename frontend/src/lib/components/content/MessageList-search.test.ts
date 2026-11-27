@@ -110,6 +110,26 @@ afterEach(async () => {
 });
 
 describe("MessageList search visibility", () => {
+  it("shows a linked hidden message in find until the view changes", async () => {
+    ui.revealedLinkOrdinal = 1;
+    ui.selectedOrdinal = 1;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    inSessionSearch.open();
+    inSessionSearch.query = "needle";
+    await tick();
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(document.querySelectorAll(".thinking-header")).toHaveLength(1);
+    expect(inSessionSearch.countForBlock("1:thinking:0")).toBe(1);
+    expect(ui.isBlockVisible("thinking")).toBe(false);
+    ui.setBlockVisible("thinking", false);
+    await tick();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(document.querySelectorAll(".thinking-header")).toHaveLength(0);
+    expect(inSessionSearch.countForBlock("1:thinking:0")).toBe(0);
+  });
+
   it("respects block filters and focused mode while searching without changing preferences", async () => {
     component = mount(MessageList, { target: document.body });
     await tick();

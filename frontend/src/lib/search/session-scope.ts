@@ -23,6 +23,7 @@ export interface SessionScopeInput {
   visibleBlocks?: ReadonlySet<BlockType>;
   /** Whether any block type is hidden; absent means no filters. */
   hasBlockFilters?: boolean;
+  revealOrdinal?: number | null;
   /** Provider rule that keeps an answer before its trailing tool calls. */
   keepAnswerBeforeTrailingTools?: boolean;
 }
@@ -87,7 +88,7 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     skipToolGrouping: !isVisible("tool"),
   });
   const messageVisible = (message: Message): boolean =>
-    hasVisibleSegments(message, isTranscriptBlockVisible);
+    message.ordinal === input.revealOrdinal || hasVisibleSegments(message, isTranscriptBlockVisible);
   // An empty group keeps the members whose role is still shown, so hiding an
   // unrelated block type does not hide an empty prompt.
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>
@@ -139,6 +140,17 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     );
   }
 
+  if (input.revealOrdinal != null && !items.some((item) => item.ordinals.includes(input.revealOrdinal!))) {
+    const targetIndex = normalItems.findIndex((item) => item.ordinals.includes(input.revealOrdinal!));
+    const targetMessage = baseMessages.find((message) => message.ordinal === input.revealOrdinal);
+    const target = targetMessage && buildDisplayItems([targetMessage])[0];
+    if (targetIndex >= 0 && target) {
+      const next = items.findIndex((item) => item.ordinals[0]! > input.revealOrdinal!);
+      items = [...items];
+      items.splice(next < 0 ? items.length : next, 0, target);
+    }
+  }
+
   const messages: Message[] = [];
   const included = new Set<Message>();
   for (const item of items) {
@@ -159,6 +171,6 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     allowsBlock: (message, kind) =>
       !isSkillInvocationMessage(message) &&
       included.has(message) &&
-      kindVisible(isVisible, message.role, kind),
+      (message.ordinal === input.revealOrdinal || kindVisible(isVisible, message.role, kind)),
   };
 }

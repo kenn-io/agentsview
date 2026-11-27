@@ -22,6 +22,7 @@ import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { DbMessage as Message } from "./lib/api/generated/index.js";
+import { messageIdentity } from "./lib/utils/message-identity.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import { SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
@@ -53,6 +54,32 @@ async function selectRelativeRange(days: number) {
   preset!.click();
   await flushEffects();
 }
+
+it.each([false, true])("opens an identified link when moved=%s", async (moved) => {
+  stubAppDependencies();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+  const original = { id: 1, session_id: "session-1", ordinal: 1, role: "assistant", content: "answer", content_length: 6, timestamp: "2026-01-01T00:00:00Z", has_thinking: false, thinking_text: "", has_tool_use: false, context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false, is_system: false, source_uuid: "source-1" } as Message;
+  messages.sessionId = "session-1";
+  messages.loading = false;
+  messages.messages = [moved ? { ...original, id: 9, ordinal: 2 } : original];
+  messages.historyComplete = true;
+  vi.spyOn(messages, "ensureOrdinalLoaded").mockResolvedValue();
+  const loadHistory = vi.spyOn(messages, "ensureHistoryLoaded").mockResolvedValue();
+  sessions.activeSessionId = "session-1";
+  router.route = "sessions";
+  router.sessionId = "session-1";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  router.navigateToSession("session-1", { msg: "1", mid: messageIdentity(original) });
+  await flushEffects();
+  messages.sessionId = "session-1";
+  messages.messages = [moved ? { ...original, id: 9, ordinal: 2 } : original];
+  messages.historyComplete = true;
+  await vi.waitFor(() => expect(ui.revealedLinkOrdinal).toBe(moved ? 2 : 1));
+  expect(loadHistory).toHaveBeenCalledTimes(moved ? 1 : 0);
+  expect(ui.selectedOrdinal).toBe(moved ? 2 : 1);
+});
 
 function stubAppDependencies() {
   vi.stubGlobal(

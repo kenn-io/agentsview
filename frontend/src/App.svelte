@@ -106,6 +106,7 @@
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import { exactMessageIdentity, messageIdentityHasSource, resolveMessageIdentity } from "./lib/utils/message-identity.js";
   import {
     filterParamsEqual,
     hasFilterParams,
@@ -235,10 +236,11 @@
   // are left alone — auto-changing unrelated filters is unexpected.
   $effect(() => {
     const ordinal = ui.pendingScrollOrdinal;
+    const identity = ui.pendingLinkIdentity;
     const loading = messages.loading;
     const thinkingVisible = ui.isBlockVisible("thinking");
     untrack(() => {
-      if (ordinal === null || loading || !messageListRef) return;
+      if (ordinal === null || loading || !messageListRef || identity !== null) return;
       // A missing session keeps the anchor armed: recovery reloads
       // messages and re-runs this effect with them present.
       if (
@@ -305,6 +307,36 @@
       ui.selectedOrdinal = ordinal;
       messageListRef.scrollToOrdinal(ordinal, call ?? undefined);
     });
+  });
+
+  $effect(() => {
+    const identity = ui.pendingLinkIdentity;
+    const sid = ui.pendingScrollSession;
+    const loading = messages.loading;
+    const loadedSession = messages.sessionId;
+    if (identity === null || !sid || loading || loadedSession !== sid) return;
+    let current = true;
+    void (async () => {
+      const requestedOrdinal = ui.pendingScrollOrdinal;
+      if (requestedOrdinal === null) return;
+      await messages.ensureOrdinalLoaded(requestedOrdinal);
+      if (!current || ui.pendingLinkIdentity !== identity || messages.sessionId !== sid) return;
+      let ordinal = exactMessageIdentity(messages.messages, identity, requestedOrdinal);
+      if (ordinal === null && messageIdentityHasSource(identity)) {
+        await messages.ensureHistoryLoaded();
+        if (!current || ui.pendingLinkIdentity !== identity || messages.sessionId !== sid) return;
+        ordinal = messages.historyComplete ? resolveMessageIdentity(messages.messages, identity) : null;
+      }
+      ui.pendingLinkIdentity = null;
+      if (ordinal === null) {
+        ui.clearScrollState();
+      } else {
+        ui.revealedLinkOrdinal = ordinal;
+        ui.pendingScrollOrdinal = ordinal;
+        ui.selectedOrdinal = ordinal;
+      }
+    })();
+    return () => { current = false; };
   });
 
   function navigateMessage(delta: number) {
@@ -698,6 +730,7 @@
   $effect(() => {
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
+    const identity = router.params["mid"] ?? null;
     const call = parseScrollCall(
       router.params["call"],
       router.params["tool_use_id"],
@@ -707,12 +740,20 @@
     untrack(() => {
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
+        if (identity !== null) {
+          ui.clearScrollState();
+          return;
+        }
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
       } else {
         const ordinal = parseInt(msgParam, 10);
         if (Number.isFinite(ordinal)) {
           ui.scrollToOrdinal(ordinal, sid, call);
+          if (identity !== null) {
+            ui.selectedOrdinal = null;
+            ui.pendingLinkIdentity = identity;
+          }
         }
       }
     });

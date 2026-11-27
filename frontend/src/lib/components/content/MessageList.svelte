@@ -100,6 +100,7 @@
     projectSessionScope({
       messages: messages.messages,
       transcriptMode: ui.transcriptMode,
+      revealOrdinal: ui.revealedLinkOrdinal,
       visibleBlocks: ui.visibleBlocks,
       hasBlockFilters: ui.hasBlockFilters,
       keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(
@@ -1075,6 +1076,7 @@
             {#if item.kind === "tool-group"}
               <ToolCallGroup
                 messages={item.messages}
+                revealedOrdinal={ui.revealedLinkOrdinal}
                 timestamp={item.timestamp}
                 searchable={true}
                 sortNewestFirst={ui.sortNewestFirst}
@@ -1086,6 +1088,7 @@
               <EmptyMessagesRow
                 messages={item.messages}
                 open={emptyGroupOpen(item)}
+                revealedOrdinal={ui.revealedLinkOrdinal}
                 onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
               />
             {:else if item.message.is_compact_boundary}
@@ -1099,6 +1102,7 @@
             {:else}
               <MessageContent
                 message={item.message}
+                revealFiltered={item.ordinals.includes(ui.revealedLinkOrdinal ?? -1)}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
               />

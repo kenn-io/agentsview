@@ -41,6 +41,25 @@ describe("UIStore", () => {
   });
 
   describe("pendingScrollOrdinal null flows", () => {
+    it("clears a linked reveal when the view or selection changes", () => {
+      ui.revealedLinkOrdinal = 1;
+      ui.selectOrdinal(1);
+      expect(ui.revealedLinkOrdinal).toBe(1);
+      ui.pendingLinkIdentity = "identity";
+      ui.pendingScrollOrdinal = 1;
+      ui.pendingScrollSession = "session";
+      ui.selectOrdinal(2);
+      expect(ui.pendingLinkIdentity).toBeNull();
+      expect(ui.pendingScrollOrdinal).toBeNull();
+      for (const change of [() => ui.setBlockVisible("assistant", false), () => ui.toggleBlock("thinking"), () => ui.showAllBlocks(), () => ui.setTranscriptMode("focused"), () => ui.selectOrdinal(2)]) {
+        ui.revealedLinkOrdinal = 1;
+        ui.pendingLinkIdentity = "identity";
+        ui.pendingScrollOrdinal = 1;
+        change();
+        expect(ui.revealedLinkOrdinal).toBeNull();
+        expect(ui.pendingLinkIdentity).toBeNull();
+      }
+    });
     it("should set both selected and pending via scrollToOrdinal", () => {
       ui.scrollToOrdinal(10);
       expect(ui.selectedOrdinal).toBe(10);

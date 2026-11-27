@@ -21,13 +21,14 @@
 
   interface Props {
     messages: Message[];
+    revealedOrdinal?: number | null;
     timestamp: string;
     searchable?: boolean;
     sortNewestFirst?: boolean;
     divider?: { ordinal: number; label: string };
   }
 
-  let { messages, timestamp, searchable = false, sortNewestFirst = false, divider }: Props = $props();
+  let { messages, revealedOrdinal, timestamp, searchable = false, sortNewestFirst = false, divider }: Props = $props();
   let copied = $state(false);
 
   function messageToolCount(message: Message): number {
@@ -99,7 +100,7 @@
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       <div class="group-member" data-message-ordinal={message.ordinal}>
         <div class="group-member-body">
-          {#if ui.isBlockVisible("thinking")}
+          {#if message.ordinal === revealedOrdinal || ui.isBlockVisible("thinking")}
             {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
               <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
             {/each}
@@ -136,7 +137,7 @@
             {/each}
           {/if}
         </div>
-        <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
+        <MessageLinkButton {message} />
       </div>
     {/each}
   </div>

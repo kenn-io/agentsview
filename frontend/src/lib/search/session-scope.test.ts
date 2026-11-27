@@ -54,6 +54,14 @@ function filtered(visible: BlockType[]) {
 }
 
 describe("session search scope", () => {
+  it("includes only a linked hidden message in the transcript and search", () => {
+    const rows = [message(0, "prompt", { role: "user" }), message(1, "target"), message(2, "other")];
+    const result = scope(rows, { ...filtered(["user"]), transcriptMode: "focused", revealOrdinal: 1 });
+    expect(result.messages).toEqual([rows[0], rows[1]]);
+    expect(result.allowsBlock(rows[1]!, "text")).toBe(true);
+    expect(result.allowsBlock(rows[2]!, "text")).toBe(false);
+  });
+
   it("keeps visible prose in a mixed message and drops its hidden tool blocks", () => {
     const mixed = message(1, "needle prose\n\n[Bash]\necho needle", { has_tool_use: true });
     const result = scope([mixed], filtered(["user", "assistant"]));
