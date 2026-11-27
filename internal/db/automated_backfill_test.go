@@ -1422,3 +1422,67 @@ func TestAutomatedBackfillRefreshesSignals(t *testing.T) {
 	assert.Nil(t, usageOnly.HealthScore)
 	assert.Nil(t, usageOnly.HealthGrade)
 }
+
+func TestAutomatedBackfillSignalRefreshFailureRollsBackAndRetries(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	insertSession(t, d, "review-retry", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.FirstMessage = Ptr(reviewPrompt)
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "review-retry", Ordinal: 0, Role: "user", Content: reviewPrompt},
+		{SessionID: "review-retry", Ordinal: 1, Role: "assistant", Content: "Looks good."},
+	}))
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     ended_with_role = 'assistant',
+		     health_score = 100,
+		     health_grade = 'A',
+		     quality_signal_version = ?
+		 WHERE id = 'review-retry'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+
+	// Fail the signal refresh UPDATE once to simulate an interrupted startup
+	// between flag write and signal refresh.
+	_, err = d.getWriter().Exec(ctx, `CREATE TRIGGER fail_signal_refresh
+		BEFORE UPDATE OF outcome ON sessions
+		WHEN NEW.id = 'review-retry' AND NEW.outcome = 'unknown'
+		BEGIN
+			SELECT RAISE(ABORT, 'simulated signal refresh failure');
+		END`)
+	require.NoError(t, err)
+
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
+	require.Error(t, err)
+
+	// Both is_automated and signals must have rolled back together.
+	mid, err := d.GetSessionFull(ctx, "review-retry")
+	require.NoError(t, err)
+	assert.False(t, mid.IsAutomated)
+	assert.Equal(t, "completed", mid.Outcome)
+
+	_, err = d.getWriter().Exec(ctx, `DROP TRIGGER fail_signal_refresh`)
+	require.NoError(t, err)
+
+	require.NoError(t, d.backfillIsAutomatedLocked(ctx, d.getWriter()))
+	after, err := d.GetSessionFull(ctx, "review-retry")
+	require.NoError(t, err)
+	assert.True(t, after.IsAutomated)
+	assert.Equal(t, "unknown", after.Outcome)
+	assert.Equal(t, "low", after.OutcomeConfidence)
+	assert.Nil(t, after.HealthScore)
+	assert.Nil(t, after.HealthGrade)
+}

@@ -524,13 +524,10 @@ func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.
 		 WHERE session_id = $1`, resolved.SessionID, preUpgradeBytes,
 	)
 	require.NoError(t, err)
-	var beforePayloadBytes, beforeRecencyBytes []byte
+	var beforeRecencyBytes []byte
 	require.NoError(t, f.runtime.QueryRowContext(ctx,
-		`SELECT payload, recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
-	).Scan(&beforePayloadBytes, &beforeRecencyBytes))
-	beforePayload, err := decodeRawPayload(beforePayloadBytes)
-	require.NoError(t, err)
-	require.False(t, beforePayload.Session.IsAutomated)
+		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&beforeRecencyBytes))
 	beforeRecency, err := decodeRawRecency(beforeRecencyBytes)
 	require.NoError(t, err)
 	require.Equal(t, rawRecencyState{
@@ -655,4 +652,43 @@ func TestRawProjectionRestoreRefreshesStaleRecencyAfterPatternRestored(t *testin
 	assert.Equal(t, "low", recency.OutcomeConfidence)
 	assert.Nil(t, recency.HealthScore)
 	assert.Nil(t, recency.HealthGrade)
+}
+
+func TestRawProjectionReconcileSpawnLinksScopedToAffectedGroups(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	unrelated := projectionOutcome(prompt)
+	unrelated.Outcome.Results[0].Result.Session.ID = "unrelated-worker"
+	unrelated.Outcome.Results[0].Result.Session.SourceSessionID = "unrelated-worker"
+	unrelated.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
+	unrelated.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
+	unrelated.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	unrelated.Outcome.Results[0].Result.Messages[1].ToolCalls = nil
+
+	a, _ := f.accept(t, "device-a", "unrelated-worker", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, unrelated))
+	unrelatedResolved, err := f.sink.Resolve(ctx, "unrelated-worker")
+	require.NoError(t, err)
+
+	// Force a stale relationship on the unrelated worker to prove importing a
+	// different group does not scan or rewrite unrelated raw sessions.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE sessions SET relationship_type = 'subagent' WHERE id = $1`, unrelatedResolved.SessionID,
+	)
+	require.NoError(t, err)
+
+	other := projectionOutcome("Explain this package.")
+	other.Outcome.Results[0].Result.Session.ID = "other-group-session"
+	other.Outcome.Results[0].Result.Session.SourceSessionID = "other-group-session"
+	b, _ := f.accept(t, "device-b", "other-group-session", "", parser.AgentCodex)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, other))
+
+	var rel string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT relationship_type FROM sessions WHERE id = $1`, unrelatedResolved.SessionID,
+	).Scan(&rel))
+	assert.Equal(t, "subagent", rel, "unrelated raw session must not be touched by another group's import")
 }

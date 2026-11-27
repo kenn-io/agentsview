@@ -371,7 +371,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		return err
 	}
 	if changed {
-		spawnChanged, err := reconcileRawSpawnLinks(ctx, tx)
+		spawnChanged, err := reconcileRawSpawnLinks(ctx, tx, ordered, aliases)
 		if err != nil {
 			return err
 		}

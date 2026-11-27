@@ -72,7 +72,12 @@ func (s *RawProjectionStore) excludeTrashedSessionOnce(ctx context.Context, alia
 	if err != nil {
 		return false, false, err
 	}
-	if _, err = reconcileRawSpawnLinks(ctx, tx); err != nil {
+	groupAliases, err := queryStrings(ctx, tx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=$1`, target.GroupID)
+	if err != nil {
+		return false, false, err
+	}
+	affectedAliases := append(append([]string(nil), currentTargets...), groupAliases...)
+	if _, err = reconcileRawSpawnLinks(ctx, tx, []string{target.GroupID}, affectedAliases); err != nil {
 		return false, false, err
 	}
 	if err = publishRawRevision(ctx, tx, true, changes); err != nil {
@@ -116,8 +121,9 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, bool, err
 	if err != nil {
 		return 0, false, err
 	}
+	var currentTargets []string
 	if len(groups) > 0 {
-		currentTargets, err := queryStrings(ctx, tx, rawGroupSpawnTargetsSQL, groups)
+		currentTargets, err = queryStrings(ctx, tx, rawGroupSpawnTargetsSQL, groups)
 		if err != nil {
 			return 0, false, err
 		}
@@ -147,7 +153,12 @@ func (s *RawProjectionStore) emptyTrashOnce(ctx context.Context) (int, bool, err
 		}
 	}
 	if count > 0 {
-		if _, err = reconcileRawSpawnLinks(ctx, tx); err != nil {
+		groupAliases, err := queryStrings(ctx, tx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=ANY($1)`, groups)
+		if err != nil {
+			return 0, false, err
+		}
+		affectedAliases := append(append([]string(nil), currentTargets...), groupAliases...)
+		if _, err = reconcileRawSpawnLinks(ctx, tx, groups, affectedAliases); err != nil {
 			return 0, false, err
 		}
 	}

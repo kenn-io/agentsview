@@ -4662,9 +4662,6 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	); err != nil {
 		return err
 	}
-	if err := refreshAutomatedSignalsLocked(ctx, w, setIDs, clearIDs); err != nil {
-		return err
-	}
 	if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
 		return err
 	}
@@ -4800,30 +4797,15 @@ func (db *DB) ForceBackfillIsAutomated(ctx context.Context) error {
 func batchUpdateAutomated(ctx context.Context,
 	w *writerHandle, ids []string, val int,
 ) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	const batchSize = 500
+	now := time.Now().UTC()
 	for i := 0; i < len(ids); i += batchSize {
-		end := min(i+batchSize, len(ids))
-		batch := ids[i:end]
-		args := make([]any, len(batch)+1)
-		phs := make([]string, len(batch))
-		args[0] = val
-		for j, id := range batch {
-			args[j+1] = id
-			phs[j] = "?"
-		}
-		_, err := w.Exec(ctx,
-			"UPDATE sessions"+
-				" SET is_automated = ?,"+
-				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
-				" WHERE id IN ("+
-				strings.Join(phs, ",")+
-				")",
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"updating is_automated: %w", err,
-			)
+		batch := ids[i:min(i+batchSize, len(ids))]
+		if err := applyAutomatedBatchLocked(ctx, w, batch, val, now); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -4834,46 +4816,63 @@ type automatedSignalRefresh struct {
 	res SessionSignalRefreshResult
 }
 
-func refreshAutomatedSignalsLocked(
-	ctx context.Context, w *writerHandle, setIDs, clearIDs []string,
+func applyAutomatedBatchLocked(
+	ctx context.Context, w *writerHandle, batch []string, val int, now time.Time,
 ) error {
-	ids := make([]string, 0, len(setIDs)+len(clearIDs))
-	ids = append(ids, setIDs...)
-	ids = append(ids, clearIDs...)
-	if len(ids) == 0 {
-		return nil
+	tx, err := w.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting automation update transaction: %w", err)
 	}
-	const batchSize = 500
-	now := time.Now().UTC()
-	for i := 0; i < len(ids); i += batchSize {
-		batch := ids[i:min(i+batchSize, len(ids))]
-		updates, err := loadAutomatedSignalRefreshesLocked(ctx, w, batch, now)
-		if err != nil {
-			return err
+	defer func() { _ = tx.Rollback() }()
+
+	args := make([]any, len(batch)+1)
+	phs := make([]string, len(batch))
+	args[0] = val
+	for j, id := range batch {
+		args[j+1] = id
+		phs[j] = "?"
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE sessions"+
+			" SET is_automated = ?,"+
+			"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
+			" WHERE id IN ("+
+			strings.Join(phs, ",")+
+			")",
+		args...,
+	); err != nil {
+		return fmt.Errorf("updating is_automated: %w", err)
+	}
+
+	updates, err := loadAutomatedSignalRefreshesTx(ctx, tx, batch, now)
+	if err != nil {
+		return err
+	}
+	for _, u := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sessions
+			 SET outcome = ?,
+			     outcome_confidence = ?,
+			     signals_pending_since = ?,
+			     health_score = ?,
+			     health_grade = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE id = ?`,
+			u.res.Outcome, u.res.OutcomeConfidence,
+			u.res.SignalsPendingSince, u.res.HealthScore,
+			u.res.HealthGrade, u.id,
+		); err != nil {
+			return fmt.Errorf("refreshing signals for automated session %s: %w", u.id, err)
 		}
-		for _, u := range updates {
-			if _, err := w.Exec(ctx,
-				`UPDATE sessions
-				 SET outcome = ?,
-				     outcome_confidence = ?,
-				     signals_pending_since = ?,
-				     health_score = ?,
-				     health_grade = ?,
-				     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-				 WHERE id = ?`,
-				u.res.Outcome, u.res.OutcomeConfidence,
-				u.res.SignalsPendingSince, u.res.HealthScore,
-				u.res.HealthGrade, u.id,
-			); err != nil {
-				return fmt.Errorf("refreshing signals for automated session %s: %w", u.id, err)
-			}
-		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing automation update batch: %w", err)
 	}
 	return nil
 }
 
-func loadAutomatedSignalRefreshesLocked(
-	ctx context.Context, w *writerHandle, batch []string, now time.Time,
+func loadAutomatedSignalRefreshesTx(
+	ctx context.Context, tx *sql.Tx, batch []string, now time.Time,
 ) ([]automatedSignalRefresh, error) {
 	args := make([]any, len(batch))
 	phs := make([]string, len(batch))
@@ -4881,7 +4880,7 @@ func loadAutomatedSignalRefreshesLocked(
 		args[j] = id
 		phs[j] = "?"
 	}
-	rows, err := w.Query(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT s.id, s.is_automated, s.message_count, s.ended_at,
 		        s.ended_with_role, s.final_failure_streak,
 		        s.signals_pending_since, s.has_tool_calls,
@@ -4939,20 +4938,18 @@ func loadAutomatedSignalRefreshesLocked(
 			lastRole, lastContent         string
 			isAutomated, hasToolCalls     int
 			hasContextData, unstructured  int
-			endedAt, pending              sql.NullString
-			pressureMax                   sql.NullFloat64
-			curScore                      sql.NullInt64
-			curGrade                      sql.NullString
+			curScore                      *int
+			curGrade                      *string
 			in                            SessionSignalRefreshInput
 		)
 		if err := rows.Scan(
-			&id, &isAutomated, &in.MessageCount, &endedAt,
+			&id, &isAutomated, &in.MessageCount, &in.EndedAt,
 			&in.EndedWithRole, &in.FinalFailureStreak,
-			&pending, &hasToolCalls,
+			&in.SignalsPendingSince, &hasToolCalls,
 			&in.ToolFailureSignalCount, &in.ToolRetryCount,
 			&in.EditChurnCount, &in.ConsecutiveFailureMax,
 			&hasContextData, &in.CompactionCount,
-			&in.MidTaskCompactionCount, &pressureMax,
+			&in.MidTaskCompactionCount, &in.ContextPressureMax,
 			&in.ShortPromptCount, &unstructured,
 			&in.MissingSuccessCriteriaCount,
 			&in.MissingVerificationCount, &in.DuplicatePromptCount,
@@ -4967,36 +4964,9 @@ func loadAutomatedSignalRefreshesLocked(
 		in.HasToolCalls = hasToolCalls != 0
 		in.HasContextData = hasContextData != 0
 		in.UnstructuredStart = unstructured != 0
-		if endedAt.Valid {
-			v := endedAt.String
-			in.EndedAt = &v
-		}
-		if pending.Valid {
-			v := pending.String
-			in.SignalsPendingSince = &v
-		}
-		if pressureMax.Valid {
-			v := pressureMax.Float64
-			in.ContextPressureMax = &v
-		}
-		if in.EndedWithRole == "" && lastRole != "" {
-			in.EndedWithRole = lastRole
-		}
-		if lastRole == "assistant" {
-			in.LastAssistantText = lastContent
-		}
-		var curScorePtr *int
-		if curScore.Valid {
-			v := int(curScore.Int64)
-			curScorePtr = &v
-		}
-		var curGradePtr *string
-		if curGrade.Valid {
-			v := curGrade.String
-			curGradePtr = &v
-		}
-		next := RecomputeSignalsForAutomationChange(in, now)
-		if !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScorePtr, curGradePtr) {
+		if next, changed := in.RefreshIfChanged(
+			lastRole, lastContent, curOutcome, curConfidence, curScore, curGrade, now,
+		); changed {
 			updates = append(updates, automatedSignalRefresh{id: id, res: next})
 		}
 	}

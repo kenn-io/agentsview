@@ -692,3 +692,74 @@ func TestAutomationAuditPGRefreshesSignals(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, progress.RowsPrefetched)
 }
+
+func TestAutomationAuditPGSignalRefreshFailureRollsBackAndRetries(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-pg-retry', 'host', 'project', 'claude', 'sdk-cli', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-pg-retry', 0, 'user', $1),
+		('review-pg-retry', 1, 'assistant', 'Looks good.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = ps.DB().ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION fail_pg_signal_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = 'review-pg-retry' AND NEW.outcome = 'unknown' THEN
+				RAISE EXCEPTION 'simulated PG signal refresh failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER trg_fail_pg_signal_refresh
+		BEFORE UPDATE OF outcome ON sessions
+		FOR EACH ROW EXECUTE FUNCTION fail_pg_signal_refresh();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.Error(t, err)
+
+	var automated bool
+	var outcome, confidence string
+	var auditHash *string
+	var score *int
+	var grade *string
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, automation_audit_hash FROM sessions WHERE id = 'review-pg-retry'`,
+	).Scan(&automated, &outcome, &auditHash))
+	assert.False(t, automated, "failed signal refresh must roll back is_automated")
+	assert.Equal(t, "completed", outcome)
+	assert.Nil(t, auditHash, "failed signal refresh must roll back automation_audit_hash")
+
+	_, err = ps.DB().ExecContext(ctx, `DROP TRIGGER trg_fail_pg_signal_refresh ON sessions; DROP FUNCTION fail_pg_signal_refresh();`)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'review-pg-retry'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Equal(t, "unknown", outcome)
+	assert.Equal(t, "low", confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+}

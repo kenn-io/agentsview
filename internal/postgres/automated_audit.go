@@ -180,8 +180,22 @@ func backfillIsAutomatedPGCore(
 			if err != nil {
 				return err
 			}
+			var batchChanged []string
+			for _, v := range batch {
+				if v.changed {
+					batchChanged = append(batchChanged, v.id)
+				}
+			}
+			if err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
+				if err := writeAutomationVerdictsPG(ctx, exec, batch, column, current); err != nil {
+					return err
+				}
+				return refreshSessionSignalsPG(ctx, exec, batchChanged, true, current, hosted)
+			}); err != nil {
+				return err
+			}
 			appendChanged(batch)
-			return writeAutomationVerdictsPG(ctx, pg, batch, column, current)
+			return nil
 		}); err != nil {
 			return progress, false, nil, err
 		}
@@ -193,15 +207,26 @@ func backfillIsAutomatedPGCore(
 	if err != nil {
 		return progress, false, nil, err
 	}
-	appendChanged(verdicts)
-	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, ""); err != nil {
-		return progress, false, nil, err
+	for start := 0; start < len(verdicts); start += 500 {
+		batch := verdicts[start:min(start+500, len(verdicts))]
+		var batchChanged []string
+		for _, v := range batch {
+			if v.changed {
+				batchChanged = append(batchChanged, v.id)
+			}
+		}
+		if err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
+			if err := writeAutomationVerdictsPG(ctx, exec, batch, column, ""); err != nil {
+				return err
+			}
+			return refreshSessionSignalsPG(ctx, exec, batchChanged, false, "", hosted)
+		}); err != nil {
+			return progress, false, nil, err
+		}
+		appendChanged(batch)
 	}
 	reconciled, err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, column, fullReconcile, candidateIDs, hosted)
 	if err != nil {
-		return progress, false, nil, err
-	}
-	if err := refreshSessionSignalsPG(ctx, pg, changedAutomationIDs, tracking, current, hosted); err != nil {
 		return progress, false, nil, err
 	}
 
@@ -217,6 +242,22 @@ func backfillIsAutomatedPGCore(
 		)
 	}
 	return progress, len(changedAutomationIDs) > 0 || reconciled, changedAutomationIDs, nil
+}
+
+func withOptionalTxPG(ctx context.Context, pg storeExecutor, fn func(storeExecutor) error) error {
+	dbConn, ok := pg.(*sql.DB)
+	if !ok {
+		return fn(pg)
+	}
+	tx, err := dbConn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func refreshSessionSignalsPG(
@@ -293,20 +334,18 @@ func refreshSessionSignalsPG(
 			var (
 				id, curOutcome, curConfidence string
 				lastRole, lastContent         string
-				endedAt, pending              sql.NullString
-				pressureMax                   sql.NullFloat64
-				curScore                      sql.NullInt64
-				curGrade                      sql.NullString
+				curScore                      *int
+				curGrade                      *string
 				in                            db.SessionSignalRefreshInput
 			)
 			if err := rows.Scan(
-				&id, &in.IsAutomated, &in.MessageCount, &endedAt,
+				&id, &in.IsAutomated, &in.MessageCount, &in.EndedAt,
 				&in.EndedWithRole, &in.FinalFailureStreak,
-				&pending, &in.HasToolCalls,
+				&in.SignalsPendingSince, &in.HasToolCalls,
 				&in.ToolFailureSignalCount, &in.ToolRetryCount,
 				&in.EditChurnCount, &in.ConsecutiveFailureMax,
 				&in.HasContextData, &in.CompactionCount,
-				&in.MidTaskCompactionCount, &pressureMax,
+				&in.MidTaskCompactionCount, &in.ContextPressureMax,
 				&in.ShortPromptCount, &in.UnstructuredStart,
 				&in.MissingSuccessCriteriaCount,
 				&in.MissingVerificationCount, &in.DuplicatePromptCount,
@@ -317,36 +356,9 @@ func refreshSessionSignalsPG(
 			); err != nil {
 				return fmt.Errorf("scanning changed PG session for signal refresh: %w", err)
 			}
-			if endedAt.Valid {
-				v := endedAt.String
-				in.EndedAt = &v
-			}
-			if pending.Valid {
-				v := pending.String
-				in.SignalsPendingSince = &v
-			}
-			if pressureMax.Valid {
-				v := pressureMax.Float64
-				in.ContextPressureMax = &v
-			}
-			if in.EndedWithRole == "" && lastRole != "" {
-				in.EndedWithRole = lastRole
-			}
-			if lastRole == "assistant" {
-				in.LastAssistantText = lastContent
-			}
-			var curScorePtr *int
-			if curScore.Valid {
-				v := int(curScore.Int64)
-				curScorePtr = &v
-			}
-			var curGradePtr *string
-			if curGrade.Valid {
-				v := curGrade.String
-				curGradePtr = &v
-			}
-			next := db.RecomputeSignalsForAutomationChange(in, now)
-			if !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScorePtr, curGradePtr) {
+			if next, changed := in.RefreshIfChanged(
+				lastRole, lastContent, curOutcome, curConfidence, curScore, curGrade, now,
+			); changed {
 				updates = append(updates, refreshUpdate{
 					id:          id,
 					isAutomated: in.IsAutomated,
@@ -514,23 +526,55 @@ func reconcileParentlessWorkersPG(
 	return reconciled || len(verdicts) > 0, nil
 }
 
-// reconcileRawSpawnLinks updates materialized raw sessions whose effective
-// relationship depends on resolved hosted spawn links, covering both workers
-// projected alongside their launcher and workers whose launcher arrives or is
-// withdrawn in a later projection.
-func reconcileRawSpawnLinks(ctx context.Context, tx *sql.Tx) (bool, error) {
+// reconcileRawSpawnLinks updates materialized raw sessions in the affected
+// groups or reachable through affected public/spawn aliases whose effective
+// relationship depends on resolved hosted spawn links. Scoping the candidate
+// set to affected groups and aliases keeps sync work bounded by the batch.
+func reconcileRawSpawnLinks(ctx context.Context, tx *sql.Tx, groups, affectedAliases []string) (bool, error) {
+	if len(groups) == 0 && len(affectedAliases) == 0 {
+		return false, nil
+	}
+	if groups == nil {
+		groups = []string{}
+	}
+	if affectedAliases == nil {
+		affectedAliases = []string{}
+	}
+	candidateIDs, err := queryStrings(ctx, tx,
+		`SELECT DISTINCT s.id
+		 FROM sessions s
+		 WHERE s.provenance_kind = 'raw'
+		   AND (
+		       s.raw_group_id = ANY($1::text[])
+		       OR s.raw_group_id IN (
+		           SELECT a.group_id
+		           FROM raw_session_public_aliases a
+		           WHERE a.alias_id = ANY($2::text[])
+		       )
+		   )
+		 ORDER BY s.id`,
+		groups, affectedAliases,
+	)
+	if err != nil {
+		return false, fmt.Errorf("loading affected raw sessions for spawn link reconciliation: %w", err)
+	}
+	if len(candidateIDs) == 0 {
+		return false, nil
+	}
 	var changed bool
 	for _, query := range []string{
 		`UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE provenance_kind = 'raw'
+		WHERE id = ANY($1::text[])
+		  AND provenance_kind = 'raw'
 		  AND COALESCE(relationship_type, '') = ''
 		  AND COALESCE(parent_session_id, '') = ''
 		  AND parser_relationship_type = 'subagent'
 		  AND ` + hostedRawSpawnExistsPG,
 		clearParentlessWorkersSQLPG(clearableHeadlessWorkerPG+hostedRawSpawnGuardPG) + `
+		  AND id = ANY($1::text[])
 		  AND provenance_kind = 'raw'`,
 	} {
-		res, err := tx.ExecContext(ctx, query)
+		res, err := tx.ExecContext(ctx, query, candidateIDs)
 		if err != nil {
 			return false, fmt.Errorf("reconciling hosted raw spawn links: %w", err)
 		}

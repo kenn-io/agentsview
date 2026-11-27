@@ -102,23 +102,36 @@ func (r SessionSignalRefreshResult) Matches(
 ) bool {
 	return r.Outcome == outcome &&
 		r.OutcomeConfidence == confidence &&
-		equalOptionalString(r.SignalsPendingSince, pending) &&
-		equalOptionalInt(r.HealthScore, score) &&
-		equalOptionalString(r.HealthGrade, grade)
+		equalOptional(r.SignalsPendingSince, pending) &&
+		equalOptional(r.HealthScore, score) &&
+		equalOptional(r.HealthGrade, grade)
 }
 
-func equalOptionalString(a, b *string) bool {
+func equalOptional[T comparable](a, b *T) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	return *a == *b
 }
 
-func equalOptionalInt(a, b *int) bool {
-	if a == nil || b == nil {
-		return a == b
+// RefreshIfChanged applies trailing visible message metadata, recomputes
+// outcome, recency, and health score at now, and reports whether any stored
+// signal column changed.
+func (in *SessionSignalRefreshInput) RefreshIfChanged(
+	lastRole, lastContent, curOutcome, curConfidence string,
+	curScore *int, curGrade *string, now time.Time,
+) (SessionSignalRefreshResult, bool) {
+	if in.EndedWithRole == "" && lastRole != "" {
+		in.EndedWithRole = lastRole
 	}
-	return *a == *b
+	if lastRole == "assistant" {
+		in.LastAssistantText = lastContent
+	}
+	next := RecomputeSignalsForAutomationChange(*in, now)
+	if next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScore, curGrade) {
+		return next, false
+	}
+	return next, true
 }
 
 // RecomputeSignalsForAutomationChange derives outcome, recency, and health
