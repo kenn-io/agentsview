@@ -19,6 +19,7 @@
     ZOOM_STEPS,
     type BlockType,
     type MessageLayout,
+    type ReadingWidth,
   } from "../../stores/ui.svelte.js";
   import { readingWidthOptions } from "../shared/readingWidthOptions.js";
   import {
