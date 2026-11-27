@@ -659,8 +659,9 @@ choose one under **Layout** in the session header's **View** menu, or set one in
 | Stream  | Chat without speaker labels                |
 | Skim    | One line per message and tool call         |
 
-All four layouts share one reading column. Choose **Default**, **Wider**, or
-**Full** under **Settings > Appearance > Reading width** to control its width.
+All four layouts share one reading column. To control its width, choose
+**Default**, **Wider**, or **Full** under **Reading width** in the session
+header's **View** menu, or under **Settings > Appearance > Reading width**.
 
 ### Focused transcript mode
 
