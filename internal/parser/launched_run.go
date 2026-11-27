@@ -63,7 +63,7 @@ func IsLaunchedClaudeSessionID(id string) bool { return launchedValidID.MatchStr
 func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string) []string {
 	ids := map[string]bool{}
 	var launches []string
-	callCount := 0
+	unsafeOutput := false
 	conflictingExplicit := false
 	var scan func(string, int)
 	scan = func(command string, depth int) {
@@ -80,7 +80,11 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 		}
 		syntax.Walk(file, func(node syntax.Node) bool {
 			if _, ok := node.(*syntax.FuncDecl); ok {
+				unsafeOutput = true
 				return false
+			}
+			if stmt, ok := node.(*syntax.Stmt); ok && (len(stmt.Redirs) > 0 || stmt.Background) {
+				unsafeOutput = true
 			}
 			call, ok := node.(*syntax.CallExpr)
 			if !ok {
@@ -91,20 +95,34 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 				scan(inner, depth+1)
 				return false
 			}
-			callCount++
 			words, literal := shellWords(args)
 			if len(words) == 0 || !literal[0] {
+				unsafeOutput = true
 				return false
 			}
 			name := strings.ToLower(strings.ReplaceAll(words[0], `\`, "/"))
 			name = name[strings.LastIndex(name, "/")+1:]
 			name = strings.TrimSuffix(name, ".exe")
 			if name != "codex" && name != "claude" || !OneShotRunArgs(name, words) {
+				// A literal cd before the launch is setup; other commands may
+				// contribute an unrelated ID to the combined shell output.
+				raw, rawLiteral := shellWords(call.Args)
+				if len(call.Assigns) != 0 || len(raw) == 0 || len(raw) > 2 || raw[0] != "cd" || !rawLiteral[0] || len(launches) != 0 || len(raw) == 2 && (!rawLiteral[1] || strings.HasPrefix(raw[1], "-") || strings.ContainsAny(raw[1], "\r\n")) {
+					unsafeOutput = true
+				}
 				return false
 			}
 			if isResumedRun(name, words) {
+				unsafeOutput = true
 				return false
 			}
+			syntax.Walk(call, func(node syntax.Node) bool {
+				switch node.(type) {
+				case *syntax.CmdSubst, *syntax.ProcSubst:
+					unsafeOutput = true
+				}
+				return true
+			})
 			prefix := ""
 			if name == "codex" {
 				prefix = "codex:"
@@ -139,7 +157,7 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 	for _, command := range commands {
 		scan(command, 0)
 	}
-	if len(launches) == 1 && callCount == 1 && !conflictingExplicit {
+	if len(launches) == 1 && !unsafeOutput && !conflictingExplicit {
 		for _, id := range launchedOutputIDs(output) {
 			if strings.HasPrefix(id, "codex:") == (launches[0] == "codex:") {
 				ids[id] = true

@@ -11,6 +11,18 @@ func TestLaunchedRunSessionID(t *testing.T) {
 	const other = "abcdefab-1234-1234-1234-123456789abc"
 	tests := []struct{ name, command, output, want string }{
 		{"codex output", "codex exec hello", "session id: " + id + "\r\n", "codex:" + id},
+		{"setup before launch", "cd project && codex exec hello", "session id: " + id, "codex:" + id},
+		{"home before launch", "cd && codex exec hello", "session id: " + id, "codex:" + id},
+		{"wrapped setup", "bash -lc 'cd project && codex exec hello'", "session id: " + id, "codex:" + id},
+		{"unrelated setup output", "cat old.log && codex exec hello", "session id: " + id, ""},
+		{"executable named cd", "/tmp/cd project && codex exec hello", "session id: " + id, ""},
+		{"dynamic launch argument", "cd project && codex exec \"$(cat old.log >&2)\"", "session id: " + id, ""},
+		{"dynamic launch environment", "cd project && X=$(cat old.log >&2) codex exec hello", "session id: " + id, ""},
+		{"variable prompt", "cd project && codex exec \"$PROMPT\"", "session id: " + id, "codex:" + id},
+		{"redirected setup", "cd project >old.log && codex exec hello", "session id: " + id, ""},
+		{"setup with assignment", "CDPATH=elsewhere cd project && codex exec hello", "session id: " + id, ""},
+		{"overridden setup", "cd() { cat old.log; }; cd project && codex exec hello", "session id: " + id, ""},
+		{"setup after launch", "codex exec hello; cd project", "session id: " + id, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
 		{"wrapped", "env X=1 bash -lc 'codex.exe exec hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"windows", `'C:\\Program Files\\claude.exe' -p --session-id=` + id, "", id},
