@@ -13217,7 +13217,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	if exhaustive && def.Type == parser.AgentCodex && e.db.GetSessionFilePath(ctx, sessionID) != "" {
 		raw := strings.TrimPrefix(sessionID, def.IDPrefix)
 		if found := e.findProviderSourceFile(ctx, def, sessionID, raw, ""); found != "" &&
-			parser.CodexSourceLabelForRoots(e.sources().agentDirs[def.Type], found) != "" {
+			parser.CodexLabeledSource(e.sources().agentDirs[def.Type], found) {
 			path = found
 		}
 	}

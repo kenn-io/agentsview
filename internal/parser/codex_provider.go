@@ -1701,10 +1701,15 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 
 const codexLabeledSourceClass = 2
 
+// CodexLabeledSource reports whether a source belongs to a labeled run home.
+func CodexLabeledSource(roots []string, path string) bool {
+	return codexRunHome(path) != "" || CodexSourceLabelForRoots(roots, path) != ""
+}
+
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
-	if !ok || (codexRunHome(src.Path) == "" && CodexSourceLabel(src.Root, src.Path) == "") {
+	if !ok || !CodexLabeledSource([]string{src.Root}, src.Path) {
 		return ReconciliationSourceRank{}
 	}
 	path := src.Path
