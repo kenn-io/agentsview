@@ -13,6 +13,7 @@ import (
 	"io"
 	"reflect"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
@@ -93,6 +94,7 @@ func decodeRawPayload(b []byte) (ingest.PreparedSession, error) {
 	var prov rawRelationshipProvenance
 	err := dec.Decode(&prov)
 	if errors.Is(err, io.EOF) {
+		recoverLegacyRawRelationshipProvenance(&p.Session)
 		return p, nil
 	}
 	if err != nil {
@@ -100,6 +102,26 @@ func decodeRawPayload(b []byte) (ingest.PreparedSession, error) {
 	}
 	p.Session.RestoreRelationshipProvenance(prov.ParserRelationship, prov.Inferred)
 	return p, nil
+}
+
+// recoverLegacyRawRelationshipProvenance infers parser provenance for gob
+// payloads encoded before rawRelationshipProvenance existed, where parentless
+// headless workers already had RelationshipType promoted to "subagent".
+func recoverLegacyRawRelationshipProvenance(s *db.Session) {
+	if s.RelationshipType != string(parser.RelSubagent) ||
+		(s.ParentSessionID != nil && *s.ParentSessionID != "") ||
+		(s.ParserParentSessionID != nil && *s.ParserParentSessionID != "") {
+		return
+	}
+	_, rawID := parser.StripHostPrefix(s.ID)
+	_, rawSourceID := parser.StripHostPrefix(s.SourceSessionID)
+	if strings.HasPrefix(rawID, "agent-") || strings.HasPrefix(rawSourceID, "agent-") {
+		return
+	}
+	if s.Entrypoint == "sdk-cli" ||
+		(s.SessionKind == parser.SessionKindNonInteractive && s.Agent != string(parser.AgentGrok)) {
+		s.RestoreRelationshipProvenance(string(parser.RelSubagent), true)
+	}
 }
 
 // rawContentRevision hashes a versioned structural representation of every

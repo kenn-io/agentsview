@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -101,6 +102,7 @@ func backfillIsAutomatedPGCore(
 	var verdicts []automationVerdictPG
 	var candidateIDs []string
 	var automationChanged bool
+	var err error
 	fullReconcile := stored != current
 	if tracking {
 		if errors.Is(errHash, sql.ErrNoRows) {
@@ -108,7 +110,6 @@ func backfillIsAutomatedPGCore(
 				return progress, false, err
 			}
 		}
-		var err error
 		candidateIDs, err = automationCandidateIDsPG(ctx, pg, current)
 		if err != nil {
 			return progress, false, err
@@ -118,35 +119,24 @@ func backfillIsAutomatedPGCore(
 			if err != nil {
 				return err
 			}
-			for _, v := range batch {
-				if v.changed {
-					automationChanged = true
-					break
-				}
-			}
+			automationChanged = automationChanged || slices.ContainsFunc(batch, func(v automationVerdictPG) bool {
+				return v.changed
+			})
 			return writeAutomationVerdictsPG(ctx, pg, batch, column, current)
 		}); err != nil {
 			return progress, false, err
 		}
 	} else if stored == current {
-		var err error
 		verdicts, err = auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, nil)
-		if err != nil {
-			return progress, false, err
-		}
 	} else {
-		var err error
 		verdicts, err = auditAutomatedFullPG(ctx, pg, classifier, &progress, column)
-		if err != nil {
-			return progress, false, err
-		}
 	}
-	for _, v := range verdicts {
-		if v.changed {
-			automationChanged = true
-			break
-		}
+	if err != nil {
+		return progress, false, err
 	}
+	automationChanged = automationChanged || slices.ContainsFunc(verdicts, func(v automationVerdictPG) bool {
+		return v.changed
+	})
 	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, ""); err != nil {
 		return progress, false, err
 	}
@@ -195,28 +185,15 @@ const clearableHeadlessWorkerPG = `is_automated
 			  AND tc.session_id IS DISTINCT FROM tc.subagent_session_id
 		  )`
 
-const hostedRawSpawnGuardPG = `
-		  AND NOT (provenance_kind = 'raw' AND EXISTS (
-			SELECT 1 FROM raw_session_links l
-			JOIN raw_session_public_aliases a ON a.alias_id = l.target_alias
-			JOIN raw_session_branches b ON b.branch_id = l.branch_id AND b.active
-			WHERE l.kind IN ('call', 'event')
-			  AND a.group_id = sessions.raw_group_id
-			  AND b.session_id IS DISTINCT FROM sessions.id
-		  ))`
+var hostedRawSpawnExistsPG = `EXISTS (
+			SELECT 1` + hostedLinkFromSQL + `
+			  AND e.kind IN ('call', 'event')
+			  AND target.session_id = sessions.id
+			  AND owner.session_id IS DISTINCT FROM sessions.id
+		  )`
 
-func clearableHeadlessWorkerSQLPG(hosted bool) string {
-	if hosted {
-		return clearableHeadlessWorkerPG + hostedRawSpawnGuardPG
-	}
-	return clearableHeadlessWorkerPG
-}
-
-// repairParentlessWorkersSQL promotes legacy parentless non-interactive rows.
-// idx_sessions_parentless_workers bounds it, so it covers the whole table on
-// every audit.
-const repairParentlessWorkersSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT (` + clearableHeadlessWorkerPG + `)`
+var hostedRawSpawnGuardPG = `
+		  AND NOT (provenance_kind = 'raw' AND ` + hostedRawSpawnExistsPG + `)`
 
 type parentlessWorkerStepPG struct {
 	query, action string
@@ -224,14 +201,17 @@ type parentlessWorkerStepPG struct {
 }
 
 func parentlessWorkerStepsPG(hosted bool) []parentlessWorkerStepPG {
-	clearable := clearableHeadlessWorkerSQLPG(hosted)
-	repairSQL := repairParentlessWorkersSQL
+	clearable := clearableHeadlessWorkerPG
 	if hosted {
-		repairSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT (` + clearable + `)`
+		clearable += hostedRawSpawnGuardPG
 	}
 	return []parentlessWorkerStepPG{
-		{repairSQL, "promoting PG parentless workers", true},
+		{
+			`UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
+		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT (` + clearable + `)`,
+			"promoting PG parentless workers",
+			true,
+		},
 		{
 			`UPDATE sessions SET relationship_type = '',
 			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
@@ -282,9 +262,6 @@ func reconcileParentlessWorkersPG(
 			if err != nil {
 				return false, fmt.Errorf("%s: %w", step.action, err)
 			}
-			if len(changed) > 0 {
-				reconciled = true
-			}
 			verdicts = append(verdicts, changed...)
 			continue
 		}
@@ -292,9 +269,6 @@ func reconcileParentlessWorkersPG(
 			changed, err := queryAutomationVerdictsPG(ctx, pg, query+` AND id = ANY($2)`+returning, hash, chunk)
 			if err != nil {
 				return fmt.Errorf("%s: %w", step.action, err)
-			}
-			if len(changed) > 0 {
-				reconciled = true
 			}
 			verdicts = append(verdicts, changed...)
 			return nil
@@ -305,7 +279,47 @@ func reconcileParentlessWorkersPG(
 	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, hash); err != nil {
 		return false, err
 	}
-	return reconciled, nil
+	return reconciled || len(verdicts) > 0, nil
+}
+
+// reconcileRawSpawnLinks updates materialized raw sessions whose effective
+// relationship depends on resolved hosted spawn links, covering both workers
+// projected alongside their launcher and workers whose launcher arrives or is
+// withdrawn in a later projection.
+func reconcileRawSpawnLinks(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var changed bool
+	for _, query := range []string{
+		`UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
+		WHERE id IN (
+			SELECT id FROM sessions
+			WHERE provenance_kind = 'raw'
+			  AND COALESCE(relationship_type, '') = ''
+			  AND COALESCE(parent_session_id, '') = ''
+			  AND parser_relationship_type = 'subagent'
+			  AND ` + hostedRawSpawnExistsPG + `
+			ORDER BY id
+		)`,
+		`UPDATE sessions SET relationship_type = '',
+			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
+			relationship_inferred = CASE WHEN parser_relationship_type IS NULL THEN TRUE ELSE relationship_inferred END,
+			updated_at = NOW()
+		WHERE id IN (
+			SELECT id FROM sessions
+			WHERE provenance_kind = 'raw'
+			  AND relationship_type = 'subagent'
+			  AND ` + clearableHeadlessWorkerPG + hostedRawSpawnGuardPG + `
+			ORDER BY id
+		)`,
+	} {
+		res, err := tx.ExecContext(ctx, query)
+		if err != nil {
+			return false, fmt.Errorf("reconciling hosted raw spawn links: %w", err)
+		}
+		if n, err := res.RowsAffected(); err == nil && n > 0 {
+			changed = true
+		}
+	}
+	return changed, nil
 }
 
 func queryAutomationVerdictsPG(ctx context.Context, pg storeExecutor, query string, args ...any) ([]automationVerdictPG, error) {

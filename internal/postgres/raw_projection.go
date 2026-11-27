@@ -369,6 +369,13 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
+	if changed {
+		spawnChanged, err := reconcileRawSpawnLinks(ctx, tx)
+		if err != nil {
+			return err
+		}
+		derivedChanged = derivedChanged || spawnChanged
+	}
 
 	diagnostics := fmt.Sprintf("results=%d errors=%d complete=%t", len(parsed.Outcome.Results), len(parsed.Outcome.SourceErrors), complete)
 	if parsed.Tombstone {

@@ -109,3 +109,48 @@ func TestRawTranscriptPrefixAcceptsAGrownSessionTotalOnTheSameTranscript(t *test
 		})
 	}
 }
+
+func TestRawTranscriptPrefixMatchesAutomatedHeadlessContinuation(t *testing.T) {
+	short := ingest.PreparedSession{
+		Session: db.Session{
+			ID: "panel-1", Agent: "claude", Entrypoint: "sdk-cli",
+			RelationshipType: "subagent", IsAutomated: true,
+			MessageCount: 2, UserMessageCount: 1,
+		},
+		Messages: []db.Message{
+			{Ordinal: 0, Role: "user", Content: "You are a code reviewer. Review this change."},
+			{Ordinal: 1, Role: "assistant", Content: "No findings."},
+		},
+	}
+	short.Session.RecordParserRelationship()
+	short.Session.RelationshipType = db.SessionRelationship(short.Session)
+	require.Empty(t, short.Session.RelationshipType)
+
+	long := ingest.PreparedSession{
+		Session: db.Session{
+			ID: "panel-1", Agent: "claude", Entrypoint: "sdk-cli",
+			RelationshipType: "subagent", IsAutomated: false,
+			MessageCount: 4, UserMessageCount: 2,
+		},
+		Messages: []db.Message{
+			{Ordinal: 0, Role: "user", Content: "You are a code reviewer. Review this change."},
+			{Ordinal: 1, Role: "assistant", Content: "No findings."},
+			{Ordinal: 2, Role: "user", Content: "Check error paths too."},
+			{Ordinal: 3, Role: "assistant", Content: "Checked."},
+		},
+	}
+	long.Session.RecordParserRelationship()
+	long.Session.RelationshipType = db.SessionRelationship(long.Session)
+	require.Equal(t, "subagent", long.Session.RelationshipType)
+
+	matches, err := rawTranscriptPrefix(short, long)
+	require.NoError(t, err)
+	assert.True(t, matches, "2-turn continuation of an automated headless run must match its 1-turn prefix")
+
+	conflict := long
+	conflict.Session.RelationshipType = "fork"
+	conflict.Session.RestoreRelationshipProvenance("fork", false)
+	matches, err = rawTranscriptPrefix(short, conflict)
+	require.NoError(t, err)
+	assert.False(t, matches, "genuine parser relationship conflicts must still reject prefix matching")
+}

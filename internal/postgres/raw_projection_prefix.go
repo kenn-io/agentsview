@@ -102,6 +102,7 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 		s.MessageCount, s.UserMessageCount = 0, 0
 		s.TotalOutputTokens, s.PeakContextTokens = 0, 0
 		s.HasTotalOutputTokens, s.HasPeakContextTokens, s.IsAutomated = false, false, false
+		s.RelationshipType = db.PersistedParserRelationship(*s)
 		copyRawSignalFields(s, db.SessionSignalUpdate{})
 		s.QualitySignals = nil
 		p.Signals = db.SessionSignalUpdate{}

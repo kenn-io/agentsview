@@ -404,3 +404,60 @@ func TestHostedSidebarPRFilterKeepsRawChildTree(t *testing.T) {
 		})
 	}
 }
+
+func TestHostedRawSpawnLinkReconcilesAutomatedWorker(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	workerManifest, _ := f.acceptScoped(t, "device-a", "worker", "", parser.AgentCodex, "root-a", "worker.jsonl")
+	workerOutcome := projectionOutcome("You are a code reviewer. Review this change.")
+	workerOutcome.Outcome.Results[0].Result.Session.ID = "codex:worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, workerManifest), workerManifest, workerOutcome))
+
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.IsAutomated)
+	assert.Empty(t, got.RelationshipType, "unlinked automated worker starts as Automated")
+
+	// A launcher on another device referencing the same alias ID must not
+	// turn this device's automated worker into a subagent.
+	otherLauncher, _ := f.acceptScoped(t, "device-b", "other-launcher", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+	otherOutcome := projectionOutcome("other launcher")
+	otherOutcome.Outcome.Results[0].Result.Session.ID = "codex:other-launcher"
+	otherOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "other-launcher"
+	otherOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+	otherOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, otherLauncher), otherLauncher, otherOutcome))
+
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Empty(t, got.RelationshipType, "cross-device alias collision must not mark worker as subagent")
+
+	// Upgrade backfill must also respect source-aware link resolution.
+	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
+	require.NoError(t, err)
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Empty(t, got.RelationshipType, "hosted upgrade spawn guard ignores cross-device alias collision")
+
+	// A later-arriving launcher in the same capture scope moves the worker to
+	// Subagents immediately during projection.
+	realLauncher, _ := f.acceptScoped(t, "device-a", "real-launcher", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+	realOutcome := projectionOutcome("real launcher")
+	realOutcome.Outcome.Results[0].Result.Session.ID = "codex:real-launcher"
+	realOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "real-launcher"
+	realOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+	realOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, realLauncher), realLauncher, realOutcome))
+
+	got, err = h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	assert.Equal(t, "subagent", got.RelationshipType, "same-scope launcher moves worker to Subagents during projection")
+}
