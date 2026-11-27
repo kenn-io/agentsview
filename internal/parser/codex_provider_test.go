@@ -2396,13 +2396,13 @@ func TestCodexChangedPathRelevance(t *testing.T) {
 func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	for _, tc := range []struct {
-		name, homeDir, project string
-		roots                  []string
+		name, homeDir, project, kind string
+		roots                        []string
 	}{
-		{"nested", "experiment/case/.codex-run-v1-abc", "experiment/case", []string{"."}},
-		{"root", ".codex-run-v1-abc", ".", []string{"."}},
-		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", []string{".", "team"}},
-		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team", "."}},
+		{"nested", "experiment/case/.codex-run-v1-abc", "experiment/case", SessionKindRoborev, []string{"."}},
+		{"root", ".codex-run-v1-abc", "project", SessionKindNonInteractive, []string{"."}},
+		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", SessionKindRoborev, []string{".", "team"}},
+		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", SessionKindRoborev, []string{"team", "."}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2423,7 +2423,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, tc.project, outcome.Results[0].Result.Session.Project)
-			assert.Equal(t, SessionKindRoborev, outcome.Results[0].Result.Session.SessionKind)
+			assert.Equal(t, tc.kind, outcome.Results[0].Result.Session.SessionKind)
 			index := filepath.Join(home, CodexSessionIndexFilename)
 			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
 			require.NoError(t, err)
@@ -2475,6 +2475,7 @@ func TestCodexRecordedRunLabel(t *testing.T) {
 		{"sessions root", "team/case/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"team/case/.codex-run-v1-abc/sessions"}},
 		{"wider root", "other/place/.codex-run-v1-abc", recorded, "team/case", "team/case", SessionKindRoborev, []string{"."}},
 		{"malformed", "team/case/.codex-run-v1-abc", `{"label":`, "team/case", "", SessionKindRoborev, []string{"."}},
+		{"parent root malformed", "team/case/.codex-run-v1-abc", `{"label":`, "project", "", SessionKindNonInteractive, []string{"team/case"}},
 		{"ordinary home", ".codex", recorded, "project", "", SessionKindNonInteractive, []string{".codex/sessions"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

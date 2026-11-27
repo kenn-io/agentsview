@@ -14,19 +14,20 @@ import (
 
 func TestCodexRecordedLabelSurvivesRawCapture(t *testing.T) {
 	for _, tc := range []struct {
-		name, metadata string
-		alias          bool
+		name, metadata    string
+		alias, parentRoot bool
 	}{
-		{"valid", `{"label":"recorded/label"}`, false},
-		{"empty", `{"label":""}`, false},
-		{"malformed", `{"label":`, false},
-		{"alias index", `{"label":"recorded/label"}`, true},
+		{"valid", `{"label":"recorded/label"}`, false, false},
+		{"empty", `{"label":""}`, false, false},
+		{"malformed", `{"label":`, false, false},
+		{"alias index", `{"label":"recorded/label"}`, true, false},
+		{"parent root malformed", `{"label":`, false, true},
 	} {
-		t.Run(tc.name, func(t *testing.T) { testCodexRecordedLabelSurvivesRawCapture(t, tc.metadata, tc.alias) })
+		t.Run(tc.name, func(t *testing.T) { testCodexRecordedLabelSurvivesRawCapture(t, tc.metadata, tc.alias, tc.parentRoot) })
 	}
 }
 
-func testCodexRecordedLabelSurvivesRawCapture(t *testing.T, metadata string, alias bool) {
+func testCodexRecordedLabelSurvivesRawCapture(t *testing.T, metadata string, alias, parentRoot bool) {
 	ctx := t.Context()
 	home := filepath.Join(t.TempDir(), ".codex-run-v1-test")
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
@@ -38,6 +39,9 @@ func testCodexRecordedLabelSurvivesRawCapture(t *testing.T, metadata string, ali
 	require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexRunMetadataFilename), []byte(metadata), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(`{"id":"`+id+`","thread_name":"Review title"}`+"\n"), 0o600))
 	root := filepath.Join(home, "sessions")
+	if parentRoot {
+		root = filepath.Dir(home)
+	}
 	dirs := []string{home}
 	if alias {
 		aliasHome := filepath.Join(t.TempDir(), "alias")
