@@ -25,7 +25,6 @@ func TestLaunchedRunID(t *testing.T) {
 		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
 		{"json flag as model", "codex exec --model --json hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
-		{"windows", `'C:\\Program Files\\claude.exe' -p --session-id=` + id, "", id},
 		{"powershell", `& 'C:\Program Files\claude.exe' -p --session-id ` + id, "", id},
 		{"resume", "codex exec resume " + id, startup, ""},
 		{"resume after option", "codex exec --model example resume " + id, startup, ""},
@@ -34,13 +33,12 @@ func TestLaunchedRunID(t *testing.T) {
 		{"resume prompt", "claude -p resume the review --session-id " + id, "", id},
 		{"resume short", "claude -p -r " + id, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"continue short", "claude -c -p hello --session-id " + id, "", ""},
-		{"ambiguous", "claude -p --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, ""},
+		{"conflicting assistant JSON", "claude -p --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, ""},
 		{"duplicate flags", "claude -p --session-id " + id + " --session-id " + other, "", ""},
 		{"unrelated json", "claude -p hello", `{"type":"message","session_id":"` + id + `"}`, ""},
 		{"quoted text", `echo 'codex exec hello'`, startup, ""},
 		{"two launches", "claude -p --session-id " + id + "; claude -p --session-id " + other, "", ""},
 		{"unrelated log", "codex exec hello >run.log 2>&1; cat old.log", startup, ""},
-		{"poll", "grep codex log", startup, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

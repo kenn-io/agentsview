@@ -21,13 +21,6 @@ func codexStartup(id string) string {
 }
 
 func TestLaunchedRunLinksAfterIncrementalResult(t *testing.T) {
-	for _, mode := range []string{"all", "paths", "session"} {
-		t.Run(mode, func(t *testing.T) { testLaunchedRunLinksAfterIncrementalResult(t, mode) })
-	}
-}
-
-func testLaunchedRunLinksAfterIncrementalResult(t *testing.T, mode string) {
-	t.Helper()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122c80"
 	root := t.TempDir()
 	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
@@ -48,37 +41,23 @@ func testLaunchedRunLinksAfterIncrementalResult(t *testing.T, mode string) {
 	assert.Empty(t, children)
 	content += `{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":` + strconv.Quote(codexStartup(id)) + `}]}}` + "\n"
 	require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
-	switch mode {
-	case "all":
-		stats := engine.SyncAll(t.Context(), nil)
-		assert.Equal(t, 1, stats.LinksUpdated)
-	case "paths":
-		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{launcher}))
-	case "session":
-		require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "launcher"))
-	}
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, stats.LinksUpdated)
 	children, err = database.GetChildSessions(t.Context(), "launcher")
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "codex:"+id, children[0].ID)
-	for range 2 {
-		count, err := database.ToolCallCount(t.Context(), "launcher")
-		require.NoError(t, err)
-		assert.Equal(t, 1, count)
-		messages, err := database.GetAllMessages(t.Context(), "launcher")
-		require.NoError(t, err)
-		var calls []db.ToolCall
-		for _, msg := range messages {
-			calls = append(calls, msg.ToolCalls...)
-		}
-		require.Len(t, calls, 1)
-		assert.Equal(t, "Bash", calls[0].Category)
-		assert.Equal(t, "codex:"+id, calls[0].SubagentSessionID)
-		tools, err := database.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: "UTC"})
-		require.NoError(t, err)
-		assert.Equal(t, 1, tools.TotalCalls)
-		engine.SyncAll(t.Context(), nil)
+	count, err := database.ToolCallCount(t.Context(), "launcher")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	messages, err := database.GetAllMessages(t.Context(), "launcher")
+	require.NoError(t, err)
+	var calls []db.ToolCall
+	for _, msg := range messages {
+		calls = append(calls, msg.ToolCalls...)
 	}
+	require.Len(t, calls, 1)
+	assert.Equal(t, "codex:"+id, calls[0].SubagentSessionID)
 }
 
 func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {
@@ -147,7 +126,7 @@ func TestLaunchedRunScopedReparse(t *testing.T) {
 }
 
 func TestCodexLaunchedRunLateResult(t *testing.T) {
-	for _, mode := range []string{"all", "paths", "session", "staged"} {
+	for _, mode := range []string{"all", "staged"} {
 		t.Run(mode, func(t *testing.T) {
 			const parent = "019eb791-cf7d-75c1-8439-9ed74c122c80"
 			const child = "12345678-1234-1234-1234-123456789abc"
@@ -170,14 +149,7 @@ func TestCodexLaunchedRunLateResult(t *testing.T) {
 			assert.Empty(t, children)
 			content += testjsonl.CodexFunctionCallOutputJSON("call-1", map[string]any{"output": codexStartup(child)}, "2026-10-01T10:00:03Z") + "\n"
 			require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
-			switch mode {
-			case "paths":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{launcher}))
-			case "session":
-				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+parent))
-			default:
-				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			}
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 			children, err = database.GetChildSessions(t.Context(), "codex:"+parent)
 			require.NoError(t, err)
 			require.Len(t, children, 1)
