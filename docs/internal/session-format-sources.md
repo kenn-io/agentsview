@@ -1361,7 +1361,9 @@ fixtures retain this field; missing identities remain source-local.
   a full parse; `docs/configuration.md` lists what can replace it later.
   A missing, malformed, or empty label leaves the project derived from the
   configured folder or the session's working directory; a read error fails the
-  parse for retry. `TestCodexRecordedRunLabel` covers both forms.
+  parse for retry. `TestCodexLabeledRunDiscoveryAndParse` covers the missing
+  and malformed fallbacks, and `TestCodexRecordedLabelReadErrorRetries` covers
+  the read error.
 
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of
