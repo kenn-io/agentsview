@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"reflect"
 	"slices"
 
@@ -56,6 +57,11 @@ func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
 	return s.ID
 }
 
+type rawRelationshipProvenance struct {
+	ParserRelationship string
+	Inferred           bool
+}
+
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
 	// Dialogue belongs to mutable derived state, outside immutable content.
 	p.Messages = slices.Clone(p.Messages)
@@ -63,14 +69,37 @@ func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
 		p.Messages[i].DialogueText = nil
 	}
 	var b bytes.Buffer
-	err := gob.NewEncoder(&b).Encode(p)
-	return b.Bytes(), err
+	enc := gob.NewEncoder(&b)
+	if err := enc.Encode(p); err != nil {
+		return nil, err
+	}
+	if rel, inferred, ok := p.Session.RelationshipProvenance(); ok {
+		if err := enc.Encode(rawRelationshipProvenance{
+			ParserRelationship: rel,
+			Inferred:           inferred,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
 }
 
 func decodeRawPayload(b []byte) (ingest.PreparedSession, error) {
 	var p ingest.PreparedSession
-	err := gob.NewDecoder(bytes.NewReader(b)).Decode(&p)
-	return p, err
+	dec := gob.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&p); err != nil {
+		return p, err
+	}
+	var prov rawRelationshipProvenance
+	err := dec.Decode(&prov)
+	if errors.Is(err, io.EOF) {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	p.Session.RestoreRelationshipProvenance(prov.ParserRelationship, prov.Inferred)
+	return p, nil
 }
 
 // rawContentRevision hashes a versioned structural representation of every

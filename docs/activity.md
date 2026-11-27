@@ -89,9 +89,10 @@ their sources are unreadable. Historical worker repair can fail when sources are
 unreadable or deleted and archived rows, including replicas, lack worker
 evidence such as Claude SDK origin needed to distinguish workers from human SDK
 conversations or native Grok child-kind evidence omitted by older clients.
-Ambiguous rows keep their existing relationship. Classification audits preserve
-stored automation flags in usage-only archives, and new writes classify current
-evidence.
+Ambiguous rows keep their existing relationship. In usage-only archives,
+classification audits apply positive metadata rules (`roborev` kind or
+entrypoint) while preserving stored prompt-derived automation flags, and new
+writes classify current evidence.
 
 The session count separates subagents from interactive and automated
 conversations. Every known subagent counts as Subagents, including scripted

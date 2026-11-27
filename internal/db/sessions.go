@@ -1699,6 +1699,24 @@ func (s *Session) RecordParserRelationship() {
 	s.relationshipInferred = &inferred
 }
 
+// RelationshipProvenance returns the recorded parser relationship and
+// inferred flag for internal transport that skips unexported Session fields.
+func (s Session) RelationshipProvenance() (parserRel string, inferred bool, ok bool) {
+	if s.parserRelationshipType == nil &&
+		s.storedParserRelationshipType == nil &&
+		s.relationshipInferred == nil {
+		return "", false, false
+	}
+	return PersistedParserRelationship(s), SessionRelationshipInferred(s), true
+}
+
+// RestoreRelationshipProvenance restores parser relationship provenance
+// decoded from internal transport onto s.
+func (s *Session) RestoreRelationshipProvenance(parserRel string, inferred bool) {
+	s.parserRelationshipType = &parserRel
+	s.relationshipInferred = &inferred
+}
+
 // SpawnLinked reports whether a spawn edge or launcher link has given the
 // stored session a parent, even one since deleted.
 func (s Session) SpawnLinked() bool {
@@ -1772,6 +1790,14 @@ func SessionRelationshipInferred(s Session) bool {
 	return relationshipInferred(s, ParserSessionRelationship(s))
 }
 
+func isNativeClaudeSubagentID(id string) bool {
+	if strings.HasPrefix(id, "agent-") {
+		return true
+	}
+	_, native, ok := strings.Cut(id, "~")
+	return ok && strings.HasPrefix(native, "agent-")
+}
+
 // relationshipInferred treats RelationshipType as the parser's relationship
 // before parentless promotion. Claude marks headless SDK runs as subagents
 // itself, so every parentless sdk-cli subagent is inferred; a non-interactive
@@ -1780,7 +1806,7 @@ func relationshipInferred(s Session, parserRel string) bool {
 	if parserRel != string(parser.RelSubagent) ||
 		(s.ParentSessionID != nil && *s.ParentSessionID != "") ||
 		(s.ParserParentSessionID != nil && *s.ParserParentSessionID != "") ||
-		strings.HasPrefix(s.ID, "agent-") {
+		isNativeClaudeSubagentID(s.ID) {
 		return false
 	}
 	if s.Entrypoint == "sdk-cli" {

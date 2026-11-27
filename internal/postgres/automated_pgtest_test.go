@@ -126,6 +126,8 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 		{"plain", "codex", "", "Explain this function.", "non-interactive", "", nil, nil, 1},
 		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "subagent", nil, nil, 1},
 		{"claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"legacy-claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"origin~agent-child", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
 		{"claude-roborev", "claude", "roborev", "# UX review\nCheck the CLI output.", "", "", nil, nil, 2},
 		{"real-child", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, new("plain"), 1},
 		{"child", "codex", "", "Explain this function.", "non-interactive", "", new("plain"), new("plain"), 1},
@@ -139,8 +141,8 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 			tc.id, tc.agent, tc.entrypoint, tc.prompt, tc.kind, tc.relationship, tc.parent, tc.parserParent, tc.userCount)
 		require.NoError(t, err)
 	}
-	// Current pushers send the parser provenance; older ones leave it NULL,
-	// which only the non-interactive fallback can reconcile.
+	// Current pushers send the parser provenance; older ones leave it NULL
+	// (tested by legacy-claude-panel and origin~agent-child).
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions
 		SET parser_relationship_type = 'subagent', relationship_inferred = TRUE
 		WHERE id = 'claude-panel'`)
@@ -154,6 +156,8 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 		{"plain", "subagent", false, true},
 		{"script", "", true, true},
 		{"claude-panel", "", true, true},
+		{"legacy-claude-panel", "", true, true},
+		{"origin~agent-child", "subagent", true, false},
 		{"claude-roborev", "", true, false},
 		{"real-child", "subagent", true, false},
 		{"child", "", false, false},
@@ -426,13 +430,22 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 	require.NoError(t, err)
 	// Legacy headless rows predate non-interactive session metadata.
-	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
-		('codex-headless', 'other-machine', 'project', 'codex', 'headless', 2, true, true),
-		('codex-interactive', 'other-machine', 'project', 'codex', '', 2, false, true),
-		('headless-full', 'other-machine', 'project', 'codex', 'headless', 2, true, false)`)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, entrypoint, user_message_count, is_automated, prompt_evidence_discarded) VALUES
+		('codex-headless', 'other-machine', 'project', 'codex', 'headless', '', 2, true, true),
+		('codex-interactive', 'other-machine', 'project', 'codex', '', '', 2, false, true),
+		('claude-roborev-discarded', 'other-machine', 'project', 'claude', '', 'roborev', 2, false, true),
+		('headless-full', 'other-machine', 'project', 'codex', 'headless', '', 2, true, false)`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
-	for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "codex-interactive": false, "headless-full": false} {
+	for id, want := range map[string]bool{
+		"automated":                true,
+		"interactive":              false,
+		"empty-full":               false,
+		"codex-headless":           true,
+		"codex-interactive":        false,
+		"claude-roborev-discarded": true,
+		"headless-full":            false,
+	} {
 		var got bool
 		require.NoError(t, ps.DB().QueryRowContext(ctx,
 			`SELECT is_automated FROM sessions WHERE id = $1`, id,
@@ -479,6 +492,27 @@ func TestAutomationAuditPGRestoresClaudeSDKWorker(t *testing.T) {
 	db.SetUserAutomationPrefixes(nil)
 	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
 	relationship, automated = stored()
+	assert.False(t, automated)
+	assert.Equal(t, "subagent", relationship)
+
+	// Legacy sdk-cli rows (NULL parser_relationship_type) also clear and restore.
+	_, err = ps.DB().ExecContext(t.Context(), `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, relationship_type, first_message, user_message_count)
+		VALUES ('legacy-panel', 'host', 'project', 'claude', 'sdk-cli', 'subagent', '# UX review\nCheck the CLI output.', 1)`)
+	require.NoError(t, err)
+	db.SetUserAutomationPrefixes([]string{"# UX review"})
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'legacy-panel'`,
+	).Scan(&relationship, &automated))
+	assert.True(t, automated)
+	assert.Empty(t, relationship)
+
+	db.SetUserAutomationPrefixes(nil)
+	require.NoError(t, backfillIsAutomatedPG(t.Context(), ps.DB()))
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
+		`SELECT relationship_type, is_automated FROM sessions WHERE id = 'legacy-panel'`,
+	).Scan(&relationship, &automated))
 	assert.False(t, automated)
 	assert.Equal(t, "subagent", relationship)
 }

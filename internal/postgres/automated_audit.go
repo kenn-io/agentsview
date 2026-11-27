@@ -117,17 +117,18 @@ func backfillIsAutomatedPGWithProgress(
 // headless shape and nothing ever spawned or launched it. A launcher link
 // counts only once it applies, which spawn_linked records; a link still
 // waiting for its parent leaves the row Automated, as in SQLite. Rows pushed
-// by older binaries carry no parser relationship or spawn record; they keep
-// the non-interactive fallback, treat any launcher link as a spawn, and treat
-// Grok rows as explicit children, as SQLite's legacy backfill does.
+// by older binaries carry no parser relationship or spawn record; they fall
+// back to entrypoint/kind matching, treat any launcher link as a spawn, and
+// treat Grok rows and native agent-* IDs (including origin-prefixed imports)
+// as explicit children, as SQLite's legacy backfill does.
 const clearableHeadlessWorkerPG = `is_automated
 		  AND COALESCE(parent_session_id, '') = ''
 		  AND NOT spawn_linked
 		  AND CASE WHEN parser_relationship_type IS NULL
-			THEN session_kind = 'non-interactive' AND agent <> 'grok'
+			THEN (entrypoint = 'sdk-cli' OR (session_kind = 'non-interactive' AND agent <> 'grok'))
 				AND COALESCE(external_parent_session_id, '') = ''
 				AND COALESCE(parser_parent_session_id, '') = ''
-				AND left(id, 6) <> 'agent-'
+				AND left(CASE WHEN strpos(id, '~') > 0 THEN substr(id, strpos(id, '~') + 1) ELSE id END, 6) <> 'agent-'
 			ELSE relationship_inferred END
 		  AND NOT EXISTS (
 			SELECT 1 FROM tool_calls tc
@@ -141,7 +142,10 @@ const clearableHeadlessWorkerPG = `is_automated
 const repairParentlessWorkersSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
 		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT (` + clearableHeadlessWorkerPG + `)`
 
-const clearAutomatedParentlessWorkersSQL = `UPDATE sessions SET relationship_type = '', updated_at = NOW()
+const clearAutomatedParentlessWorkersSQL = `UPDATE sessions SET relationship_type = '',
+			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
+			relationship_inferred = CASE WHEN parser_relationship_type IS NULL THEN TRUE ELSE relationship_inferred END,
+			updated_at = NOW()
 		WHERE relationship_type = 'subagent' AND ` + clearableHeadlessWorkerPG
 
 const restoreParentlessWorkersSQL = `UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
@@ -342,16 +346,16 @@ func auditAutomatedMatchingHashPG(
 			)
 		}
 		progress.RowsPrefetched++
+		if db.IsAutomatedSessionMetadata(sessionKind, entrypoint) {
+			if ids != nil || !rowAutomated {
+				verdicts = append(verdicts, automationVerdictPG{id, version, true})
+			}
+			continue
+		}
 		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
 		if promptEvidenceDiscarded {
 			if ids != nil {
 				verdicts = append(verdicts, automationVerdictPG{id, version, rowAutomated})
-			}
-			continue
-		}
-		if db.IsAutomatedSessionMetadata(sessionKind, entrypoint) {
-			if ids != nil || !rowAutomated {
-				verdicts = append(verdicts, automationVerdictPG{id, version, true})
 			}
 			continue
 		}
@@ -442,6 +446,12 @@ func scanFullAutomationCandidatesPG(
 			)
 		}
 		count++
+		if db.IsAutomatedSessionMetadata(sessionKind, entrypoint) {
+			if includeUnchanged || !rowAutomated {
+				verdicts = append(verdicts, automationVerdictPG{id, version, true})
+			}
+			continue
+		}
 		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
 		if promptEvidenceDiscarded {
 			if includeUnchanged {
@@ -449,8 +459,7 @@ func scanFullAutomationCandidatesPG(
 			}
 			continue
 		}
-		want := db.IsAutomatedSessionMetadata(sessionKind, entrypoint)
-		want = want || classifier.IsAutomatedFromTextCandidates(
+		want := classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)
 		if includeUnchanged || want != rowAutomated {

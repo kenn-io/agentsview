@@ -25,11 +25,12 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		automated  bool
 		kind       string
 		entrypoint string
+		rel        string
 	}{
-		{"worker", nil, false, "", ""},
-		{"script", nil, true, "non-interactive", ""},
-		{"claude-panel", nil, true, "", "sdk-cli"},
-		{"child", new("worker"), true, "", ""},
+		{"worker", nil, false, "", "", "subagent"},
+		{"script", nil, true, "non-interactive", "", ""},
+		{"claude-panel", nil, true, "", "sdk-cli", "subagent"},
+		{"child", new("worker"), true, "", "", "subagent"},
 	} {
 		prompt := "Explain this function."
 		if tc.automated {
@@ -37,7 +38,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		}
 		sess := fixtureSession(tc.id, "project-a", prompt, "2026-10-01T10:00:00Z", 2)
 		sess.EndedAt = new("2026-10-01T10:01:00Z")
-		sess.RelationshipType = "subagent"
+		sess.RelationshipType = tc.rel
 		sess.ParentSessionID = tc.parent
 		sess.IsAutomated = tc.automated
 		sess.SessionKind = tc.kind

@@ -210,7 +210,21 @@ func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
 		s.IsAutomated = true
 		s.UserMessageCount = 1
 	})
+	insertSession(t, d, "legacy-roborev", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "roborev"
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "prompt-automated", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.IsAutomated = true
+		s.UserMessageCount = 1
+	})
 	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_type = 'subagent', parser_relationship_type = 'subagent', is_automated = 1 WHERE id = 'legacy-panel'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0, local_modified_at = '2000-01-01T00:00:00Z' WHERE id = 'legacy-roborev'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 1 WHERE id = 'prompt-automated'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
 	require.NoError(t, err)
@@ -225,6 +239,43 @@ func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.True(t, stored.IsAutomated)
 	assert.Empty(t, stored.RelationshipType)
+
+	roborev, err := reopened.GetSessionFull(ctx, "legacy-roborev")
+	require.NoError(t, err)
+	require.NotNil(t, roborev)
+	assert.True(t, roborev.IsAutomated, "roborev entrypoint classifies without retained prompt text")
+	require.NotNil(t, roborev.LocalModifiedAt)
+	assert.NotEqual(t, "2000-01-01T00:00:00Z", *roborev.LocalModifiedAt)
+
+	promptOnly, err := reopened.GetSession(ctx, "prompt-automated")
+	require.NoError(t, err)
+	require.NotNil(t, promptOnly)
+	assert.True(t, promptOnly.IsAutomated, "stored prompt-derived verdict is preserved when metadata does not match")
+}
+
+func TestLegacyRelationshipInferredProtectsImportedClaudeSubagent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"origin~agent-sub1", "origin~panel-1", "agent-local1"} {
+		_, err := d.getWriter().Exec(ctx, `INSERT INTO sessions
+			(id, machine, project, agent, entrypoint, relationship_type, is_automated, user_message_count, relationship_inferred)
+			VALUES (?, 'local', 'project-a', 'claude', 'sdk-cli', 'subagent', 1, 1, 0)`, id)
+		require.NoError(t, err)
+	}
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_inferred = 1 WHERE `+legacyRelationshipInferredSQL)
+	require.NoError(t, err)
+	require.NoError(t, reconcileParentlessWorkers(ctx, d.getWriter(), false))
+
+	for id, wantRel := range map[string]string{
+		"origin~agent-sub1": "subagent",
+		"agent-local1":      "subagent",
+		"origin~panel-1":    "",
+	} {
+		sess, err := d.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, sess, id)
+		assert.Equal(t, wantRel, sess.RelationshipType, id)
+	}
 }
 
 func TestIncrementalAppendPreservesRoborevTag(t *testing.T) {

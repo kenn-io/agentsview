@@ -69,6 +69,9 @@ func TestArtifactImportReappliesAutomationToHeadlessRuns(t *testing.T) {
 	seedSession(t, source, "claude-panel", "project", func(s *db.Session) {
 		s.Entrypoint, s.RelationshipType = "sdk-cli", "subagent"
 	})
+	seedSession(t, source, "agent-child", "project", func(s *db.Session) {
+		s.Entrypoint, s.RelationshipType = "sdk-cli", "subagent"
+	})
 	seedSession(t, source, "codex-exec", "project", func(s *db.Session) {
 		s.Agent, s.SessionKind = "codex", "non-interactive"
 	})
@@ -92,6 +95,11 @@ func TestArtifactImportReappliesAutomationToHeadlessRuns(t *testing.T) {
 			assert.Equal(t, automated, imported.IsAutomated, id)
 			assert.Equal(t, relationship, imported.RelationshipType, id)
 		}
+		nativeChild, err := d.GetSessionFull(t.Context(), contractOrigin+"~agent-child")
+		require.NoError(t, err)
+		require.NotNil(t, nativeChild)
+		assert.Equal(t, automated, nativeChild.IsAutomated, "agent-child")
+		assert.Equal(t, "subagent", nativeChild.RelationshipType, "imported native Claude subagent keeps subagent role")
 	}
 	assertImported(destination, true, "")
 

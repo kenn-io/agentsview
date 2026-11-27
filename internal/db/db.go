@@ -4618,6 +4618,9 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	}
 	matchingHash := stored == current
 	if db.usageOnlyStorage() {
+		if err := applyUsageOnlyMetadataAutomation(ctx, w, matchingHash); err != nil {
+			return err
+		}
 		if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
 			return err
 		}

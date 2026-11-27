@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
@@ -26,7 +28,7 @@ const parserRelationshipSQL = `COALESCE(sessions.parser_relationship_type, ` + p
 // every Grok source, and a legacy Grok worker stays a subagent as it did
 // before automated headless runs were cleared.
 const legacyRelationshipInferredSQL = `COALESCE(parser_parent_session_id, '') = ''
- AND substr(id, 1, 6) <> 'agent-'
+ AND CASE WHEN instr(id, '~') > 0 THEN substr(id, instr(id, '~') + 1, 6) ELSE substr(id, 1, 6) END <> 'agent-'
  AND COALESCE(parser_relationship_type,
 	IIF(COALESCE(relationship_type, '') = '' AND session_kind = 'non-interactive', 'subagent', relationship_type)) = 'subagent'
  AND (entrypoint = 'sdk-cli' OR (session_kind = 'non-interactive' AND agent <> 'grok'))`
@@ -60,6 +62,25 @@ func unlinkedRelationshipSQL(spawnLinked string) string {
 // effectiveParentlessRelationshipSQL is unlinkedRelationshipSQL for a session
 // whose spawn record stays as stored.
 var effectiveParentlessRelationshipSQL = unlinkedRelationshipSQL("sessions.spawn_linked")
+
+// applyUsageOnlyMetadataAutomation applies positive metadata-based automation
+// rules in usage-only archives where prompt text has been discarded. Existing
+// prompt-derived verdicts are preserved when metadata does not match.
+func applyUsageOnlyMetadataAutomation(ctx context.Context, w *writerHandle, onlyAudited bool) error {
+	auditFilter := ""
+	if onlyAudited {
+		auditFilter = " AND automation_audit = 1"
+	}
+	if _, err := w.Exec(ctx, `UPDATE sessions
+		SET is_automated = 1, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE is_automated = 0
+		  AND (session_kind = ? OR entrypoint = ?)`+auditFilter,
+		parser.SessionKindRoborev, parser.SessionKindRoborev,
+	); err != nil {
+		return fmt.Errorf("applying metadata automation in usage-only archive: %w", err)
+	}
+	return nil
+}
 
 func reconcileParentlessWorkers(ctx context.Context, w *writerHandle, onlyAudited bool) error {
 	clearable := clearableHeadlessWorkerSQL("sessions.is_automated = 1")
