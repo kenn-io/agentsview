@@ -493,7 +493,8 @@ func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.
 	require.NoError(t, err)
 
 	// Simulate pre-upgrade state where this two-message review was stored as
-	// non-automated with completed/medium outcome and a scored health grade.
+	// non-automated with completed/medium outcome and a scored health grade
+	// in both sessions and the retained raw payload and recency overlay.
 	_, err = f.runtime.ExecContext(ctx,
 		`UPDATE sessions
 		 SET is_automated = FALSE,
@@ -507,22 +508,37 @@ func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.
 		 WHERE id = $1`, resolved.SessionID,
 	)
 	require.NoError(t, err)
+	var rawPayloadBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT payload FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&rawPayloadBytes))
+	preUpgradePayload, err := decodeRawPayload(rawPayloadBytes)
+	require.NoError(t, err)
+	preUpgradePayload.Session.IsAutomated = false
+	preUpgradeBytes, err := encodeRawPayload(preUpgradePayload)
+	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(ctx,
 		`UPDATE raw_content_revisions
-		 SET recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
-		 WHERE session_id = $1`, resolved.SessionID,
+		 SET payload = $2,
+		     recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
+		 WHERE session_id = $1`, resolved.SessionID, preUpgradeBytes,
 	)
 	require.NoError(t, err)
-	var beforeRecencyBytes []byte
+	var beforePayloadBytes, beforeRecencyBytes []byte
 	require.NoError(t, f.runtime.QueryRowContext(ctx,
-		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
-	).Scan(&beforeRecencyBytes))
+		`SELECT payload, recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&beforePayloadBytes, &beforeRecencyBytes))
+	beforePayload, err := decodeRawPayload(beforePayloadBytes)
+	require.NoError(t, err)
+	require.False(t, beforePayload.Session.IsAutomated)
 	beforeRecency, err := decodeRawRecency(beforeRecencyBytes)
 	require.NoError(t, err)
-	require.Equal(t, "completed", beforeRecency.Outcome)
-	require.Equal(t, "medium", beforeRecency.OutcomeConfidence)
-	require.Equal(t, new(100), beforeRecency.HealthScore)
-	require.Equal(t, new("A"), beforeRecency.HealthGrade)
+	require.Equal(t, rawRecencyState{
+		Outcome:           "completed",
+		OutcomeConfidence: "medium",
+		HealthScore:       new(100),
+		HealthGrade:       new("A"),
+	}, beforeRecency)
 	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
 	require.NoError(t, err)
 
@@ -546,6 +562,92 @@ func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.
 	var recencyBytes []byte
 	require.NoError(t, f.runtime.QueryRowContext(ctx,
 		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&recencyBytes))
+	recency, err := decodeRawRecency(recencyBytes)
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", recency.Outcome)
+	assert.Equal(t, "low", recency.OutcomeConfidence)
+	assert.Nil(t, recency.HealthScore)
+	assert.Nil(t, recency.HealthGrade)
+}
+
+func TestRawProjectionRestoreRefreshesStaleRecencyAfterPatternRestored(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	short := projectionOutcome(prompt)
+	short.Outcome.Results[0].Result.Session.ID = "review-restore-recency"
+	short.Outcome.Results[0].Result.Session.SourceSessionID = "review-restore-recency"
+	short.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
+	short.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
+	short.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	short.Outcome.Results[0].Result.Messages[1].ToolCalls = nil
+
+	a, _ := f.accept(t, "device-a", "short-review", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, a), a, short))
+	shortResolved, err := f.sink.Resolve(ctx, "review-restore-recency")
+	require.NoError(t, err)
+
+	// Simulate an intermediate audit while a pattern was temporarily removed:
+	// recency_state was overwritten to completed/medium/100/A while the
+	// immutable gob payload kept IsAutomated=true.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_content_revisions
+		 SET recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
+		 WHERE session_id = $1`, shortResolved.SessionID,
+	)
+	require.NoError(t, err)
+
+	// Supersede the short capture with a longer capture from device-b so the
+	// short row is dematerialized from sessions while its revision stays retained.
+	longer := projectionOutcome(prompt)
+	longer.Outcome.Results[0].Result.Session.ID = "review-restore-recency"
+	longer.Outcome.Results[0].Result.Session.SourceSessionID = "review-restore-recency"
+	longer.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
+	longer.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
+	longer.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	longer.Outcome.Results[0].Result.Messages[1].ToolCalls = nil
+	longer.Outcome.Results[0].Result.Messages = append(
+		longer.Outcome.Results[0].Result.Messages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Follow-up question."},
+		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Follow-up answer."},
+	)
+	longer.Outcome.Results[0].Result.Session.MessageCount = 4
+	longer.Outcome.Results[0].Result.Session.UserMessageCount = 2
+
+	b, br := f.accept(t, "device-b", "longer-review", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longer))
+
+	// Withdraw device-b so writePayload rematerializes the retained short capture
+	// even though gob IsAutomated matches refreshRawSessionAutomation.
+	empty := longer
+	empty.Outcome.Results = nil
+	b, _ = f.accept(t, "device-b", "withdraw-longer", br.Receipt, parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, empty))
+
+	restored, err := f.sink.Resolve(ctx, "review-restore-recency")
+	require.NoError(t, err)
+	require.Equal(t, shortResolved.SessionID, restored.SessionID)
+
+	var isAutomated bool
+	var gotOutcome, gotConfidence string
+	var gotHealthScore *int
+	var gotHealthGrade *string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade
+		 FROM sessions WHERE id = $1`, restored.SessionID,
+	).Scan(&isAutomated, &gotOutcome, &gotConfidence, &gotHealthScore, &gotHealthGrade))
+	assert.True(t, isAutomated)
+	assert.Equal(t, "unknown", gotOutcome)
+	assert.Equal(t, "low", gotConfidence)
+	assert.Nil(t, gotHealthScore)
+	assert.Nil(t, gotHealthGrade)
+
+	var recencyBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, restored.SessionID,
 	).Scan(&recencyBytes))
 	recency, err := decodeRawRecency(recencyBytes)
 	require.NoError(t, err)

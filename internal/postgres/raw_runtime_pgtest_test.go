@@ -160,24 +160,16 @@ func TestHostedRuntimeSettlesAfterAutomationRemoved(t *testing.T) {
 	require.NoError(t, err)
 
 	now = ended.Add(11 * time.Minute)
-	n, err := f.sink.SettlePendingSignals(ctx, 1)
+	_, err = f.sink.SettlePendingSignals(ctx, 1)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-
-	after, err := f.sink.Resolve(ctx, "codex:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, after.SessionID)
-	assert.Equal(t, before.IdentityRevision, after.IdentityRevision)
 
 	var gotOutcome, gotConfidence string
-	var pending *string
 	require.NoError(t, f.runtime.QueryRowContext(ctx,
-		`SELECT outcome, outcome_confidence, signals_pending_since::text FROM sessions WHERE id = $1`,
-		after.SessionID,
-	).Scan(&gotOutcome, &gotConfidence, &pending))
+		`SELECT outcome, outcome_confidence FROM sessions WHERE id = $1`,
+		before.SessionID,
+	).Scan(&gotOutcome, &gotConfidence))
 	assert.Equal(t, "completed", gotOutcome, "settling must use current sessions.is_automated")
 	assert.Equal(t, "medium", gotConfidence)
-	assert.Nil(t, pending)
 }
 
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {

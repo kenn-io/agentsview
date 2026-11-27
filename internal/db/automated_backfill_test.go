@@ -1311,3 +1311,114 @@ func TestSpawnedHeadlessWorkerStaysSubagentAfterParentDeletion(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomatedBackfillRefreshesSignals(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	// 1. Two-message prompt-file review stored before upgrade as non-automated
+	//    with completed/medium outcome and a 100/A health score.
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	insertSession(t, d, "review-to-auto", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.Entrypoint = "sdk-cli"
+		s.FirstMessage = Ptr(reviewPrompt)
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "review-to-auto", Ordinal: 0, Role: "user", Content: reviewPrompt},
+		{SessionID: "review-to-auto", Ordinal: 1, Role: "assistant", Content: "Looks good."},
+	}))
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     ended_with_role = 'assistant',
+		     health_score = 100,
+		     health_grade = 'A',
+		     quality_signal_version = ?
+		 WHERE id = 'review-to-auto'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	// 2. Two-message interactive session previously marked automated with
+	//    unknown/low outcome and nil health.
+	insertSession(t, d, "auto-to-human", "project-a", func(s *Session) {
+		s.Agent = "codex"
+		s.FirstMessage = Ptr("Explain this function.")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "auto-to-human", Ordinal: 0, Role: "user", Content: "Explain this function."},
+		{SessionID: "auto-to-human", Ordinal: 1, Role: "assistant", Content: "It adds two numbers."},
+	}))
+	_, err = d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 1,
+		     outcome = 'unknown',
+		     outcome_confidence = 'low',
+		     ended_with_role = 'assistant',
+		     health_score = NULL,
+		     health_grade = NULL,
+		     quality_signal_version = ?
+		 WHERE id = 'auto-to-human'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	// 3. Row with intentionally empty signals whose metadata flips is_automated
+	//    to true must preserve empty signal fields.
+	insertSession(t, d, "usage-only-empty", "project-a", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionKind = parser.SessionKindRoborev
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	_, err = d.getWriter().Exec(ctx,
+		`UPDATE sessions
+		 SET is_automated = 0,
+		     outcome = '',
+		     outcome_confidence = '',
+		     ended_with_role = '',
+		     health_score = NULL,
+		     health_grade = NULL,
+		     quality_signal_version = ?
+		 WHERE id = 'usage-only-empty'`,
+		CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+
+	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+	require.NoError(t, d.backfillIsAutomatedLocked(ctx, d.getWriter()))
+
+	review, err := d.GetSessionFull(ctx, "review-to-auto")
+	require.NoError(t, err)
+	assert.True(t, review.IsAutomated)
+	assert.Equal(t, "unknown", review.Outcome)
+	assert.Equal(t, "low", review.OutcomeConfidence)
+	assert.Nil(t, review.HealthScore)
+	assert.Nil(t, review.HealthGrade)
+
+	human, err := d.GetSessionFull(ctx, "auto-to-human")
+	require.NoError(t, err)
+	assert.False(t, human.IsAutomated)
+	assert.Equal(t, "completed", human.Outcome)
+	assert.Equal(t, "medium", human.OutcomeConfidence)
+	require.NotNil(t, human.HealthScore)
+	assert.Equal(t, 100, *human.HealthScore)
+	require.NotNil(t, human.HealthGrade)
+	assert.Equal(t, "A", *human.HealthGrade)
+
+	usageOnly, err := d.GetSessionFull(ctx, "usage-only-empty")
+	require.NoError(t, err)
+	assert.True(t, usageOnly.IsAutomated)
+	assert.Empty(t, usageOnly.Outcome)
+	assert.Empty(t, usageOnly.OutcomeConfidence)
+	assert.Nil(t, usageOnly.HealthScore)
+	assert.Nil(t, usageOnly.HealthGrade)
+}

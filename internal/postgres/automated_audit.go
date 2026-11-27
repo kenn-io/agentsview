@@ -97,6 +97,7 @@ func refreshHostedRawSignalsPG(ctx context.Context, tx *sql.Tx, changedIDs []str
 		 JOIN raw_content_revisions r ON r.session_id = s.id
 		 WHERE s.id = ANY($1)
 		   AND s.provenance_kind = 'raw'
+		   AND NOT s.prompt_evidence_discarded
 		 ORDER BY s.id`,
 		changedIDs,
 	)
@@ -200,6 +201,9 @@ func backfillIsAutomatedPGCore(
 	if err != nil {
 		return progress, false, nil, err
 	}
+	if err := refreshSessionSignalsPG(ctx, pg, changedAutomationIDs, tracking, current, hosted); err != nil {
+		return progress, false, nil, err
+	}
 
 	if _, err := pg.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
@@ -213,6 +217,174 @@ func backfillIsAutomatedPGCore(
 		)
 	}
 	return progress, len(changedAutomationIDs) > 0 || reconciled, changedAutomationIDs, nil
+}
+
+func refreshSessionSignalsPG(
+	ctx context.Context, pg storeExecutor, changedIDs []string,
+	tracking bool, hash string, hosted bool,
+) error {
+	if len(changedIDs) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	type refreshUpdate struct {
+		id          string
+		isAutomated bool
+		res         db.SessionSignalRefreshResult
+	}
+	return pgQueryChunked(changedIDs, func(chunk []string) error {
+		pb := &paramBuilder{}
+		where := `WHERE s.id = ANY(` + pb.add(chunk) + `::text[])
+		  AND NOT s.prompt_evidence_discarded
+		  AND NOT (
+		      s.outcome = '' AND s.outcome_confidence = ''
+		      AND s.health_score IS NULL AND s.health_grade IS NULL
+		      AND s.signals_pending_since IS NULL
+		  )
+		  AND (
+		      s.quality_signal_version > 0
+		      OR s.outcome <> 'unknown'
+		      OR s.outcome_confidence <> 'low'
+		      OR s.health_score IS NOT NULL
+		      OR s.health_grade IS NOT NULL
+		      OR s.signals_pending_since IS NOT NULL
+		  )`
+		if hosted {
+			where += ` AND s.provenance_kind <> 'raw'`
+		}
+		if tracking {
+			where += ` AND s.automation_audit_hash = ` + pb.add(hash)
+		}
+		rows, err := pg.QueryContext(ctx,
+			`SELECT s.id, s.is_automated, s.message_count, s.ended_at,
+			        s.ended_with_role, s.final_failure_streak,
+			        s.signals_pending_since, s.has_tool_calls,
+			        s.tool_failure_signal_count, s.tool_retry_count,
+			        s.edit_churn_count, s.consecutive_failure_max,
+			        s.has_context_data, s.compaction_count,
+			        s.mid_task_compaction_count, s.context_pressure_max,
+			        s.short_prompt_count, s.unstructured_start,
+			        s.missing_success_criteria_count,
+			        s.missing_verification_count, s.duplicate_prompt_count,
+			        s.no_code_context_count, s.runaway_tool_loop_count,
+			        s.outcome, s.outcome_confidence,
+			        s.health_score, s.health_grade,
+			        COALESCE(last_msg.role, '') AS last_role,
+			        COALESCE(last_msg.content, '') AS last_content
+			 FROM sessions s
+			 LEFT JOIN LATERAL (
+			     SELECT m.role, m.content
+			     FROM messages m
+			     WHERE m.session_id = s.id
+			       AND m.is_system = false
+			       AND m.source_subtype <> 'tool_result'
+			     ORDER BY m.ordinal DESC
+			     LIMIT 1
+			 ) last_msg ON true
+			 `+where,
+			pb.args...,
+		)
+		if err != nil {
+			return fmt.Errorf("loading changed PG sessions for signal refresh: %w", err)
+		}
+		defer rows.Close()
+		var updates []refreshUpdate
+		for rows.Next() {
+			var (
+				id, curOutcome, curConfidence string
+				lastRole, lastContent         string
+				endedAt, pending              sql.NullString
+				pressureMax                   sql.NullFloat64
+				curScore                      sql.NullInt64
+				curGrade                      sql.NullString
+				in                            db.SessionSignalRefreshInput
+			)
+			if err := rows.Scan(
+				&id, &in.IsAutomated, &in.MessageCount, &endedAt,
+				&in.EndedWithRole, &in.FinalFailureStreak,
+				&pending, &in.HasToolCalls,
+				&in.ToolFailureSignalCount, &in.ToolRetryCount,
+				&in.EditChurnCount, &in.ConsecutiveFailureMax,
+				&in.HasContextData, &in.CompactionCount,
+				&in.MidTaskCompactionCount, &pressureMax,
+				&in.ShortPromptCount, &in.UnstructuredStart,
+				&in.MissingSuccessCriteriaCount,
+				&in.MissingVerificationCount, &in.DuplicatePromptCount,
+				&in.NoCodeContextCount, &in.RunawayToolLoopCount,
+				&curOutcome, &curConfidence,
+				&curScore, &curGrade,
+				&lastRole, &lastContent,
+			); err != nil {
+				return fmt.Errorf("scanning changed PG session for signal refresh: %w", err)
+			}
+			if endedAt.Valid {
+				v := endedAt.String
+				in.EndedAt = &v
+			}
+			if pending.Valid {
+				v := pending.String
+				in.SignalsPendingSince = &v
+			}
+			if pressureMax.Valid {
+				v := pressureMax.Float64
+				in.ContextPressureMax = &v
+			}
+			if in.EndedWithRole == "" && lastRole != "" {
+				in.EndedWithRole = lastRole
+			}
+			if lastRole == "assistant" {
+				in.LastAssistantText = lastContent
+			}
+			var curScorePtr *int
+			if curScore.Valid {
+				v := int(curScore.Int64)
+				curScorePtr = &v
+			}
+			var curGradePtr *string
+			if curGrade.Valid {
+				v := curGrade.String
+				curGradePtr = &v
+			}
+			next := db.RecomputeSignalsForAutomationChange(in, now)
+			if !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScorePtr, curGradePtr) {
+				updates = append(updates, refreshUpdate{
+					id:          id,
+					isAutomated: in.IsAutomated,
+					res:         next,
+				})
+			}
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return fmt.Errorf("reading changed PG sessions for signal refresh: %w", err)
+		}
+		for _, u := range updates {
+			args := []any{
+				u.id, u.res.Outcome, u.res.OutcomeConfidence,
+				u.res.SignalsPendingSince, u.res.HealthScore,
+				u.res.HealthGrade, u.isAutomated,
+			}
+			guard := ` AND is_automated = $7`
+			if tracking {
+				guard += ` AND automation_audit_hash = $8`
+				args = append(args, hash)
+			}
+			if _, err := pg.ExecContext(ctx,
+				`UPDATE sessions
+				 SET outcome = $2,
+				     outcome_confidence = $3,
+				     signals_pending_since = $4,
+				     health_score = $5,
+				     health_grade = $6
+				 WHERE id = $1`+guard+`
+				   AND (outcome, outcome_confidence, signals_pending_since, health_score, health_grade)
+				       IS DISTINCT FROM ($2::text, $3::text, $4::text, $5::int, $6::text)`,
+				args...,
+			); err != nil {
+				return fmt.Errorf("refreshing PG signals for session %s: %w", u.id, err)
+			}
+		}
+		return nil
+	})
 }
 
 // clearableHeadlessWorkerPG mirrors the SQLite rule: an automated parentless

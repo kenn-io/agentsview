@@ -613,3 +613,82 @@ func TestAutomationAuditPGLeavesConcurrentPushUnstamped(t *testing.T) {
 	assert.False(t, automated)
 	assert.Equal(t, "subagent", relationship)
 }
+
+func TestAutomationAuditPGRefreshesSignals(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	url := testPGSchemaURL(t, "agentsview")
+	ps, err := New(ctx, url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx))
+
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions
+		(id, machine, project, agent, entrypoint, first_message, message_count, user_message_count,
+		 is_automated, outcome, outcome_confidence, ended_with_role, health_score, health_grade, quality_signal_version)
+		VALUES
+		('review-pg', 'host', 'project', 'claude', 'sdk-cli', $1, 2, 1,
+		 FALSE, 'completed', 'medium', 'assistant', 100, 'A', $2),
+		('human-pg', 'host', 'project', 'codex', '', 'Explain this function.', 2, 1,
+		 TRUE, 'unknown', 'low', 'assistant', NULL, NULL, $2),
+		('usage-only-pg', 'host', 'project', 'codex', '', NULL, 2, 1,
+		 FALSE, '', '', '', NULL, NULL, $2)`,
+		reviewPrompt, db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx,
+		`UPDATE sessions SET session_kind = 'roborev', prompt_evidence_discarded = TRUE WHERE id = 'usage-only-pg'`)
+	require.NoError(t, err)
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES
+		('review-pg', 0, 'user', $1),
+		('review-pg', 1, 'assistant', 'Looks good.'),
+		('human-pg', 0, 'user', 'Explain this function.'),
+		('human-pg', 1, 'assistant', 'It adds two numbers.')`,
+		reviewPrompt,
+	)
+	require.NoError(t, err)
+
+	_, err = backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+
+	var (
+		automated           bool
+		outcome, confidence string
+		score               *int
+		grade               *string
+	)
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'review-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Equal(t, "unknown", outcome)
+	assert.Equal(t, "low", confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'human-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.False(t, automated)
+	assert.Equal(t, "completed", outcome)
+	assert.Equal(t, "medium", confidence)
+	require.NotNil(t, score)
+	assert.Equal(t, 100, *score)
+	require.NotNil(t, grade)
+	assert.Equal(t, "A", *grade)
+
+	require.NoError(t, ps.DB().QueryRowContext(ctx,
+		`SELECT is_automated, outcome, outcome_confidence, health_score, health_grade FROM sessions WHERE id = 'usage-only-pg'`,
+	).Scan(&automated, &outcome, &confidence, &score, &grade))
+	assert.True(t, automated)
+	assert.Empty(t, outcome)
+	assert.Empty(t, confidence)
+	assert.Nil(t, score)
+	assert.Nil(t, grade)
+
+	// Signal refresh must not clear automation_audit_hash.
+	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+	assert.Zero(t, progress.RowsPrefetched)
+}

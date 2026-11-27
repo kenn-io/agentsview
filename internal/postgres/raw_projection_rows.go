@@ -317,13 +317,16 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
-	prevAutomated := p.Session.IsAutomated
 	p.Session.IsAutomated = refreshRawSessionAutomation(
 		p.Session, p.Messages, s.options.Content.ArchiveContent.UsageOnly(),
 	)
 	p.Session.RelationshipType = db.SessionRelationship(p.Session)
-	if p.Session.IsAutomated != prevAutomated {
+	if !s.options.Content.ArchiveContent.UsageOnly() {
+		priorPending := p.Signals.SignalsPendingSince
 		p.Signals = ingest.RefreshSignalRecencyAt(p.Session, p.Messages, p.Signals, s.options.Now())
+		if priorPending != nil && p.Signals.SignalsPendingSince != nil {
+			p.Signals.SignalsPendingSince = priorPending
+		}
 	}
 	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
 		return err
@@ -380,6 +383,11 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	}
 	if err := bulkInsertSecretFindings(ctx, tx, id, p.Findings); err != nil {
 		return err
+	}
+	if !s.options.Content.ArchiveContent.UsageOnly() {
+		if _, err := publishRawRecency(ctx, tx, id, p.Signals); err != nil {
+			return err
+		}
 	}
 	return insertPGFrictionFindings(ctx, tx, id, p.Friction.Findings)
 }

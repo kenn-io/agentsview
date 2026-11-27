@@ -4662,6 +4662,9 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	); err != nil {
 		return err
 	}
+	if err := refreshAutomatedSignalsLocked(ctx, w, setIDs, clearIDs); err != nil {
+		return err
+	}
 	if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
 		return err
 	}
@@ -4824,6 +4827,183 @@ func batchUpdateAutomated(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+type automatedSignalRefresh struct {
+	id  string
+	res SessionSignalRefreshResult
+}
+
+func refreshAutomatedSignalsLocked(
+	ctx context.Context, w *writerHandle, setIDs, clearIDs []string,
+) error {
+	ids := make([]string, 0, len(setIDs)+len(clearIDs))
+	ids = append(ids, setIDs...)
+	ids = append(ids, clearIDs...)
+	if len(ids) == 0 {
+		return nil
+	}
+	const batchSize = 500
+	now := time.Now().UTC()
+	for i := 0; i < len(ids); i += batchSize {
+		batch := ids[i:min(i+batchSize, len(ids))]
+		updates, err := loadAutomatedSignalRefreshesLocked(ctx, w, batch, now)
+		if err != nil {
+			return err
+		}
+		for _, u := range updates {
+			if _, err := w.Exec(ctx,
+				`UPDATE sessions
+				 SET outcome = ?,
+				     outcome_confidence = ?,
+				     signals_pending_since = ?,
+				     health_score = ?,
+				     health_grade = ?,
+				     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+				 WHERE id = ?`,
+				u.res.Outcome, u.res.OutcomeConfidence,
+				u.res.SignalsPendingSince, u.res.HealthScore,
+				u.res.HealthGrade, u.id,
+			); err != nil {
+				return fmt.Errorf("refreshing signals for automated session %s: %w", u.id, err)
+			}
+		}
+	}
+	return nil
+}
+
+func loadAutomatedSignalRefreshesLocked(
+	ctx context.Context, w *writerHandle, batch []string, now time.Time,
+) ([]automatedSignalRefresh, error) {
+	args := make([]any, len(batch))
+	phs := make([]string, len(batch))
+	for j, id := range batch {
+		args[j] = id
+		phs[j] = "?"
+	}
+	rows, err := w.Query(ctx,
+		`SELECT s.id, s.is_automated, s.message_count, s.ended_at,
+		        s.ended_with_role, s.final_failure_streak,
+		        s.signals_pending_since, s.has_tool_calls,
+		        s.tool_failure_signal_count, s.tool_retry_count,
+		        s.edit_churn_count, s.consecutive_failure_max,
+		        s.has_context_data, s.compaction_count,
+		        s.mid_task_compaction_count, s.context_pressure_max,
+		        s.short_prompt_count, s.unstructured_start,
+		        s.missing_success_criteria_count,
+		        s.missing_verification_count, s.duplicate_prompt_count,
+		        s.no_code_context_count, s.runaway_tool_loop_count,
+		        s.outcome, s.outcome_confidence,
+		        s.health_score, s.health_grade,
+		        COALESCE((
+		            SELECT m.role FROM messages m
+		            WHERE m.session_id = s.id
+		              AND m.is_system = 0
+		              AND m.source_subtype <> 'tool_result'
+		            ORDER BY m.ordinal DESC
+		            LIMIT 1
+		        ), '') AS last_role,
+		        COALESCE((
+		            SELECT m.content FROM messages m
+		            WHERE m.session_id = s.id
+		              AND m.is_system = 0
+		              AND m.source_subtype <> 'tool_result'
+		            ORDER BY m.ordinal DESC
+		            LIMIT 1
+		        ), '') AS last_content
+		 FROM sessions s
+		 WHERE s.id IN (`+strings.Join(phs, ",")+`)
+		   AND NOT (
+		       s.outcome = '' AND s.outcome_confidence = ''
+		       AND s.health_score IS NULL AND s.health_grade IS NULL
+		       AND s.signals_pending_since IS NULL
+		   )
+		   AND (
+		       s.quality_signal_version > 0
+		       OR s.outcome <> 'unknown'
+		       OR s.outcome_confidence <> 'low'
+		       OR s.health_score IS NOT NULL
+		       OR s.health_grade IS NOT NULL
+		       OR s.signals_pending_since IS NOT NULL
+		   )`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading changed sessions for signal refresh: %w", err)
+	}
+	defer rows.Close()
+	var updates []automatedSignalRefresh
+	for rows.Next() {
+		var (
+			id, curOutcome, curConfidence string
+			lastRole, lastContent         string
+			isAutomated, hasToolCalls     int
+			hasContextData, unstructured  int
+			endedAt, pending              sql.NullString
+			pressureMax                   sql.NullFloat64
+			curScore                      sql.NullInt64
+			curGrade                      sql.NullString
+			in                            SessionSignalRefreshInput
+		)
+		if err := rows.Scan(
+			&id, &isAutomated, &in.MessageCount, &endedAt,
+			&in.EndedWithRole, &in.FinalFailureStreak,
+			&pending, &hasToolCalls,
+			&in.ToolFailureSignalCount, &in.ToolRetryCount,
+			&in.EditChurnCount, &in.ConsecutiveFailureMax,
+			&hasContextData, &in.CompactionCount,
+			&in.MidTaskCompactionCount, &pressureMax,
+			&in.ShortPromptCount, &unstructured,
+			&in.MissingSuccessCriteriaCount,
+			&in.MissingVerificationCount, &in.DuplicatePromptCount,
+			&in.NoCodeContextCount, &in.RunawayToolLoopCount,
+			&curOutcome, &curConfidence,
+			&curScore, &curGrade,
+			&lastRole, &lastContent,
+		); err != nil {
+			return nil, fmt.Errorf("scanning changed session for signal refresh: %w", err)
+		}
+		in.IsAutomated = isAutomated != 0
+		in.HasToolCalls = hasToolCalls != 0
+		in.HasContextData = hasContextData != 0
+		in.UnstructuredStart = unstructured != 0
+		if endedAt.Valid {
+			v := endedAt.String
+			in.EndedAt = &v
+		}
+		if pending.Valid {
+			v := pending.String
+			in.SignalsPendingSince = &v
+		}
+		if pressureMax.Valid {
+			v := pressureMax.Float64
+			in.ContextPressureMax = &v
+		}
+		if in.EndedWithRole == "" && lastRole != "" {
+			in.EndedWithRole = lastRole
+		}
+		if lastRole == "assistant" {
+			in.LastAssistantText = lastContent
+		}
+		var curScorePtr *int
+		if curScore.Valid {
+			v := int(curScore.Int64)
+			curScorePtr = &v
+		}
+		var curGradePtr *string
+		if curGrade.Valid {
+			v := curGrade.String
+			curGradePtr = &v
+		}
+		next := RecomputeSignalsForAutomationChange(in, now)
+		if !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScorePtr, curGradePtr) {
+			updates = append(updates, automatedSignalRefresh{id: id, res: next})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading changed sessions for signal refresh: %w", err)
+	}
+	return updates, nil
 }
 
 func (db *DB) shouldRunTokenCoverageRepairLocked(ctx context.Context,
