@@ -880,6 +880,9 @@ func codexLabeledHome(root, home string) (string, string) {
 		return "", ""
 	}
 	label := filepath.ToSlash(filepath.Dir(rel))
+	if label == "." {
+		label = ""
+	}
 	return label, filepath.Join(home, "sessions")
 }
 

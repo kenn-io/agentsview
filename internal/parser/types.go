@@ -1563,13 +1563,14 @@ type CodexMessageOrigin struct {
 
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
-	CodexFork  *CodexForkInfo `json:"-"`
-	ID         string
-	Project    string
-	Machine    string
-	Agent      AgentType
-	AgentLabel string
-	Entrypoint string
+	RecordedProject bool           `json:"-"`
+	CodexFork       *CodexForkInfo `json:"-"`
+	ID              string
+	Project         string
+	Machine         string
+	Agent           AgentType
+	AgentLabel      string
+	Entrypoint      string
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
 	// interactive sessions and for agents that do not emit one.

@@ -487,7 +487,27 @@ func (p *codexProvider) PlanRawCapture(
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
 	}
-	rel, err := filepath.Rel(captureRoot, src.Path)
+	metadataPath := codexRunMetadataPath(src.Path)
+	if metadataPath != "" {
+		info, err := os.Stat(metadataPath)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			metadataPath = ""
+		case err != nil:
+			return RawCapturePlan{}, invalidRawCapturePlan("stat Codex run metadata: %s", rawCaptureFilesystemError(err))
+		case !info.Mode().IsRegular():
+			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is not a regular file")
+		}
+	}
+	// Keep the marked home in replay paths without widening the physical root.
+	pathRoot := captureRoot
+	if home := codexRunHome(src.Path); home != "" && rawCapturePathWithin(home, captureRoot) {
+		pathRoot = filepath.Dir(home)
+		if metadataPath != "" {
+			captureRoot = pathRoot
+		}
+	}
+	rel, err := filepath.Rel(pathRoot, src.Path)
 	if err != nil {
 		return RawCapturePlan{}, invalidRawCapturePlan(
 			"resolve Codex source path: %s", rawCaptureFilesystemError(err),
@@ -499,6 +519,13 @@ func (p *codexProvider) PlanRawCapture(
 		Appendable: true,
 	}}
 	var sidecarRoots []string
+	if metadataPath != "" {
+		metadataRel, err := filepath.Rel(captureRoot, metadataPath)
+		if err != nil {
+			return RawCapturePlan{}, invalidRawCapturePlan("Codex run metadata is outside its capture root")
+		}
+		entries = append(entries, RawCaptureEntry{Path: filepath.ToSlash(metadataRel), LocalPath: metadataPath})
+	}
 	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
 		resolvedSource, err := filepath.EvalSymlinks(src.Path)
 		if err != nil {
@@ -536,7 +563,7 @@ func (p *codexProvider) PlanRawCapture(
 				// rollouts and let hosted discovery find every captured file.
 				parentRel := filepath.Join(fmt.Sprintf("replay-parent-%d", len(entries)), filepath.Base(parentPath))
 				if rawCapturePathWithin(captureRoot, parentPath) {
-					parentRel, err = filepath.Rel(captureRoot, parentPath)
+					parentRel, err = filepath.Rel(pathRoot, parentPath)
 					if err != nil {
 						return RawCapturePlan{}, invalidRawCapturePlan(
 							"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
@@ -562,11 +589,11 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
+			if (p.Config.StableSourceSnapshots || i == 0 && (pathRoot != captureRoot || metadataPath != "" || CodexSourceLabel(src.Root, src.Path) != "")) &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
-				rel, err := filepath.Rel(captureRoot, candidate)
+				rel, err := filepath.Rel(pathRoot, candidate)
 				if err != nil {
 					return RawCapturePlan{}, invalidRawCapturePlan(
 						"resolve Codex session index: %s", rawCaptureFilesystemError(err),
@@ -1674,10 +1701,15 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 
 const codexLabeledSourceClass = 2
 
+// CodexLabeledSource reports whether a source belongs to a labeled run home.
+func CodexLabeledSource(roots []string, path string) bool {
+	return codexRunHome(path) != "" || CodexSourceLabelForRoots(roots, path) != ""
+}
+
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
-	if !ok || CodexSourceLabel(src.Root, src.Path) == "" {
+	if !ok || !CodexLabeledSource([]string{src.Root}, src.Path) {
 		return ReconciliationSourceRank{}
 	}
 	path := src.Path

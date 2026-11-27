@@ -761,7 +761,7 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
+		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection, false,
 	); err != nil {
 		return err
 	}
@@ -865,7 +865,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	}
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-			ctx, tx, obs, snapshotProject, result.inserted, true,
+			ctx, tx, obs, snapshotProject, result.inserted, true, s.RecordedProject,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
@@ -891,7 +891,7 @@ func upsertProjectIdentityObservationTxContext(
 	obs export.ProjectIdentityObservation,
 ) error {
 	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, obs.Project, false, false,
+		ctx, tx, obs, obs.Project, false, false, false,
 	)
 }
 
@@ -902,14 +902,17 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	snapshotProject string,
 	sessionInserted bool,
 	allowSnapshotProjectCorrection bool,
+	recordedProject bool,
 ) error {
 	normalized, err := normalizeProjectIdentityObservation(obs)
 	if err != nil {
 		return err
 	}
-	normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
-	if err != nil {
-		return err
+	if !recordedProject {
+		normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
+		if err != nil {
+			return err
+		}
 	}
 	if err := upsertProjectIdentityObservationExec(
 		ctx, tx,

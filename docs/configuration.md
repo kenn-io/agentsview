@@ -780,9 +780,18 @@ SQLite layout uses one `agent/openclaw-agent.sqlite` file per agent, which
 AgentsView reads without writing to or migrating the database.
 
 **Codex.** A configured Codex sessions directory can contain Roborev logs at
-`<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. AgentsView uses
-the label path as the project unless a worktree mapping matches the working
-directory.
+`<label>/.codex-run-v1-*/sessions/YYYY/MM/DD/rollout-*.jsonl`. Roborev can
+record the run's label in `roborev.json` inside the run home. AgentsView uses
+that label as the project on a full parse. A later incremental sync, repository
+project repair, or archive rebuild can replace it until the next full parse.
+Clearing an explicit assignment on an attached archive can let repository
+attribution replace the recorded label until another full parse.
+In rare cases, another session without checkout data can inherit the recorded
+label.
+If the file is missing or its label is invalid, AgentsView uses the project
+derived from the configured folder or the session's working directory.
+If an existing file cannot be read, parsing fails and sync retries the session.
+A worktree mapping or an assigned project takes precedence.
 
 **Augure Code.** Augure Code reads Codex-format JSONL from
 `~/.augure/sessions/` and appears under the separate `augure-code` agent ID. To

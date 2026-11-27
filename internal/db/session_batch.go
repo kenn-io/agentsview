@@ -963,7 +963,7 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 			err = upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 				ctx, tx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
-				upsertResult.inserted, true,
+				upsertResult.inserted, true, write.Session.RecordedProject,
 			)
 		}
 		if err != nil {

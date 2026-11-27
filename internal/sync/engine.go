@@ -11108,7 +11108,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sourceProjectResolved {
+		if batch[i].sourceProjectResolved || batch[i].sess.RecordedProject {
 			continue
 		}
 		sess := batch[i].sess
@@ -13231,7 +13231,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	if exhaustive && def.Type == parser.AgentCodex && e.db.GetSessionFilePath(ctx, sessionID) != "" {
 		raw := strings.TrimPrefix(sessionID, def.IDPrefix)
 		if found := e.findProviderSourceFile(ctx, def, sessionID, raw, ""); found != "" &&
-			parser.CodexSourceLabelForRoots(e.sources().agentDirs[def.Type], found) != "" {
+			parser.CodexLabeledSource(e.sources().agentDirs[def.Type], found) {
 			path = found
 		}
 	}
