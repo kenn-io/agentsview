@@ -126,10 +126,22 @@ the folder that holds the login's chats under `<data dir>/sources/codex-cloud/`.
 Every computer that syncs the login uses the same key, so a consumer that keeps
 one snapshot per origin and UTC hour counts each chat once. A chat imported
 through [artifact folder sync](artifact-sync.md) keeps the account key that the
-fetching computer recorded. When an archive holds one chat more than once, such
-as its own copy and an imported copy, the account reports the copy that ends
-latest. A chat with no recorded key, and every Codex Cloud chat in schemas 5
-and 6, stays under the machine that synced it.
+fetching computer recorded. A chat with no recorded key, and every Codex Cloud
+chat in schemas 5 and 6, stays under the machine that synced it.
+
+An archive can hold one chat more than once, such as its own copy and a copy
+imported from another computer. The account part then reports one copy's
+activity and one copy's usage:
+
+- Activity comes from the copy that ends latest. When copies end at the same
+  time, the archive's own copy wins.
+- Usage comes from the copy with the most captured usage records. Only a
+  computer that watched the chat run captures its token usage, so this copy can
+  differ from the activity copy. Ties follow the activity rule.
+
+The other copies appear in no `machines` part. The hour's archive-wide totals
+still include every copy, so sum the `machines` parts to count each Codex Cloud
+chat once.
 
 A `codex-cloud-account:<key>` part is not a machine identity. Computers that
 sync the same login can hold different chats for an hour, for example when one

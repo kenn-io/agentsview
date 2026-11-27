@@ -93,13 +93,22 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 	return nil
 }
 
-// sessionOrigin returns the key a session's activity and usage are
-// reported under. A Codex cloud session fetched for an account reports
-// under that account, so every archive that syncs the account names the
-// same origin for it. It returns empty for a repeated copy of a chat,
-// which no origin reports.
+// sessionOrigin returns the key a session's activity is reported under. A
+// Codex cloud session fetched for an account reports under that account,
+// so every archive that syncs the account names the same origin for it. It
+// returns empty for a repeated copy of a chat, which no origin reports.
 func (s reportingDaySource) sessionOrigin(session activity.SessionMeta, schema int) string {
-	if s.codexCloudRepeats[session.SessionID] {
+	return s.origin(session, schema, s.codexCloudRepeats.activity)
+}
+
+// usageOrigin returns the key a session's usage is reported under, like
+// sessionOrigin. A repeated chat can report its usage from another copy.
+func (s reportingDaySource) usageOrigin(session activity.SessionMeta, schema int) string {
+	return s.origin(session, schema, s.codexCloudRepeats.usage)
+}
+
+func (s reportingDaySource) origin(session activity.SessionMeta, schema int, repeats map[string]bool) string {
+	if repeats[session.SessionID] {
 		return ""
 	}
 	if account := s.codexCloudAccounts[session.SessionID]; account != "" {

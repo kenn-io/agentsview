@@ -321,8 +321,10 @@ func reportingHoursFromSource(
 	localMachineID := source.machineID("local", schemaVersion)
 	machines := map[string]bool{localMachineID: true}
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
-		if origin := source.sessionOrigin(session, schemaVersion); origin != "" {
-			machines[origin] = true
+		for _, origin := range []string{source.sessionOrigin(session, schemaVersion), source.usageOrigin(session, schemaVersion)} {
+			if origin != "" {
+				machines[origin] = true
+			}
 		}
 	}
 	if len(source.standaloneUsage) > 0 {
@@ -477,7 +479,7 @@ func reportingHoursFromMachineSource(
 			return source.sessionOrigin(sessionByID[e.SessionID], schemaVersion) != machine
 		})
 		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
-			return source.sessionOrigin(sessionByID[u.SessionID], schemaVersion) != machine
+			return source.usageOrigin(sessionByID[u.SessionID], schemaVersion) != machine
 		})
 	}
 	var references map[string]export.ProjectReference

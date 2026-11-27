@@ -22,8 +22,10 @@ The latest release is
   computer for that login. Chats imported through artifact folder sync keep
   the key, so upgrade every computer that imports from the folder: computers
   that run an older version skip these chats until AgentsView on them is
-  upgraded. An archive that holds its own copy of a chat and an imported copy
-  counts it once. See [Reporting Export](/docs/reporting-export/).
+  upgraded. When an archive holds its own copy of a chat and an imported
+  copy, the account part counts the chat once and takes its token usage from
+  the copy that captured the most. The hour's archive-wide totals still count
+  both copies. See [Reporting Export](/docs/reporting-export/).
 
 - `agentsview source import --type gemini-apps` now imports real Google
   Takeout exports. It used to reject every export with `input does not contain

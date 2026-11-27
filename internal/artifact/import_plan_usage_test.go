@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestArtifactImportKeepsCodexCloudPlanUsage(t *testing.T) {
@@ -185,36 +186,37 @@ func TestArtifactImportReportsCodexCloudChatUnderAccount(t *testing.T) {
 	}
 }
 
-func TestArtifactImportCountsCodexCloudChatOnceWithLocalCopy(t *testing.T) {
-	const origin = "codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"
-	seed := func(archive *db.DB, end string) {
-		seedSession(t, archive, "task", "codex_cloud", func(s *db.Session) {
-			s.Agent = "codex-cloud"
-			s.FilePath = new("/data/sources/codex-cloud/0f1e2d3c4b5a69788796a5b4c3d2e1f0/task.jsonl.zstd")
-			s.StartedAt = new("2026-06-14T01:00:00Z")
-			s.EndedAt = new(end)
-		})
-		require.NoError(t, archive.ReplaceSessionMessages(t.Context(), "task", []db.Message{
-			{SessionID: "task", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2026-06-14T01:00:00Z"},
-			{SessionID: "task", Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5, Timestamp: end, Model: "gpt-5-codex"},
-		}))
+// seedCodexCloudCopy writes a computer's copy of one Codex Cloud chat that
+// ends at end and carries the given captured usage events.
+func seedCodexCloudCopy(t *testing.T, archive *db.DB, end string, usage ...db.UsageEvent) {
+	t.Helper()
+	seedSession(t, archive, "task", "codex_cloud", func(s *db.Session) {
+		s.Agent = "codex-cloud"
+		s.FilePath = new("/data/sources/codex-cloud/0f1e2d3c4b5a69788796a5b4c3d2e1f0/task.jsonl.zstd")
+		s.StartedAt = new("2026-06-14T01:00:00Z")
+		s.EndedAt = new(end)
+	})
+	require.NoError(t, archive.ReplaceSessionMessages(t.Context(), "task", []db.Message{
+		{SessionID: "task", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2026-06-14T01:00:00Z"},
+		{SessionID: "task", Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5, Timestamp: end, Model: "gpt-5-codex"},
+	}))
+	if len(usage) > 0 {
+		require.NoError(t, archive.ReplaceSessionUsageEvents(t.Context(), "task", usage))
 	}
-	source := testExportDB(t)
-	require.NoError(t, source.ConfigureArtifactLocalMachine(t.Context(), contractOrigin))
-	seed(source, "2026-06-14T01:03:00Z")
+}
+
+// exportCodexCloudCopies imports the source computer's copy into an archive
+// that already holds its own copy, and returns that archive's schema 7
+// by-machine report for 01:00 UTC.
+func exportCodexCloudCopies(t *testing.T, source, destination *db.DB) export.ReportingHour {
+	t.Helper()
 	store := newTestArtifactStore(t)
 	_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
 	require.NoError(t, err)
-
-	// The importing computer fetched the same chat before its last turn.
-	destination := testDB(t)
-	require.NoError(t, destination.ConfigureArtifactLocalMachine(t.Context(), importLocalOrigin))
-	seed(destination, "2026-06-14T01:02:00Z")
 	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
 	recordAllImportEntries(t, coordinator, store, contractOrigin)
 	_, err = coordinator.Finalize(t.Context())
 	require.NoError(t, err)
-
 	day, err := destination.ExportReportingDay(t.Context(), db.ReportingExportOptions{
 		Date:          time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC),
 		Now:           time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC),
@@ -222,10 +224,54 @@ func TestArtifactImportCountsCodexCloudChatOnceWithLocalCopy(t *testing.T) {
 		ByMachine:     true,
 	})
 	require.NoError(t, err)
-	hour := day.Hours[1]
+	return day.Hours[1]
+}
+
+func TestArtifactImportCountsCodexCloudChatOnceWithLocalCopy(t *testing.T) {
+	const origin = "codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	source := testExportDB(t)
+	require.NoError(t, source.ConfigureArtifactLocalMachine(t.Context(), contractOrigin))
+	seedCodexCloudCopy(t, source, "2026-06-14T01:03:00Z")
+	// The importing computer fetched the same chat before its last turn.
+	destination := testDB(t)
+	require.NoError(t, destination.ConfigureArtifactLocalMachine(t.Context(), importLocalOrigin))
+	seedCodexCloudCopy(t, destination, "2026-06-14T01:02:00Z")
+
+	hour := exportCodexCloudCopies(t, source, destination)
 	assert.InDelta(t, 3, hour.Machines[origin].Activity.Totals.AgentMinutes, 0.001)
 	assert.Zero(t, hour.Machines[importLocalOrigin].Activity.Totals.AgentMinutes)
 	assert.Zero(t, hour.Machines[contractOrigin].Activity.Totals.AgentMinutes)
+}
+
+func TestArtifactImportReportsCodexCloudUsageFromCapturingCopy(t *testing.T) {
+	const origin = "codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	first := db.UsageEvent{
+		SessionID: "task", Source: "codex-cloud", Model: "gpt-5-codex",
+		InputTokens: 100, OutputTokens: 20,
+		OccurredAt: "2026-06-14T01:01:00Z", DedupKey: "turn-1",
+	}
+	second := db.UsageEvent{
+		SessionID: "task", Source: "codex-cloud", Model: "gpt-5-codex",
+		InputTokens: 50, OutputTokens: 10,
+		OccurredAt: "2026-06-14T01:02:30Z", DedupKey: "turn-2",
+	}
+	// The source computer watched the whole chat. The importing computer
+	// watched only its first turn, and its copy ends at the same time, so its
+	// own copy supplies the activity.
+	source := testExportDB(t)
+	require.NoError(t, source.ConfigureArtifactLocalMachine(t.Context(), contractOrigin))
+	seedCodexCloudCopy(t, source, "2026-06-14T01:03:00Z", first, second)
+	destination := testDB(t)
+	require.NoError(t, destination.ConfigureArtifactLocalMachine(t.Context(), importLocalOrigin))
+	seedCodexCloudCopy(t, destination, "2026-06-14T01:03:00Z", first)
+
+	hour := exportCodexCloudCopies(t, source, destination)
+	account := hour.Machines[origin]
+	assert.InDelta(t, 3, account.Activity.Totals.AgentMinutes, 0.001)
+	assert.Equal(t, int64(150), account.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(30), account.Usage.Totals.OutputTokens)
+	assert.Zero(t, hour.Machines[importLocalOrigin].Usage.Totals.InputTokens)
+	assert.Zero(t, hour.Machines[contractOrigin].Usage.Totals.InputTokens)
 }
 
 func TestArtifactImportRejectsInvalidCodexCloudAccount(t *testing.T) {
