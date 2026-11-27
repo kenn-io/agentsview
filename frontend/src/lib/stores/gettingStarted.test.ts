@@ -39,6 +39,11 @@ describe("getting started", () => {
     expect(store.visible).toBe(false);
   });
 
+  it("hides the checklist when all items are complete", () => {
+    localStorage.setItem(key, '["session","search","usage","insights"]');
+    expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
+  });
+
   it("preserves another tab's progress and unknown members on write", () => {
     const stale = new GettingStartedStore(new ReadProgressStore());
     localStorage.setItem(key, '["session","future"]');

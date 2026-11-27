@@ -1050,7 +1050,16 @@ describe("getting started checklist", () => {
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")).not.toBeNull();
-    sessions.sessions = [sidebarIndexRowToSession({ id: "session-1", project: "demo", machine: "local", agent: "codex", started_at: null, ended_at: null, created_at: "2026-01-01T00:00:00Z", message_count: 1 })];
+    sessions.sessions = [sidebarIndexRowToSession({
+      id: "session-1",
+      project: "demo",
+      machine: "local",
+      agent: "codex",
+      started_at: null,
+      ended_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      message_count: 1,
+    })];
     await flushEffects();
     expect(document.querySelector(".getting-started")).toBeNull();
   });
