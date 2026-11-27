@@ -697,7 +697,7 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.excludedProjects).toBe("");
   });
 
-  it("hydrates token mode from the URL and renders the summary", async () => {
+  it("hydrates token mode from the URL", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {

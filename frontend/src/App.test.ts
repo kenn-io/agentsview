@@ -814,17 +814,19 @@ describe("App root Sessions landing", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     localStorage.clear();
     sessions.archiveEmpty = false;
-    sessions.sessions = ["one", "two"].map((id) => sidebarIndexRowToSession({
-      id,
-      project: "demo",
-      machine: "local",
-      agent: "codex",
-      first_message: `Session ${id}`,
-      started_at: null,
-      ended_at: null,
-      created_at: "2026-01-01T00:00:00Z",
-      message_count: 1,
-    }));
+    sessions.sessions = ["one", "two"].map((id) =>
+      sidebarIndexRowToSession({
+        id,
+        project: "demo",
+        machine: "local",
+        agent: "codex",
+        first_message: `Session ${id}`,
+        started_at: null,
+        ended_at: null,
+        created_at: "2026-01-01T00:00:00Z",
+        message_count: 1,
+      }),
+    );
     setRootUrl();
     component = mount(App, { target: document.body });
     await flushEffects();
