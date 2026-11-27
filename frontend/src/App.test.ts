@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
@@ -22,10 +22,10 @@ import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { DbMessage as Message } from "./lib/api/generated/index.js";
-import { messageIdentity } from "./lib/utils/message-identity.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import { SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
+import MessageLinkButton from "./lib/components/content/MessageLinkButton.svelte";
 vi.mock("./lib/feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
 }));
@@ -55,30 +55,48 @@ async function selectRelativeRange(days: number) {
   await flushEffects();
 }
 
-it.each([false, true])("opens an identified link when moved=%s", async (moved) => {
+it("opens a copied message link without changing hidden block preferences", async () => {
   stubAppDependencies();
   vi.spyOn(sessions, "load").mockResolvedValue();
   vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-  const original = { id: 1, session_id: "session-1", ordinal: 1, role: "assistant", content: "answer", content_length: 6, timestamp: "2026-01-01T00:00:00Z", has_thinking: false, thinking_text: "", has_tool_use: false, context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false, is_system: false, source_uuid: "source-1" } as Message;
-  messages.sessionId = "session-1";
-  messages.loading = false;
-  messages.messages = [moved ? { ...original, id: 9, ordinal: 2 } : original];
-  messages.historyComplete = true;
-  vi.spyOn(messages, "ensureOrdinalLoaded").mockResolvedValue();
-  const loadHistory = vi.spyOn(messages, "ensureHistoryLoaded").mockResolvedValue();
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  onTestFinished(() => {
+    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    ui.showAllBlocks();
+  });
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  const button = mount(MessageLinkButton, { target: document.body, props: { sessionId: "session-1", ordinal: 1 } });
+  await tick();
+  document.querySelector<HTMLButtonElement>('[aria-label="Copy link to message"]')!.click();
+  await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
+  const url = writeText.mock.calls[0]![0] as string;
+  expect(url).toBe(`${window.location.origin}/sessions/session-1?msg=1`);
+  await unmount(button);
+  const makeMessage = (ordinal: number, role: string): Message => ({
+    id: ordinal + 1, session_id: "session-1", ordinal, role, content: `msg ${ordinal}`, content_length: 5,
+    timestamp: "2026-01-01T00:00:00Z", has_thinking: false, thinking_text: "", has_tool_use: false,
+    model: "", context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false, is_system: false,
+  });
+  ui.setBlockVisible("assistant", false);
   sessions.activeSessionId = "session-1";
   router.route = "sessions";
   router.sessionId = "session-1";
   component = mount(App, { target: document.body });
   await flushEffects();
-  router.navigateToSession("session-1", { msg: "1", mid: messageIdentity(original) });
+  messages.loading = true;
+  window.history.replaceState(null, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
   await flushEffects();
+  sessions.activeSessionId = "session-1";
   messages.sessionId = "session-1";
-  messages.messages = [moved ? { ...original, id: 9, ordinal: 2 } : original];
-  messages.historyComplete = true;
-  await vi.waitFor(() => expect(ui.revealedLinkOrdinal).toBe(moved ? 2 : 1));
-  expect(loadHistory).toHaveBeenCalledTimes(moved ? 1 : 0);
-  expect(ui.selectedOrdinal).toBe(moved ? 2 : 1);
+  messages.messages = [makeMessage(0, "user"), makeMessage(1, "assistant"), makeMessage(2, "user")];
+  messages.loading = false;
+  await vi.waitFor(() => expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal, selected: ui.selectedOrdinal, ordinal: ui.pendingScrollOrdinal, session: sessions.activeSessionId, messages: messages.sessionId, loading: messages.loading }).toEqual({ revealed: 1, pending: false, selected: 1, ordinal: null, session: "session-1", messages: "session-1", loading: false }));
+  expect(ui.selectedOrdinal).toBe(1);
+  expect(ui.isBlockVisible("assistant")).toBe(false);
+  ui.showAllBlocks();
 });
 
 function stubAppDependencies() {

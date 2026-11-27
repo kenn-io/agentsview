@@ -686,6 +686,87 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it("opens a linked message hidden by a block filter without changing the filter", async () => {
+    ui.setBlockVisible("assistant", false);
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.pendingLinkReveal = true;
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("msg 1"));
+    expect(ui.isBlockVisible("assistant")).toBe(false);
+    ui.selectOrdinal(1);
+    await tick();
+    expect(document.body.textContent).toContain("msg 1");
+    ui.setBlockVisible("assistant", false);
+    await tick();
+    expect(document.body.textContent).not.toContain("msg 1");
+  });
+
+  it("keeps hidden blocks hidden when the linked message is already visible", async () => {
+    ui.setBlockVisible("thinking", false);
+    messages.messages = [{ ...makeMessage(1), content: "Visible.\n[Thinking]\nHidden plan\n[/Thinking]", has_thinking: true }];
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.pendingLinkReveal = true;
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("Visible.");
+    expect(document.querySelector(".thinking-header")).toBeNull();
+    expect(ui.revealedLinkOrdinal).toBeNull();
+  });
+
+  it("reveals a linked intermediate message while keeping focused mode", async () => {
+    ui.setTranscriptMode("focused");
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(3)];
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.pendingLinkReveal = true;
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("msg 1"));
+    expect(ui.transcriptMode).toBe("focused");
+    ui.setTranscriptMode("focused");
+    await tick();
+    expect(document.body.textContent).not.toContain("msg 1");
+  });
+
+  it("reveals an older linked message once history loads", async () => {
+    ui.setBlockVisible("assistant", false);
+    messages.messages = [makeMessage(10)];
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [makeMessage(1), makeMessage(10)];
+    });
+    setVirtualRows(2);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.pendingLinkReveal = true;
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("msg 1"));
+    expect(ui.isBlockVisible("assistant")).toBe(false);
+  });
+
+  it("cancels a linked reveal when the view changes while history loads", async () => {
+    const loaded = deferred<void>();
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      await loaded.promise;
+      messages.messages = [makeMessage(1), makeMessage(10)];
+    });
+    messages.messages = [makeMessage(10)];
+    setVirtualRows(2);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.pendingLinkReveal = true;
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
+    virtualizerMock.cancelScroll.mockClear();
+    ui.setBlockVisible("assistant", false);
+    loaded.resolve();
+    await vi.waitFor(() => expect(virtualizerMock.cancelScroll).toHaveBeenCalled());
+    expect(ui.revealedLinkOrdinal).toBeNull();
+    expect(document.body.textContent).not.toMatch(/msg 1\b/);
+  });
+
   it("honors a filter changed after opening a message", async () => {
     messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
     setVirtualRows(3);
@@ -734,7 +815,7 @@ describe("MessageList follow cancellation", () => {
   }
 
   type JumpList = ReturnType<typeof mount> & {
-    scrollToOrdinal: (ordinal: number, call?: ScrollCall) => void;
+    scrollToOrdinal: (ordinal: number, call?: ScrollCall, reveal?: boolean) => void;
   };
 
   it("cancels a queued jump before the first frame of a new session", async () => {

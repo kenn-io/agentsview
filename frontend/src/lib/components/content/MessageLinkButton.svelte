@@ -3,21 +3,17 @@
   import { getServerUrl } from "../../api/runtime.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import type { DbMessage } from "../../api/generated/index.js";
-  import { messageIdentity } from "../../utils/message-identity.js";
   import { m } from "../../i18n/index.js";
 
-  interface Props { message: DbMessage; }
-  let { message }: Props = $props();
+  interface Props { sessionId: string; ordinal: number; }
+  let { sessionId, ordinal }: Props = $props();
   let url = $derived.by(() => {
     const server = getServerUrl();
-    const { session_id: sessionId, ordinal } = message;
-    const identity = messageIdentity(message);
     return server
-      ? router.buildMessageHref(sessionId, ordinal, identity, server.replace(/\/+$/, ""))
+      ? router.buildMessageHref(sessionId, ordinal, server.replace(/\/+$/, ""))
       : sync.isDesktop
-        ? `agentsview://sessions/${encodeURIComponent(sessionId)}?msg=${ordinal}&mid=${identity}`
-        : window.location.origin + router.buildMessageHref(sessionId, ordinal, identity);
+        ? `agentsview://sessions/${encodeURIComponent(sessionId)}?msg=${ordinal}`
+        : window.location.origin + router.buildMessageHref(sessionId, ordinal);
   });
 </script>
 

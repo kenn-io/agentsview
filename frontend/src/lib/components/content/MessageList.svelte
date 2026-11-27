@@ -696,7 +696,7 @@
     return ++lastScrollRequest;
   }
 
-  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
+  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall, reveal = false) {
     const reqId = endScrollOwnership();
     const sessionId = messages.sessionId;
     const isCurrent = () => requestIsCurrent(reqId, sessionId);
@@ -733,6 +733,16 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
+    if (reveal) {
+      if (!ui.pendingLinkReveal) return endScrollOwnership(reqId);
+      ui.pendingLinkReveal = false;
+      if (displayIndexOf(ordinal) < 0 && messages.messages.some((message) => message.ordinal === ordinal)) {
+        ui.revealedLinkOrdinal = ordinal;
+        await tick();
+        if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+      }
+    }
+
     // A message inside a collapsed empty row has no card until the row opens.
     const emptyGroup = displayItemsAsc.find(
       (item) => item.kind === "empty-group" && item.ordinals.includes(ordinal),
@@ -754,8 +764,8 @@
     ordinalJump = { reqId, ordinal, sessionId, targetHolds, until: performance.now() + 5000, sawLoadingOlder: false };
   }
 
-  export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
-    void scrollToOrdinalInternal(ordinal, call);
+  export function scrollToOrdinal(ordinal: number, call?: ScrollCall, reveal = false) {
+    void scrollToOrdinalInternal(ordinal, call, reveal);
   }
 
   function scrollToLatestInternal() {

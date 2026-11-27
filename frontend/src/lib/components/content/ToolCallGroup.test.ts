@@ -160,7 +160,7 @@ describe("ToolCallGroup", () => {
     await Promise.resolve();
     await tick();
 
-    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/sessions\/s1\?msg=2&mid=/));
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/s1?msg=2`);
     await vi.waitFor(() => expect(document.querySelector('[data-message-ordinal="2"] [aria-label="Copied!"]')).not.toBeNull());
     expect(document.querySelector('[data-message-ordinal="1"] [aria-label="Copy link to message"]')).not.toBeNull();
     unmount(component);

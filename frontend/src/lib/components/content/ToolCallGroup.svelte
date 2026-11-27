@@ -137,7 +137,7 @@
             {/each}
           {/if}
         </div>
-        <MessageLinkButton {message} />
+        <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
       </div>
     {/each}
   </div>

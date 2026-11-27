@@ -724,18 +724,7 @@ fn deep_link_session_route(url: &Url) -> Option<String> {
     }
     let route = format!("/sessions/{id}");
     Some(match deep_link_msg_param(url) {
-        Some(msg) => {
-            let identity = url.query_pairs().find(|(key, _)| key == "mid");
-            match identity {
-                Some((_, value))
-                    if value.bytes().all(|b| b.is_ascii_hexdigit() || b == b'.') =>
-                {
-                    format!("{route}?msg={msg}&mid={value}")
-                }
-                Some(_) => route,
-                None => format!("{route}?msg={msg}"),
-            }
-        }
+        Some(msg) => format!("{route}?msg={msg}"),
         None => route,
     })
 }
@@ -7135,8 +7124,6 @@ agentsview running at http://127.0.0.1:18082
                 "/sessions/cursor:0198c6a1-b125-7c60-8d3f-2f9e4a7b1c2d",
             ),
             ("agentsview://sessions/abc?msg=42", "/sessions/abc?msg=42"),
-            ("agentsview://sessions/abc?msg=42&mid=abcd.1234.8", "/sessions/abc?msg=42&mid=abcd.1234.8"),
-            ("agentsview://sessions/abc?msg=42&mid=bad%2Fvalue", "/sessions/abc"),
             (
                 "agentsview://sessions/abc?msg=last",
                 "/sessions/abc?msg=last",

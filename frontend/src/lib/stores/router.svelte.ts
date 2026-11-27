@@ -186,8 +186,8 @@ export class RouterStore {
     return this.#buildUrl(sessionPath(id), this.#sessionEntryParams(params));
   }
 
-  buildMessageHref(id: string, ordinal: number, identity: string, base = getBasePath()): string {
-    return this.#buildUrl(sessionPath(id), { msg: String(ordinal), mid: identity }, base, false);
+  buildMessageHref(id: string, ordinal: number, base = getBasePath()): string {
+    return this.#buildUrl(sessionPath(id), { msg: String(ordinal) }, base, false);
   }
 
   navigate(route: Route, params: Record<string, string> = {}): boolean {

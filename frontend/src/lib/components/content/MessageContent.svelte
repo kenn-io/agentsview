@@ -241,7 +241,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
-    <MessageLinkButton {message} />
+    <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>

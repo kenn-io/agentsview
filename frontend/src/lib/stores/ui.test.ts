@@ -45,19 +45,19 @@ describe("UIStore", () => {
       ui.revealedLinkOrdinal = 1;
       ui.selectOrdinal(1);
       expect(ui.revealedLinkOrdinal).toBe(1);
-      ui.pendingLinkIdentity = "identity";
+      ui.pendingLinkReveal = true;
       ui.pendingScrollOrdinal = 1;
       ui.pendingScrollSession = "session";
       ui.selectOrdinal(2);
-      expect(ui.pendingLinkIdentity).toBeNull();
+      expect(ui.pendingLinkReveal).toBe(false);
       expect(ui.pendingScrollOrdinal).toBeNull();
       for (const change of [() => ui.setBlockVisible("assistant", false), () => ui.toggleBlock("thinking"), () => ui.showAllBlocks(), () => ui.setTranscriptMode("focused"), () => ui.selectOrdinal(2)]) {
         ui.revealedLinkOrdinal = 1;
-        ui.pendingLinkIdentity = "identity";
+        ui.pendingLinkReveal = true;
         ui.pendingScrollOrdinal = 1;
         change();
         expect(ui.revealedLinkOrdinal).toBeNull();
-        expect(ui.pendingLinkIdentity).toBeNull();
+        expect(ui.pendingLinkReveal).toBe(false);
       }
     });
     it("should set both selected and pending via scrollToOrdinal", () => {

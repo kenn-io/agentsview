@@ -339,7 +339,7 @@ class UIStore {
   /** The tool call a pending jump expects at its message; null when any message at the ordinal will do. */
   pendingScrollCall: ScrollCall | null = $state(null);
   revealedLinkOrdinal: number | null = $state(null);
-  pendingLinkIdentity: string | null = $state(null);
+  pendingLinkReveal = $state(false);
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
@@ -551,8 +551,8 @@ class UIStore {
 
   private clearLinkedReveal() {
     this.revealedLinkOrdinal = null;
-    if (this.pendingLinkIdentity !== null) {
-      this.pendingLinkIdentity = null;
+    if (this.pendingLinkReveal) {
+      this.pendingLinkReveal = false;
       this.pendingScrollOrdinal = null;
       this.pendingScrollSession = null;
     }
@@ -652,8 +652,8 @@ class UIStore {
 
   selectOrdinal(ordinal: number) {
     if (this.revealedLinkOrdinal !== ordinal) this.revealedLinkOrdinal = null;
-    if (this.pendingLinkIdentity !== null) {
-      this.pendingLinkIdentity = null;
+    if (this.pendingLinkReveal) {
+      this.pendingLinkReveal = false;
       this.pendingScrollOrdinal = null;
       this.pendingScrollSession = null;
     }
@@ -667,7 +667,7 @@ class UIStore {
 
   clearScrollState() {
     this.revealedLinkOrdinal = null;
-    this.pendingLinkIdentity = null;
+    this.pendingLinkReveal = false;
     this.selectedOrdinal = null;
     this.pendingScrollOrdinal = null;
     this.pendingScrollSession = null;
@@ -675,7 +675,7 @@ class UIStore {
   }
 
   scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
-    this.pendingLinkIdentity = null;
+    this.pendingLinkReveal = false;
     this.revealedLinkOrdinal = null;
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
@@ -687,6 +687,7 @@ class UIStore {
   setFollowLatest(enabled: boolean) {
     this.followLatest = enabled;
     if (enabled) {
+      this.clearLinkedReveal();
       this.followLatestRequest += 1;
       this.selectedOrdinal = null;
       this.pendingScrollOrdinal = null;
