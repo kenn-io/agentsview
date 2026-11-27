@@ -5,6 +5,7 @@ import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import MessageContent from "./MessageContent.svelte";
 
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
@@ -152,10 +153,24 @@ beforeEach(() => {
 });
 
 it("copies a link to the message and confirms the copy", async () => {
-  await render(message({ session_id: "session-1", ordinal: 7 }));
+  router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
+  try {
+    await render(message({ session_id: "session-1", ordinal: 7 }));
+    await click('[aria-label="Copy link to message"]');
+    expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+    expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
+  } finally {
+    window.history.replaceState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+});
+
+it("does not confirm a failed message link copy", async () => {
+  copyMock.mockResolvedValueOnce(false);
+  await render(message({ ordinal: 7 }));
   await click('[aria-label="Copy link to message"]');
-  expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
-  expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="Copy link to message"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="Copied!"]')).toBeNull();
 });
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);

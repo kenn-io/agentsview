@@ -187,7 +187,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
   }
   async function handleCopyLink() {
-    const href = router.buildSessionHref(message.session_id, { msg: String(message.ordinal) });
+    const href = router.buildMessageHref(message.session_id, message.ordinal);
     if (!await copyToClipboard(window.location.origin + href)) return;
     clearTimeout(linkCopyTimer);
     linkCopied = true;
