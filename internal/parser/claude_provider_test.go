@@ -893,6 +893,38 @@ func TestClaudeToolResultChangeSelectsSourcesByConsumer(t *testing.T) {
 	assert.Equal(t, []string{owner}, keys(synced))
 }
 
+func TestClaudePlanRawCaptureCarriesRecordedForkParent(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	origPath := filepath.Join(projectDir, "orig-1111.jsonl")
+	forkPath := filepath.Join(projectDir, "fork-2222.jsonl")
+	require.NoError(t, os.WriteFile(origPath, []byte(compactedOriginalContent()), 0o644))
+	fork := compactedForkContent(lineageDerivedFromLine("fork-2222", "fork:orig-1111"))
+	require.NoError(t, os.WriteFile(forkPath, []byte(fork), 0o644))
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var forkSource SourceRef
+	for _, source := range sources {
+		if strings.HasSuffix(source.Key, "fork-2222.jsonl") {
+			forkSource = source
+		}
+	}
+	require.NotEmpty(t, forkSource.Key)
+
+	// The fork's root is not the original's, so only the recorded link
+	// names the transcript the parser trims against.
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, forkSource)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, plan.Entries, 2)
+	assert.Equal(t, "demo-project/orig-1111.jsonl", plan.Entries[1].Path)
+	assert.True(t, plan.Entries[1].Appendable)
+}
+
 func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo-project")

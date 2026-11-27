@@ -1,5 +1,6 @@
 // ABOUTME: Resolves Claude background-fork lineage against sibling transcripts.
 // ABOUTME: Plans the replayed-prefix trim for background-forked session files (#1370).
+// ABOUTME: A recorded derived-from fork link names the parent directly (#3440).
 package parser
 
 import (
@@ -41,6 +42,12 @@ import (
 // siblings, several branches at the replay boundary) fails open: no
 // trim and no relationship is emitted, leaving the status-quo
 // duplicate rather than risking a wrongly-oriented trim.
+//
+// Newer Claude Code versions record the link themselves: a
+// derived-from record ahead of the replayed chain names the original
+// session with via:"fork". That record replaces the sibling election:
+// the named session is the parent, and the trim runs against that one
+// transcript.
 
 const (
 	// claudeLineageSniffMaxLines bounds how many leading lines are
@@ -66,6 +73,9 @@ type claudeHeadSniff struct {
 	rootUUID string
 	rootIsBG bool
 	ok       bool
+	// forkParentID is the session a derived-from record ahead of the
+	// first chain entry names with via:"fork", independent of ok.
+	forkParentID string
 }
 
 type claudeSniffCacheEntry struct {
@@ -216,6 +226,7 @@ func claudeSniffHeadUncached(
 func claudeSniffHeadLines(
 	ctx context.Context, lr *lineReader,
 ) (claudeHeadSniff, int64, error) {
+	var forkParentID string
 	for range claudeLineageSniffMaxLines {
 		if err := ctx.Err(); err != nil {
 			return claudeHeadSniff{}, lr.bytesRead, err
@@ -227,31 +238,65 @@ func claudeSniffHeadLines(
 					return claudeHeadSniff{}, lr.bytesRead, err
 				}
 			}
-			return claudeHeadSniff{}, lr.bytesRead, nil
+			return claudeHeadSniff{forkParentID: forkParentID}, lr.bytesRead, nil
 		}
 		if !gjson.ValidBytes(lineBytes) {
 			continue
 		}
 		uuid := gjson.GetBytes(lineBytes, "uuid").Str
 		if uuid == "" {
+			if gjson.GetBytes(lineBytes, "type").Str == "derived-from" {
+				if id := claudeDerivedFromForkParent(lineBytes); id != "" {
+					forkParentID = id
+				}
+			}
 			continue
 		}
 		// The first chain entry of a well-formed transcript (or of a
 		// replayed copy, which starts at the conversation root) has no
 		// parentUuid. Any other head shape is unexpected: fail open.
 		if gjson.GetBytes(lineBytes, "parentUuid").Str != "" {
-			return claudeHeadSniff{}, lr.bytesRead, nil
+			return claudeHeadSniff{forkParentID: forkParentID}, lr.bytesRead, nil
 		}
 		return claudeHeadSniff{
-			rootUUID: uuid,
-			rootIsBG: gjson.GetBytes(lineBytes, "sessionKind").Str == "bg",
-			ok:       true,
+			rootUUID:     uuid,
+			rootIsBG:     gjson.GetBytes(lineBytes, "sessionKind").Str == "bg",
+			ok:           true,
+			forkParentID: forkParentID,
 		}, lr.bytesRead, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return claudeHeadSniff{}, lr.bytesRead, err
 	}
-	return claudeHeadSniff{}, lr.bytesRead, nil
+	return claudeHeadSniff{forkParentID: forkParentID}, lr.bytesRead, nil
+}
+
+// claudeDerivedFromForkParent returns the session a derived-from
+// record names as forked from. The record lists inherited links before
+// its own, so the last via:"fork" entry is the nearest ancestor. Other
+// via values (compact, resume, clear, subprocess) are not fork parents.
+func claudeDerivedFromForkParent(line []byte) string {
+	self := gjson.GetBytes(line, "sessionId").Str
+	var parent string
+	gjson.GetBytes(line, "sessions").ForEach(func(_, s gjson.Result) bool {
+		if s.Get("via").Str == "fork" {
+			if id := s.Get("id").Str; id != "" && id != self && IsValidSessionID(id) {
+				parent = strings.Clone(id)
+			}
+		}
+		return true
+	})
+	return parent
+}
+
+// claudeRecordedForkParentPath returns the transcript path of the fork
+// parent the head of path records, or "" when it records none.
+func claudeRecordedForkParentPath(path string, self claudeHeadSniff) string {
+	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if self.forkParentID == "" || self.forkParentID == stem {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(path), self.forkParentID+".jsonl")
 }
 
 // claudeForkLine is one uuid-bearing line of a fork transcript.
@@ -315,6 +360,12 @@ func claudeLineageCaptureSiblings(ctx context.Context, path string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
+	if parentPath := claudeRecordedForkParentPath(path, self); parentPath != "" {
+		if info, err := os.Stat(parentPath); err == nil && info.Mode().IsRegular() {
+			return []string{parentPath}, nil
+		}
+		return nil, nil
+	}
 	if !self.ok || !self.rootIsBG {
 		return nil, nil
 	}
@@ -361,6 +412,9 @@ func claudeResolveSiblingLineage(
 	self, err := claudeSniffHead(ctx, path)
 	if err != nil {
 		return nil, err
+	}
+	if parentPath := claudeRecordedForkParentPath(path, self); parentPath != "" {
+		return claudeResolveRecordedForkLineage(ctx, path, self.forkParentID, parentPath)
 	}
 	if !self.ok || !self.rootIsBG {
 		return nil, nil
@@ -481,27 +535,8 @@ func claudeResolveSiblingLineage(
 	if bestRun == 0 || bestTied {
 		return nil, nil
 	}
-	dropUUIDs := make(map[string]struct{}, bestRun)
-	for _, line := range forkSeq[:bestRun] {
-		if _, ok := bestSet[line.uuid]; ok {
-			dropUUIDs[line.uuid] = struct{}{}
-		}
-	}
-	// More than one retained chain entry hanging off the dropped
-	// region means the replay boundary carries retry or fork
-	// branches. Re-rooting them all would collapse the DAG into a
-	// linear merge, so the trim fails open and the intact DAG keeps
-	// its branch semantics.
-	danglingChildren := 0
-	for _, line := range forkSeq[bestRun:] {
-		if !line.chainEntry {
-			continue
-		}
-		if _, dropped := dropUUIDs[line.parentUUID]; dropped {
-			danglingChildren++
-		}
-	}
-	if danglingChildren > 1 {
+	dropUUIDs, ok := claudeReplayTrim(forkSeq, bestRun)
+	if !ok {
 		return nil, nil
 	}
 	return &claudeLineagePlan{
@@ -509,4 +544,69 @@ func claudeResolveSiblingLineage(
 		dropCount:       bestRun,
 		dropUUIDs:       dropUUIDs,
 	}, nil
+}
+
+// claudeResolveRecordedForkLineage links path to the parent its
+// derived-from record names, and trims the leading entries whose uuids
+// that parent's transcript also holds. The link stands even when the
+// parent transcript is absent or the trim fails open: the record, not
+// content overlap, establishes it.
+func claudeResolveRecordedForkLineage(
+	ctx context.Context, path, parentID, parentPath string,
+) (*claudeLineagePlan, error) {
+	plan := &claudeLineagePlan{parentSessionID: parentID}
+	parentUUIDs := make(map[string]struct{})
+	complete, err := claudeScanUUIDs(ctx, parentPath, func(line claudeForkLine) {
+		parentUUIDs[line.uuid] = struct{}{}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !complete || len(parentUUIDs) == 0 {
+		return plan, nil
+	}
+	run := 0
+	var forkSeq []claudeForkLine
+	complete, err = claudeScanUUIDs(ctx, path, func(line claudeForkLine) {
+		if _, ok := parentUUIDs[line.uuid]; ok && run == len(forkSeq) {
+			run++
+		}
+		forkSeq = append(forkSeq, line)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !complete || run == 0 {
+		return plan, nil
+	}
+	if dropUUIDs, ok := claudeReplayTrim(forkSeq, run); ok {
+		plan.dropCount = run
+		plan.dropUUIDs = dropUUIDs
+	}
+	return plan, nil
+}
+
+// claudeReplayTrim returns the uuids of the leading run lines of
+// forkSeq, the replayed prefix. ok is false when more than one
+// retained chain entry hangs off the dropped region: the replay
+// boundary then carries retry or fork branches, and re-rooting them
+// all would collapse the DAG into a linear merge, so the trim fails
+// open and the intact DAG keeps its branch semantics.
+func claudeReplayTrim(
+	forkSeq []claudeForkLine, run int,
+) (map[string]struct{}, bool) {
+	dropUUIDs := make(map[string]struct{}, run)
+	for _, line := range forkSeq[:run] {
+		dropUUIDs[line.uuid] = struct{}{}
+	}
+	danglingChildren := 0
+	for _, line := range forkSeq[run:] {
+		if !line.chainEntry {
+			continue
+		}
+		if _, dropped := dropUUIDs[line.parentUUID]; dropped {
+			danglingChildren++
+		}
+	}
+	return dropUUIDs, danglingChildren <= 1
 }
