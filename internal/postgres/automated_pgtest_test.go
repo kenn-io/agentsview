@@ -553,18 +553,18 @@ func TestAutomationAuditPGKeepsWaitingLauncherLinkAutomated(t *testing.T) {
 	assert.Empty(t, relationship, "SQLite counts a run with a waiting launcher link as Automated")
 }
 
-// reconcileClearTracer runs after when the audit's statement that clears
-// automated parentless workers finishes.
-type reconcileClearTracer struct{ after func() }
+// auditReadTracer runs after the audit's candidate evidence SELECT finishes,
+// before applyVerdictBatchPG starts its write transaction.
+type auditReadTracer struct{ after func() }
 
-func (tracer *reconcileClearTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "SET relationship_type = ''") {
+func (tracer *auditReadTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "convert_to(first_user.content, 'UTF8')") {
 		return context.WithValue(ctx, tracer, true)
 	}
 	return ctx
 }
 
-func (tracer *reconcileClearTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+func (tracer *auditReadTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
 	if ctx.Value(tracer) == true && tracer.after != nil {
 		after := tracer.after
 		tracer.after = nil
@@ -586,25 +586,20 @@ func TestAutomationAuditPGLeavesConcurrentPushUnstamped(t *testing.T) {
 	cfg, err := pgx.ParseConfig(url)
 	require.NoError(t, err)
 	cfg.RuntimeParams["search_path"] = "agentsview"
-	// A push lands concurrently while the audit's transaction clears the worker,
-	// replacing the prompt the audit classified.
-	pushDone := make(chan error, 1)
-	tracer := &reconcileClearTracer{after: func() {
-		started := make(chan struct{})
-		go func() {
-			close(started)
-			_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
-				SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
-			pushDone <- err
-		}()
-		<-started
+	// A push lands after the audit reads the candidate's evidence and before
+	// applyVerdictBatchPG writes verdicts, replacing the prompt the audit
+	// classified. writeAutomationVerdictsPG must skip the moved row version so
+	// the pushed row stays unstamped for the next audit.
+	tracer := &auditReadTracer{after: func() {
+		_, err := ps.DB().ExecContext(t.Context(), `UPDATE sessions
+			SET first_message = 'Explain this function.', updated_at = NOW() WHERE id = 'race'`)
+		require.NoError(t, err)
 	}}
 	cfg.Tracer = tracer
 	audit := stdlib.OpenDB(*cfg)
 	defer audit.Close()
 	require.NoError(t, backfillIsAutomatedPG(t.Context(), audit))
-	require.Nil(t, tracer.after, "the audit cleared the worker")
-	require.NoError(t, <-pushDone)
+	require.Nil(t, tracer.after, "the audit read the candidate")
 
 	var hash *string
 	require.NoError(t, ps.DB().QueryRowContext(t.Context(),

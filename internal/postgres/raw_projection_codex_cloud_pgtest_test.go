@@ -117,45 +117,95 @@ func TestRawProjectionCodexCloudPreserveUsesCurrentAutomationAfterAudit(t *testi
 
 	m1, accepted := f.accept(t, "device-a", "codex-cloud-review", "", parser.AgentCodexCloud)
 	require.NoError(t, f.sink.Project(ctx, f.lease(t, m1), m1, initial))
-	before, err := f.sink.Resolve(ctx, "codex-cloud:thread-a")
+
+	// Replace the projected row with a consistent pre-upgrade capture whose
+	// content-derived ID and revision match IsAutomated=false, completed/medium
+	// outcome, and 100/A health score.
+	var groupID, currentID string
+	var currentPayload []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT r.group_id, r.session_id, r.payload
+		 FROM raw_session_branches b
+		 JOIN raw_content_revisions r ON r.session_id = b.captured_session_id
+		 WHERE b.member_id = 'codex-cloud:thread-a'`,
+	).Scan(&groupID, &currentID, &currentPayload))
+
+	preUpgrade, err := decodeRawPayload(currentPayload)
+	require.NoError(t, err)
+	preUpgrade.Session.IsAutomated = false
+	preUpgrade.Signals = ingest.RefreshSignalRecencyAt(
+		preUpgrade.Session, preUpgrade.Messages, preUpgrade.Signals,
+		time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC),
+	)
+	require.Equal(t, "completed", preUpgrade.Signals.Outcome)
+	require.Equal(t, "medium", preUpgrade.Signals.OutcomeConfidence)
+
+	preUpgradeBytes, err := encodeRawPayload(preUpgrade)
+	require.NoError(t, err)
+	legacyRev, err := rawContentRevision(preUpgrade)
+	require.NoError(t, err)
+	legacyID := "raw-row-" + rawDigest("row-v1", groupID, legacyRev)
+	require.NotEqual(t, currentID, legacyID)
+
+	priorMetaBytes, err := encodeRawPayload(ingest.PreparedSession{Session: preUpgrade.Session})
 	require.NoError(t, err)
 
-	// Simulate pre-upgrade state where this two-message Codex Cloud review was
-	// stored as non-automated with completed/medium outcome and a scored health
-	// grade, including an obsolete IsAutomated=false in both the retained
-	// payload and the branch's prior_payload.
-	_, err = f.runtime.ExecContext(ctx,
+	tx, err := f.runtime.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO raw_content_revisions(session_id, group_id, content_revision, payload, recency_state)
+		 VALUES ($1, $2, $3, $4, '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb)`,
+		legacyID, groupID, legacyRev, preUpgradeBytes,
+	)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx,
+		`UPDATE raw_session_branches
+		 SET session_id = $1, captured_session_id = $1, content_revision = $2, prior_payload = $3
+		 WHERE member_id = 'codex-cloud:thread-a'`,
+		legacyID, legacyRev, priorMetaBytes,
+	)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx,
+		`UPDATE session_sources
+		 SET session_id = $1, physical_session_id = NULL, content_revision = $2
+		 WHERE physical_session_id = $3`,
+		legacyID, legacyRev, currentID,
+	)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE raw_message_dialogue SET session_id = $1 WHERE session_id = $2`, legacyID, currentID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, currentID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM raw_embedding_outbox WHERE session_id = $1`, currentID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM raw_content_revisions WHERE session_id = $1`, currentID)
+	require.NoError(t, err)
+	require.NoError(t, f.sink.writePayload(ctx, tx, legacyID, groupID, legacyRev, preUpgrade))
+	_, err = tx.ExecContext(ctx,
 		`UPDATE sessions
 		 SET is_automated = FALSE,
 		     outcome = 'completed',
 		     outcome_confidence = 'medium',
 		     health_score = 100,
 		     health_grade = 'A'
-		 WHERE id = $1`, before.SessionID,
+		 WHERE id = $1`, legacyID,
 	)
 	require.NoError(t, err)
-	var rawBytes []byte
-	require.NoError(t, f.runtime.QueryRowContext(ctx,
-		`SELECT payload FROM raw_content_revisions WHERE session_id = $1`, before.SessionID,
-	).Scan(&rawBytes))
-	preUpgrade, err := decodeRawPayload(rawBytes)
-	require.NoError(t, err)
-	preUpgrade.Session.IsAutomated = false
-	preUpgradeBytes, err := encodeRawPayload(preUpgrade)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`UPDATE raw_content_revisions
-		 SET payload = $2,
-		     recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
-		 WHERE session_id = $1`, before.SessionID, preUpgradeBytes,
+		 SET recency_state = '{"Outcome":"completed","OutcomeConfidence":"medium","HealthScore":100,"HealthGrade":"A"}'::jsonb
+		 WHERE session_id = $1`, legacyID,
 	)
 	require.NoError(t, err)
-	priorMetaBytes, err := encodeRawPayload(ingest.PreparedSession{Session: preUpgrade.Session})
+	_, err = tx.ExecContext(ctx, `UPDATE session_sources SET physical_session_id = $1 WHERE session_id = $1`, legacyID)
 	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(ctx,
-		`UPDATE raw_session_branches SET prior_payload = $2 WHERE session_id = $1`, before.SessionID, priorMetaBytes,
-	)
+	require.NoError(t, tx.Commit())
+
+	before, err := f.sink.Resolve(ctx, "codex-cloud:thread-a")
 	require.NoError(t, err)
+	require.Equal(t, legacyID, before.SessionID)
+
 	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
 	require.NoError(t, err)
 

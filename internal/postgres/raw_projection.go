@@ -207,7 +207,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		var prepared ingest.PreparedSession
 		var signalSession db.Session
-		var hasSignalSession bool
 		if decision.Action == ingest.HistoryPreserve {
 			if err := loadOld(ctx); err != nil {
 				return err
@@ -233,7 +232,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			} else {
 				return err
 			}
-			hasSignalSession = true
 		} else {
 			prepared, err = ingest.Finalize(ctx, decision.Candidate, s.options.Content)
 			if err != nil {
@@ -248,8 +246,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 					prepared.Signals.ToolObservations = []db.ToolObservation{}
 				}
 			}
-		}
-		if !hasSignalSession {
 			signalSession = prepared.Session
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(signalSession, prepared.Messages, prepared.Signals, s.options.Now())

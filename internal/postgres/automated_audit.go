@@ -489,20 +489,19 @@ func parentlessWorkerStepsPG(hosted bool) []parentlessWorkerStepPG {
 	}
 }
 
-// reconcileParentlessWorkersChunkPG reconciles parentless-worker relationships
-// for one audited chunk inside the same transaction that wrote the chunk's
-// automation verdicts, refreshed signals, and audit hash stamp.
-func reconcileParentlessWorkersChunkPG(
-	ctx context.Context, exec storeExecutor, chunk []string, hash, column string, hosted bool,
+func reconcileStampedPG(
+	ctx context.Context, exec storeExecutor, hosted bool, column, hash string,
+	include func(parentlessWorkerStepPG) bool, extra string, args ...any,
 ) (bool, error) {
-	if len(chunk) == 0 {
-		return false, nil
-	}
 	var verdicts []automationVerdictPG
 	returning := ` RETURNING id, ` + column + `::text, is_automated`
+	queryArgs := append([]any{hash}, args...)
 	for _, step := range parentlessWorkerStepsPG(hosted) {
+		if !include(step) {
+			continue
+		}
 		changed, err := queryAutomationVerdictsPG(
-			ctx, exec, step.query+` AND automation_audit_hash = $1 AND id = ANY($2)`+returning, hash, chunk,
+			ctx, exec, step.query+` AND automation_audit_hash = $1`+extra+returning, queryArgs...,
 		)
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", step.action, err)
@@ -513,6 +512,22 @@ func reconcileParentlessWorkersChunkPG(
 		return false, err
 	}
 	return len(verdicts) > 0, nil
+}
+
+// reconcileParentlessWorkersChunkPG reconciles parentless-worker relationships
+// for one audited chunk inside the same transaction that wrote the chunk's
+// automation verdicts, refreshed signals, and audit hash stamp.
+func reconcileParentlessWorkersChunkPG(
+	ctx context.Context, exec storeExecutor, chunk []string, hash, column string, hosted bool,
+) (bool, error) {
+	if len(chunk) == 0 {
+		return false, nil
+	}
+	return reconcileStampedPG(
+		ctx, exec, hosted, column, hash,
+		func(parentlessWorkerStepPG) bool { return true },
+		` AND id = ANY($2)`, chunk,
+	)
 }
 
 // reconcileParentlessWorkersPG applies remaining relationship changes after
@@ -537,25 +552,13 @@ func reconcileParentlessWorkersPG(
 	}
 	var reconciled bool
 	err := withOptionalTxPG(ctx, pg, func(exec storeExecutor) error {
-		var verdicts []automationVerdictPG
-		returning := ` RETURNING id, ` + column + `::text, is_automated`
-		for _, step := range parentlessWorkerStepsPG(hosted) {
-			if !step.bounded && !fullReconcile {
-				continue
-			}
-			changed, err := queryAutomationVerdictsPG(
-				ctx, exec, step.query+` AND automation_audit_hash = $1`+returning, hash,
-			)
-			if err != nil {
-				return fmt.Errorf("%s: %w", step.action, err)
-			}
-			verdicts = append(verdicts, changed...)
-		}
-		if err := writeAutomationVerdictsPG(ctx, exec, verdicts, column, hash); err != nil {
-			return err
-		}
-		reconciled = len(verdicts) > 0
-		return nil
+		var err error
+		reconciled, err = reconcileStampedPG(
+			ctx, exec, hosted, column, hash,
+			func(step parentlessWorkerStepPG) bool { return step.bounded || fullReconcile },
+			"",
+		)
+		return err
 	})
 	return reconciled, err
 }
