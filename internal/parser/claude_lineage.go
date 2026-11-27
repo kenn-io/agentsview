@@ -282,14 +282,11 @@ func claudeDerivedFromForkParent(line []byte) string {
 	if gjson.GetBytes(line, "v").Raw != "1" {
 		return ""
 	}
-	self := gjson.GetBytes(line, "sessionId").Str
 	var parent string
 	gjson.GetBytes(line, "sessions").ForEach(func(_, s gjson.Result) bool {
 		switch s.Get("via").Str {
 		case "fork":
-			if id := s.Get("id").Str; id != self && IsValidSessionID(id) {
-				parent = strings.Clone(id)
-			}
+			parent = s.Get("id").Str
 		case "clear":
 			parent = ""
 		}
@@ -308,15 +305,10 @@ func claudeRecordedForkParent(path string, self claudeHeadSniff) string {
 }
 
 // claudeFindForkParentTranscript returns the top-level transcript of
-// session parentID, looking first beside the fork at path and then in
-// the root's other project directories. It returns "" when none exists.
+// session parentID in any project directory under the root that holds
+// the fork at path. It returns "" when none exists.
 func claudeFindForkParentTranscript(path, parentID string) string {
-	projectDir := filepath.Dir(path)
-	sameDir := filepath.Join(projectDir, parentID+".jsonl")
-	if info, err := os.Stat(sameDir); err == nil && info.Mode().IsRegular() {
-		return sameDir
-	}
-	return claudeFindSourceFile(filepath.Dir(projectDir), parentID)
+	return claudeFindSourceFile(filepath.Dir(filepath.Dir(path)), parentID)
 }
 
 // claudeForkLine is one uuid-bearing line of a fork transcript.
@@ -586,7 +578,7 @@ func claudeResolveRecordedForkLineage(
 	if err != nil {
 		return nil, err
 	}
-	if !complete || len(parentUUIDs) == 0 {
+	if !complete {
 		return plan, nil
 	}
 	run := 0
