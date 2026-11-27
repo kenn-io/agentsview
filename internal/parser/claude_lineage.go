@@ -405,7 +405,10 @@ func claudeLineageCaptureSiblings(ctx context.Context, path string) ([]string, e
 		if err != nil {
 			return nil, err
 		}
-		if sniff.ok && sniff.rootUUID == self.rootUUID {
+		// A sibling recording this transcript as its fork parent is
+		// its descendant, never its ancestor.
+		if sniff.ok && sniff.rootUUID == self.rootUUID &&
+			sniff.forkParentID != strings.TrimSuffix(base, ".jsonl") {
 			siblings = append(siblings, siblingPath)
 		}
 	}
@@ -457,7 +460,8 @@ func claudeResolveSiblingLineage(
 		if err != nil {
 			return nil, err
 		}
-		if !sibling.ok || sibling.rootUUID != self.rootUUID {
+		if !sibling.ok || sibling.rootUUID != self.rootUUID ||
+			sibling.forkParentID == strings.TrimSuffix(base, ".jsonl") {
 			continue
 		}
 		candidates = append(candidates, candidate{

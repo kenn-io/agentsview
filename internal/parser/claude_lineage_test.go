@@ -1196,3 +1196,34 @@ func TestClaudeDerivedFromClearAfterForkIsUnrelated(t *testing.T) {
 	assert.Empty(t, results[0].Session.ParentSessionID)
 	assert.Len(t, results[0].Messages, 2)
 }
+
+func TestClaudeBackgroundForkIgnoresRecordedDescendant(t *testing.T) {
+	t.Parallel()
+	// An older background fork carries no record; a newer fork of it
+	// records it as parent and holds all of its entries. Electing that
+	// descendant would drop the background fork's turns from both.
+	origPath, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"fork-2222.jsonl", lineageForkContent(),
+	)
+	child := strings.ReplaceAll(lineageForkContent(), "fork-2222", "child-3333")
+	child = strings.ReplaceAll(child, `"sessionKind":"bg",`, "")
+	child = lineageDerivedFromLine("child-3333", "fork:fork-2222") + "\n" + child +
+		lineageUserLine("u3", "a2", "2026-01-01T12:00:00Z", "child-3333", "", "child question") + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(origPath), "child-3333.jsonl"), []byte(child), 0o644))
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "continued question", results[0].Messages[0].Content)
+
+	siblings, err := claudeLineageCaptureSiblings(t.Context(), forkPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{origPath}, siblings)
+}
