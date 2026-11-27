@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"path"
 	"regexp"
 	"strings"
 
@@ -51,42 +52,72 @@ func launchedFlagTakesValue(agent, flag string) bool {
 	return false
 }
 
-var launchedUUID = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
-var launchedOutputID = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
-var launchedValidID = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
-var launchedOutputHint = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
+var (
+	launchedUUID       = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+	launchedOutputID   = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
+	launchedValidID    = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
+	launchedOutputHint = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
+)
 
 // IsLaunchedClaudeSessionID reports whether id can name a launched Claude session.
 func IsLaunchedClaudeSessionID(id string) bool { return launchedValidID.MatchString(id) }
 
-// LaunchedRunSessionIDs extracts unambiguous IDs from starting shell calls.
-func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string) []string {
+// mentionsLauncher skips shell calls that cannot start a run.
+func mentionsLauncher(input string) bool {
+	lower := strings.ToLower(input)
+	return strings.Contains(lower, "codex") || strings.Contains(lower, "claude")
+}
+
+// launchedRunArgs reads a launch's options in their command-line roles.
+func launchedRunArgs(agent string, words []string) (ids map[string]bool, jsonEvents, resumed bool) {
+	ids = map[string]bool{}
+	var positional []string
+	for i := 1; i < len(words) && words[i] != "--"; i++ {
+		name, value, hasValue := strings.Cut(words[i], "=")
+		if !strings.HasPrefix(name, "-") {
+			positional = append(positional, words[i])
+			continue
+		}
+		if !hasValue && launchedFlagTakesValue(agent, name) && i+1 < len(words) {
+			i++
+			value = words[i]
+		}
+		switch name {
+		case "--session-id":
+			if launchedValidID.MatchString(value) {
+				ids[strings.ToLower(value)] = true
+			}
+		case "--json":
+			jsonEvents = true
+		case "-r", "--resume", "-c", "--continue":
+			resumed = resumed || agent == "claude"
+		}
+	}
+	return ids, jsonEvents, resumed || agent == "codex" && len(positional) > 1 && positional[1] == "resume"
+}
+
+// launchedRunID returns the one run ID a starting shell call shows.
+func launchedRunID(ctx context.Context, input, output string) string {
+	commands, ok := ShellInputCommands(input)
+	if !ok {
+		return ""
+	}
+	output = launchedRunOutput(output)
 	ids := map[string]bool{}
-	var launches []string
-	unsafeOutput := false
-	conflictingExplicit := false
-	codexJSON := false
+	launches, prefix := 0, ""
+	unsafeOutput, codexJSON := false, false
 	var scan func(string, int)
 	scan = func(command string, depth int) {
 		if depth > 8 || ctx.Err() != nil {
 			return
 		}
-		command = strings.TrimSpace(command)
-		if strings.HasPrefix(command, "& ") {
-			command = strings.TrimSpace(command[2:])
-		}
+		// PowerShell starts a quoted executable path with the call operator.
+		command = strings.TrimPrefix(strings.TrimSpace(command), "& ")
 		file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 		if err != nil {
 			return
 		}
 		syntax.Walk(file, func(node syntax.Node) bool {
-			if _, ok := node.(*syntax.FuncDecl); ok {
-				unsafeOutput = true
-				return false
-			}
-			if stmt, ok := node.(*syntax.Stmt); ok && !capturedLaunchOutput(stmt) {
-				unsafeOutput = true
-			}
 			call, ok := node.(*syntax.CallExpr)
 			if !ok {
 				return true
@@ -96,174 +127,52 @@ func LaunchedRunSessionIDs(ctx context.Context, commands []string, output string
 				scan(inner, depth+1)
 				return false
 			}
-			words, literal := shellWords(args)
-			if len(words) == 0 || !literal[0] {
-				unsafeOutput = true
-				return false
+			words, _ := shellWords(args)
+			name := ""
+			if len(words) > 0 {
+				name = strings.TrimSuffix(path.Base(strings.ToLower(strings.ReplaceAll(words[0], `\`, "/"))), ".exe")
 			}
-			name := strings.ToLower(strings.ReplaceAll(words[0], `\`, "/"))
-			name = name[strings.LastIndex(name, "/")+1:]
-			name = strings.TrimSuffix(name, ".exe")
 			if name != "codex" && name != "claude" || !OneShotRunArgs(name, words) {
-				// A literal cd before the launch is setup; other commands may
-				// contribute an unrelated ID to the combined shell output.
-				raw, rawLiteral := shellWords(call.Args)
-				if len(call.Assigns) != 0 || len(raw) == 0 || len(raw) > 2 || raw[0] != "cd" || !rawLiteral[0] || len(launches) != 0 || len(raw) == 2 && (!rawLiteral[1] || strings.HasPrefix(raw[1], "-") || strings.ContainsAny(raw[1], "\r\n")) {
+				// A cd prints no ID; any other command may add an unrelated one.
+				if raw, _ := shellWords(call.Args); len(raw) == 0 || len(raw) > 2 || raw[0] != "cd" {
 					unsafeOutput = true
 				}
 				return false
 			}
-			if isResumedRun(name, words) {
+			explicit, jsonEvents, resumed := launchedRunArgs(name, words)
+			if resumed {
 				unsafeOutput = true
 				return false
 			}
-			syntax.Walk(call, func(node syntax.Node) bool {
-				switch node.(type) {
-				case *syntax.CmdSubst, *syntax.ProcSubst:
-					unsafeOutput = true
-				}
-				return true
-			})
-			prefix := ""
+			launches++
 			if name == "codex" {
-				prefix = "codex:"
-				codexJSON = launchedCodexJSON(words)
+				prefix, codexJSON = "codex:", jsonEvents
 			}
-			explicit := launchedExplicitIDs(name, prefix, words, literal)
-			if len(explicit) > 1 {
-				conflictingExplicit = true
+			for id := range explicit {
+				ids[prefix+id] = true
 			}
-			if len(explicit) == 1 {
-				for id := range explicit {
-					ids[id] = true
-				}
-			}
-			launches = append(launches, prefix)
 			return false
 		})
 	}
 	for _, command := range commands {
 		scan(command, 0)
 	}
-	if len(launches) == 1 && !unsafeOutput && !conflictingExplicit && (launches[0] != "codex:" || codexJSON || launchedOutputID.MatchString(launchedRunOutput(output))) {
+	if launches != 1 {
+		return ""
+	}
+	if !unsafeOutput && (prefix == "" || codexJSON || launchedOutputID.MatchString(output)) {
 		for _, id := range launchedOutputIDs(output) {
-			if strings.HasPrefix(id, "codex:") == (launches[0] == "codex:") {
+			if strings.HasPrefix(id, "codex:") == (prefix != "") {
 				ids[id] = true
 			}
 		}
 	}
-	if len(launches) != 1 || len(ids) != 1 || conflictingExplicit {
-		return nil
-	}
-	var result []string
 	for id := range ids {
-		result = append(result, id)
-	}
-	return result
-}
-
-func launchedCodexJSON(words []string) bool {
-	for i := 1; i < len(words); i++ {
-		if words[i] == "--" {
-			return false
-		}
-		if words[i] == "--json" {
-			return true
-		}
-		if launchedFlagTakesValue("codex", words[i]) {
-			i++
+		if len(ids) == 1 {
+			return id
 		}
 	}
-	return false
-}
-
-// capturedLaunchOutput allows only redirections that keep stderr in the result.
-func capturedLaunchOutput(stmt *syntax.Stmt) bool {
-	if stmt.Background {
-		return false
-	}
-	for _, redir := range stmt.Redirs {
-		if redir.Op != syntax.DplOut || redir.N == nil || redir.N.Value != "2" {
-			return false
-		}
-		words, literal := shellWords([]*syntax.Word{redir.Word})
-		if !literal[0] || words[0] != "1" {
-			return false
-		}
-	}
-	return true
-}
-
-func launchedExplicitIDs(agent, prefix string, words []string, literal []bool) map[string]bool {
-	ids := map[string]bool{}
-	for i := 1; i < len(words); i++ {
-		word := words[i]
-		if word == "--" {
-			break
-		}
-		id := ""
-		if literal[i] && strings.HasPrefix(word, "--session-id=") {
-			id = strings.TrimPrefix(word, "--session-id=")
-		} else if word == "--session-id" && i+1 < len(words) {
-			i++
-			if literal[i] {
-				id = words[i]
-			}
-		} else if !strings.Contains(word, "=") && launchedFlagTakesValue(agent, word) {
-			i++
-		}
-		if launchedValidID.MatchString(id) {
-			ids[prefix+strings.ToLower(id)] = true
-		}
-	}
-	return ids
-}
-
-// isResumedRun checks control arguments, not words in the prompt.
-func isResumedRun(agent string, words []string) bool {
-	if agent == "codex" {
-		for i := 1; i < len(words); i++ {
-			if words[i] != "exec" && words[i] != "e" {
-				if words[i] == "--" || !strings.HasPrefix(words[i], "-") {
-					return false
-				}
-				if launchedFlagTakesValue(agent, words[i]) {
-					i++
-				}
-				continue
-			}
-			for i++; i < len(words); i++ {
-				arg := words[i]
-				if arg == "--" {
-					return false
-				}
-				if arg == "resume" || arg == "--resume" || arg == "--continue" {
-					return true
-				}
-				if !strings.HasPrefix(arg, "-") {
-					return false
-				}
-				if launchedFlagTakesValue(agent, arg) {
-					i++
-				}
-			}
-			return false
-		}
-		return false
-	}
-	for i := 1; i < len(words); i++ {
-		word := words[i]
-		if word == "--" {
-			break
-		}
-		if word == "--resume" || word == "--continue" || word == "-r" || word == "-c" || strings.HasPrefix(word, "--resume=") || strings.HasPrefix(word, "--continue=") {
-			return true
-		}
-		if launchedFlagTakesValue(agent, word) {
-			i++
-		}
-	}
-	return false
+	return ""
 }
 
 // launchedRunOutput unwraps the shell tool's output envelope.
@@ -275,18 +184,6 @@ func launchedRunOutput(text string) string {
 		return envelope.Output
 	}
 	return text
-}
-
-func launchedRunID(ctx context.Context, input, output string) string {
-	commands, ok := ShellInputCommands(input)
-	if !ok {
-		return ""
-	}
-	ids := LaunchedRunSessionIDs(ctx, commands, launchedRunOutput(output))
-	if len(ids) != 1 {
-		return ""
-	}
-	return ids[0]
 }
 
 // ShellInputCommands decodes shell text and argv-list tool inputs.
@@ -326,22 +223,19 @@ func ShellInputCommands(input string) ([]string, bool) {
 	return []string{payload.Cmd}, true
 }
 
+// launchedOutputIDs reads Codex's startup banner or the first JSON event.
 func launchedOutputIDs(text string) []string {
-	text = launchedRunOutput(text)
-	var ids []string
 	if match := launchedOutputID.FindStringSubmatch(text); len(match) != 0 {
 		return []string{"codex:" + strings.ToLower(match[1])}
 	}
+	var ids []string
 	for i, line := range strings.Split(text, "\n") {
-		if !strings.Contains(line, `"thread_id"`) && !strings.Contains(line, `"session_id"`) {
-			continue
-		}
 		var event struct {
 			Type      string `json:"type"`
 			SessionID string `json:"session_id"`
 			ThreadID  string `json:"thread_id"`
 		}
-		if json.Unmarshal([]byte(line), &event) != nil {
+		if !strings.Contains(line, `_id"`) || json.Unmarshal([]byte(line), &event) != nil {
 			continue
 		}
 		if i == 0 && event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
@@ -355,58 +249,30 @@ func launchedOutputIDs(text string) []string {
 }
 
 func hasLaunchedOutputID(text string) bool {
-	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(text)) > 0
+	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(text))) > 0
 }
 
 // annotateClaudeLaunchedRuns associates a Bash call with its own results.
 func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage) error {
 	calls := make(map[string]*ParsedToolCall)
+	outputs := make(map[string]string)
 	for i := range messages {
 		if err := contextErrEvery(ctx, i); err != nil {
 			return err
 		}
 		for j := range messages[i].ToolCalls {
-			call := &messages[i].ToolCalls[j]
-			if call.ToolUseID != "" {
+			if call := &messages[i].ToolCalls[j]; call.Category == "Bash" && call.ToolUseID != "" && call.SubagentSessionID == "" && mentionsLauncher(call.InputJSON) {
 				calls[call.ToolUseID] = call
 			}
 		}
-	}
-	results := make(map[string][]string)
-	for i := range messages {
-		if err := contextErrEvery(ctx, i); err != nil {
-			return err
-		}
 		for _, result := range messages[i].ToolResults {
-			call := calls[result.ToolUseID]
-			if call == nil || call.Category != "Bash" {
-				continue
-			}
-			lower := strings.ToLower(call.InputJSON)
-			if strings.Contains(lower, "codex") || strings.Contains(lower, "claude") {
-				results[result.ToolUseID] = append(results[result.ToolUseID], DecodeContent(result.ContentRaw))
+			if calls[result.ToolUseID] != nil {
+				outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
 			}
 		}
 	}
-	for i := range messages {
-		if err := contextErrEvery(ctx, i); err != nil {
-			return err
-		}
-		for j := range messages[i].ToolCalls {
-			call := &messages[i].ToolCalls[j]
-			if call.Category != "Bash" || call.ToolUseID == "" || call.SubagentSessionID != "" {
-				continue
-			}
-			lower := strings.ToLower(call.InputJSON)
-			if !strings.Contains(lower, "codex") && !strings.Contains(lower, "claude") {
-				continue
-			}
-			output := ""
-			if calls[call.ToolUseID] == call {
-				output = strings.Join(results[call.ToolUseID], "\n")
-			}
-			call.SubagentSessionID = launchedRunID(ctx, call.InputJSON, output)
-		}
+	for id, call := range calls {
+		call.SubagentSessionID = launchedRunID(ctx, call.InputJSON, outputs[id])
 	}
 	return ctx.Err()
 }

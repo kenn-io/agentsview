@@ -33,12 +33,12 @@ func testLaunchedRunLinksAfterIncrementalResult(t *testing.T, mode string) {
 	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	launcher := filepath.Join(claudeRoot, "project", "launcher.jsonl")
 	rollout := filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+id+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(launcher), 0700))
-	require.NoError(t, os.MkdirAll(codexRoot, 0700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(launcher), 0o700))
+	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
 	content := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n" +
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-01T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"codex exec review"}}]}}` + "\n"
-	require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
-	require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z")+"\n"), 0600))
+	require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z")+"\n"), 0o600))
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot}}, Machine: "local"})
 	t.Cleanup(func() { engine.Close() })
@@ -47,7 +47,7 @@ func testLaunchedRunLinksAfterIncrementalResult(t *testing.T, mode string) {
 	require.NoError(t, err)
 	assert.Empty(t, children)
 	content += `{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":` + strconv.Quote(codexStartup(id)) + `}]}}` + "\n"
-	require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
+	require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
 	switch mode {
 	case "all":
 		stats := engine.SyncAll(t.Context(), nil)
@@ -86,15 +86,15 @@ func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {
 	const childID = "12345678-1234-1234-1234-123456789abc"
 	root := t.TempDir()
 	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
-	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0700))
-	require.NoError(t, os.MkdirAll(codexRoot, 0700))
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0o700))
+	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
 	child := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", childID+".jsonl"), []byte(child), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", childID+".jsonl"), []byte(child), 0o600))
 	content := testjsonl.CodexSessionMetaJSON(launcherID, "/workspace/project", "cli", "2026-10-01T10:00:00Z") + "\n" +
 		testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z") + "\n" +
 		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-1", map[string]any{"cmd": "claude -p --session-id " + childID}, "2026-10-01T10:00:01Z") + "\n"
 	rollout := filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+launcherID+".jsonl")
-	require.NoError(t, os.WriteFile(rollout, []byte(content), 0600))
+	require.NoError(t, os.WriteFile(rollout, []byte(content), 0o600))
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot}}, Machine: "remote", IDPrefix: "remote~"})
 	t.Cleanup(func() { engine.Close() })
@@ -111,13 +111,13 @@ func TestLaunchedRunScopedReparse(t *testing.T) {
 	root := t.TempDir()
 	claudeRoot := filepath.Join(root, "claude")
 	codexRoot := filepath.Join(root, "codex")
-	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0700))
-	require.NoError(t, os.MkdirAll(codexRoot, 0700))
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0o700))
+	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
 	content := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n" +
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-01T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"codex exec review"}}]}}` + "\n" +
 		`{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-10-01T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":` + strconv.Quote(codexStartup(id)) + `}]}}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", "launcher.jsonl"), []byte(content), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+id+".jsonl"), []byte(testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z")+"\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", "launcher.jsonl"), []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+id+".jsonl"), []byte(testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z")+"\n"), 0o600))
 	archive := filepath.Join(t.TempDir(), "archive.db")
 	database, err := db.OpenIsolated(ctx, archive)
 	require.NoError(t, err)
@@ -155,8 +155,8 @@ func TestCodexLaunchedRunLateResult(t *testing.T) {
 			launcher := filepath.Join(root, "rollout-2026-10-01T10-00-00-"+parent+".jsonl")
 			run := filepath.Join(root, "rollout-2026-10-01T10-00-01-"+child+".jsonl")
 			content := testjsonl.CodexSessionMetaJSON(parent, "/workspace/project", "cli", "2026-10-01T10:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z") + "\n" + testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-1", map[string]any{"cmd": "codex exec review"}, "2026-10-01T10:00:01Z") + "\n"
-			require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
-			require.NoError(t, os.WriteFile(run, []byte(testjsonl.CodexSessionMetaJSON(child, "/workspace/project", "codex_exec", "2026-10-01T10:00:01Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:02Z")+"\n"), 0600))
+			require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
+			require.NoError(t, os.WriteFile(run, []byte(testjsonl.CodexSessionMetaJSON(child, "/workspace/project", "codex_exec", "2026-10-01T10:00:01Z")+"\n"+testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:02Z")+"\n"), 0o600))
 			database := dbtest.OpenTestDB(t)
 			cfg := sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local"}
 			if mode == "staged" {
@@ -169,7 +169,7 @@ func TestCodexLaunchedRunLateResult(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, children)
 			content += testjsonl.CodexFunctionCallOutputJSON("call-1", map[string]any{"output": codexStartup(child)}, "2026-10-01T10:00:03Z") + "\n"
-			require.NoError(t, os.WriteFile(launcher, []byte(content), 0600))
+			require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
 			switch mode {
 			case "paths":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{launcher}))

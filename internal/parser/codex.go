@@ -938,7 +938,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		}
 	}
 
-	if b.agent == AgentCodex && callID != "" && call.Category == "Bash" && (strings.Contains(strings.ToLower(inputJSON), "codex") || strings.Contains(strings.ToLower(inputJSON), "claude")) {
+	if b.agent == AgentCodex && callID != "" && call.Category == "Bash" && mentionsLauncher(inputJSON) {
 		if b.launchedCalls == nil {
 			b.launchedCalls = make(map[string]string)
 		}
@@ -1026,8 +1026,10 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 			b.sink.SetCallSubagentSessionID(callID, position, id)
 		}
 	}
-	if !output.Exists() && strings.TrimSpace(raw) == "" {
-		return
+	if !output.Exists() {
+		if strings.TrimSpace(raw) == "" {
+			return
+		}
 	}
 
 	switch b.toolCallNameForOutput(callID) {

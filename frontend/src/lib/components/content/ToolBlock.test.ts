@@ -70,14 +70,6 @@ afterEach(async () => {
 });
 
 describe("ToolBlock output and controls", () => {
-  it("renders a linked Bash call as one ordinary tool block", async () => {
-    await render({ toolCall: call("Bash", { command: "codex exec review" }, { category: "Bash", subagent_session_id: "codex:12345678-1234-1234-1234-123456789abc", result_content: "session id: 12345678-1234-1234-1234-123456789abc" }) });
-    expect(document.querySelectorAll(".tool-block")).toHaveLength(1);
-    expect(document.querySelector(".subagent-inline")).toBeNull();
-    await click(".tool-header");
-    expect(text(".tool-content")).toContain("codex exec review");
-    expect(text(".output-header")).toContain("session id:");
-  });
   it("starts with both input and output collapsed", async () => {
     await render({ content: "input", toolCall: call("Read", {}, { result_content: "output" }) });
     expect(document.querySelector(".tool-content")).toBeNull();

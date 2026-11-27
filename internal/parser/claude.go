@@ -1165,19 +1165,10 @@ func claudeParseSessionFrom(
 	if err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
+	// An unmatched result's call is stored; only a full parse can link it.
 	for _, link := range links {
-		if link.HasResult && hasLaunchedOutputID(DecodeContent(link.ResultContentRaw)) {
-			found := false
-			for _, msg := range msgs {
-				for _, call := range msg.ToolCalls {
-					if call.ToolUseID == link.ToolUseID {
-						found = true
-					}
-				}
-			}
-			if !found {
-				return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-			}
+		if link.SubagentSessionID == "" && link.HasResult && hasLaunchedOutputID(DecodeContent(link.ResultContentRaw)) {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 		}
 	}
 	if err := annotateSubagentSessionsContext(
