@@ -166,6 +166,13 @@ it("copies a link to the message and confirms the copy", async () => {
   }
 });
 
+it("offers the message link where mutations are disabled", async () => {
+  await render(message({ session_id: "session-1", ordinal: 7 }), { allowMutations: false });
+  await click('[aria-label="Copy link to message"]');
+  expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+  expect(document.querySelector('[aria-label="Copied!"]')?.getAttribute("title")).toBe("Copied!");
+});
+
 it("does not confirm a failed message link copy", async () => {
   copyMock.mockResolvedValueOnce(false);
   await render(message({ ordinal: 7 }));

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
+
+const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
 
 function makeToolMessage(ordinal: number): Message {
   return {
@@ -31,6 +34,7 @@ function makeToolMessage(ordinal: number): Message {
 
 afterEach(() => {
   sessionTiming.reset();
+  copyMock.mockClear();
   document.body.innerHTML = "";
 });
 
@@ -136,6 +140,27 @@ describe("ToolCallGroup", () => {
     expect(divider?.textContent).toContain("New messages");
     expect(document.querySelector('[data-message-ordinal="2"]')).not.toBeNull();
 
+    unmount(component);
+  });
+
+  it("copies a link to each grouped message", async () => {
+    const component = mount(ToolCallGroup, {
+      target: document.body,
+      props: { messages: [makeToolMessage(1), makeToolMessage(2)], timestamp: "2026-07-11T12:00:00Z" },
+    });
+    await tick();
+
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-message-ordinal="2"] [aria-label="Copy link to message"]',
+    );
+    expect(button).not.toBeNull();
+    button!.click();
+    await Promise.resolve();
+    await tick();
+
+    expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/s1?msg=2`);
+    expect(document.querySelector('[data-message-ordinal="2"] [aria-label="Copied!"]')).not.toBeNull();
+    expect(document.querySelector('[data-message-ordinal="1"] [aria-label="Copy link to message"]')).not.toBeNull();
     unmount(component);
   });
 });

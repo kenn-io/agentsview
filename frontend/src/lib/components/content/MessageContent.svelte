@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
@@ -13,7 +12,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
-  import { generatedErrorMessage, getServerUrl, isRemoteConnection } from "../../api/runtime.js";
+  import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import DocbankMatches from "./DocbankMatches.svelte";
@@ -22,9 +21,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
+  import MessageLinkButton from "./MessageLinkButton.svelte";
   import { Button, CopyButton } from "@kenn-io/kit-ui";
   import { ui } from "../../stores/ui.svelte.js";
-  import { router } from "../../stores/router.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -34,7 +33,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, LinkIcon, PinIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, PinIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -55,7 +54,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return segment ? [segment] : null;
   }
   let copied = $state(false);
-  let linkCopied = $state(false);
   let segments = $derived(enrichSegments(
     skillSegments(message) ?? parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
@@ -175,28 +173,14 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return null;
   });
   let copyTimer: ReturnType<typeof setTimeout>;
-  let linkCopyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
   let forkTimer: ReturnType<typeof setTimeout>;
-  onDestroy(() => { clearTimeout(linkCopyTimer); });
   async function handleCopy() {
     const ok = await copyToClipboard(formatMessageForCopy(message));
     if (ok) {
       clearTimeout(copyTimer); copied = true;
       copyTimer = setTimeout(() => { copied = false; }, 1500);
     }
-  }
-  async function handleCopyLink() {
-    const server = getServerUrl();
-    const url = server
-      ? router.buildMessageHref(message.session_id, message.ordinal, server.replace(/\/+$/, ""))
-      : sync.isDesktop
-        ? `agentsview://sessions/${encodeURIComponent(message.session_id)}?msg=${message.ordinal}`
-        : window.location.origin + router.buildMessageHref(message.session_id, message.ordinal);
-    if (!await copyToClipboard(url)) return;
-    clearTimeout(linkCopyTimer);
-    linkCopied = true;
-    linkCopyTimer = setTimeout(() => { linkCopied = false; }, 1500);
   }
   async function handleTogglePin() {
     clearTimeout(pinTimer);
@@ -256,11 +240,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
-    <button type="button" class="pin-btn" aria-label={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}
-      title={linkCopied ? m.message_content_copied() : m.message_content_copy_link()} onclick={handleCopyLink}>
-      {#if linkCopied}<CheckIcon size="14" strokeWidth="2.4" aria-hidden="true" />
-      {:else}<LinkIcon size="14" strokeWidth="1.8" aria-hidden="true" />{/if}
-    </button>
+    <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
@@ -415,7 +395,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
   .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
-  .message:hover :global(.kit-copy-btn) { opacity: 1; }
+  .message:hover :global(.kit-copy-btn), .message:hover :global(.message-link-btn) { opacity: 1; }
   .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: none; border-radius: var(--radius-sm, 4px); background: transparent;

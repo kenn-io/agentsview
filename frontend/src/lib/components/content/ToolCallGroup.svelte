@@ -13,6 +13,7 @@
   import { collectSearchBlocks } from "../../search/block-text.js";
   import { ui } from "../../stores/ui.svelte.js";
   import ParallelGroup from "./ParallelGroup.svelte";
+  import MessageLinkButton from "./MessageLinkButton.svelte";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { WrenchIcon } from "../../icons.js";
@@ -96,43 +97,46 @@
       {/if}
       {@const calls = message.tool_calls ?? []}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
-      <div data-message-ordinal={message.ordinal}>
-        {#if ui.isBlockVisible("thinking")}
-          {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
-            <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
-          {/each}
-        {/if}
-        {#if calls.length === 1}
-          {@const soloCall = calls[0]!}
-          <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
-            toolCall={soloCall}
-            content=""
-            label={displayToolName(soloCall)}
-            durationLabel={soloDurationLabel(
-              sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
-              turn,
-              message,
-            )}
-            isRunning={isRunningTurn(message)}
-            searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
-          />
-        {:else if calls.length >= 2}
-          <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal}
-            toolCalls={calls}
-            callTimingByID={sessionTiming.index.callByToolUseID}
-            isRunning={isRunningTurn(message)}
-            searchOrdinal={searchable ? message.ordinal : undefined}
-          />
-        {:else}
-          {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
+      <div class="group-member" data-message-ordinal={message.ordinal}>
+        <div class="group-member-body">
+          {#if ui.isBlockVisible("thinking")}
+            {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
+              <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
+            {/each}
+          {/if}
+          {#if calls.length === 1}
+            {@const soloCall = calls[0]!}
             <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
-              content={seg.content}
-              label={seg.label}
-              toolCall={seg.toolCall}
-              searchScope={searchable ? { ordinal: message.ordinal, callIdx: `seg${segIdx}` } : undefined}
+              toolCall={soloCall}
+              content=""
+              label={displayToolName(soloCall)}
+              durationLabel={soloDurationLabel(
+                sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
+                turn,
+                message,
+              )}
+              isRunning={isRunningTurn(message)}
+              searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
             />
-          {/each}
-        {/if}
+          {:else if calls.length >= 2}
+            <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal}
+              toolCalls={calls}
+              callTimingByID={sessionTiming.index.callByToolUseID}
+              isRunning={isRunningTurn(message)}
+              searchOrdinal={searchable ? message.ordinal : undefined}
+            />
+          {:else}
+            {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
+              <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
+                content={seg.content}
+                label={seg.label}
+                toolCall={seg.toolCall}
+                searchScope={searchable ? { ordinal: message.ordinal, callIdx: `seg${segIdx}` } : undefined}
+              />
+            {/each}
+          {/if}
+        </div>
+        <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
       </div>
     {/each}
   </div>
@@ -179,5 +183,10 @@
     flex: 1;
     background: color-mix(in srgb, var(--accent-blue) 35%, transparent);
   }
+  /* Each member keeps its own link, beside its rows like a message header's. */
+  .group-member { display: flex; align-items: flex-start; gap: 4px; }
+  .group-member-body { flex: 1; min-width: 0; }
+  .group-member:hover :global(.message-link-btn) { opacity: 1; }
+  .group-member > :global(.message-link-btn) { margin-block: var(--tool-row-copy-trim, 0); }
   .tool-group-body :global(.tool-block) { margin: 0; border-left: none; border-radius: 0; }
 </style>
