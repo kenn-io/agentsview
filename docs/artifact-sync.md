@@ -119,3 +119,11 @@ database from backup, keep only one active writer for that restored origin.
   folder contents manually while an exchange is running.
 - Keep the target outside the AgentsView data directory and every configured
   provider root. AgentsView rejects overlapping paths.
+- A Codex Cloud chat carries the account key of the login it was fetched for,
+  so the importing archive's
+  [reporting exports](reporting-export.md#report-an-archive-that-contains-several-machines)
+  name the same account as the computer that fetched it. A chat that an older
+  version published gets the key the next time it changes, or after
+  `agentsview source sync --full --target <folder>` on the computer that
+  fetched it. Computers that run an older AgentsView version skip these
+  chats until AgentsView on those computers is upgraded.

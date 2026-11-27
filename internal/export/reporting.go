@@ -23,7 +23,8 @@ const (
 	ReportingJointSchemaVersion = 5
 	// ReportingAccountSchemaVersion adds Cursor account usage parts.
 	ReportingAccountSchemaVersion = 6
-	// ReportingCursorSchemaVersion adds Cursor event and poll ledgers.
+	// ReportingCursorSchemaVersion adds Cursor event and poll ledgers and
+	// reports Codex cloud sessions under their account.
 	ReportingCursorSchemaVersion = 7
 )
 

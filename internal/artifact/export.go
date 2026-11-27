@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type artifactPublicationStreamer interface {
@@ -552,6 +553,10 @@ func exportLoadedSessionToStore(
 		return "", false, err
 	}
 
+	var codexCloudAccount string
+	if sess.Agent == string(parser.AgentCodexCloud) && sess.FilePath != nil {
+		codexCloudAccount = parser.CodexCloudAccountFromPath(*sess.FilePath)
+	}
 	wireSession := manifestSessionFromDB(*sess)
 	wireSession.Machine = origin
 	normalizeManifestSessionLocalState(&wireSession)
@@ -560,6 +565,9 @@ func exportLoadedSessionToStore(
 		version = manifestPRLinksVersion
 	}
 	if wirePlanUsage != nil || wireCoverage != nil {
+		version = manifestPlanUsageVersion
+	}
+	if codexCloudAccount != "" {
 		version = manifestFormatVersion
 	}
 	m := manifest{
@@ -572,6 +580,7 @@ func exportLoadedSessionToStore(
 		SessionQualitySignals: manifestQualitySignalsFromDB(sess.StoredQualitySignals()),
 		PlanUsage:             wirePlanUsage,
 		CaptureCoverage:       wireCoverage,
+		CodexCloudAccount:     codexCloudAccount,
 	}
 	data, err := canonicalJSON(m)
 	if err != nil {

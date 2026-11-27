@@ -1844,6 +1844,14 @@ CREATE TABLE IF NOT EXISTS codex_fork_state (
  state_json TEXT NOT NULL
 );
 
+-- The Codex cloud account key of a chat imported from another computer's
+-- artifacts. Import clears the source path, which names the key for chats
+-- fetched on this computer, so reporting exports read it here instead.
+CREATE TABLE IF NOT EXISTS codex_cloud_accounts (
+ session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+ account_key TEXT NOT NULL
+);
+
 -- OCR text is shared by all occurrences of the same image and processor.
 CREATE TABLE IF NOT EXISTS image_text_cache (
     id INTEGER PRIMARY KEY,

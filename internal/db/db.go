@@ -2220,6 +2220,7 @@ var readOnlyRequiredTables = []string{
 	"usage_events",
 	"session_plan_usage",
 	"session_usage_totals",
+	"codex_cloud_accounts",
 	"tool_calls",
 	"tool_result_events",
 	"image_text_cache",

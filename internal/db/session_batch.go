@@ -25,6 +25,9 @@ type SessionBatchWrite struct {
 	UsageEvents       []UsageEvent
 	// PlanUsage replaces the session's plan usage row; nil removes it.
 	PlanUsage *SessionPlanUsage
+	// CodexCloudAccount records the Codex cloud account key of an imported
+	// chat; empty leaves the stored key unchanged.
+	CodexCloudAccount string
 	// SessionTotal replaces the session's recorded total when
 	// ReplaceSessionTotal is set; nil then removes it. Writes that are not
 	// a full parse leave the stored total alone.
@@ -982,6 +985,13 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 	}
 	if err := writeCodexForkStateTx(ctx, tx, write.Session.ID, write.CodexForkState); err != nil {
 		return err
+	}
+	if write.CodexCloudAccount != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_cloud_accounts(session_id, account_key) VALUES (?, ?)
+		 ON CONFLICT(session_id) DO UPDATE SET account_key = excluded.account_key`,
+			write.Session.ID, write.CodexCloudAccount); err != nil {
+			return fmt.Errorf("recording Codex cloud account: %w", err)
+		}
 	}
 	if err := replaceSessionUsageEventsTx(
 		queries, write.Session.ID, write.UsageEvents, false,

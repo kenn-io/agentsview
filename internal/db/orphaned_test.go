@@ -912,3 +912,32 @@ func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+// A full resync keeps an imported Codex cloud chat's account key, so the
+// rebuilt archive still reports the chat under its account.
+func TestFullResyncPreservesImportedCodexCloudAccount(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	gid := "peer-a1b2c3~codex-cloud:thread-1"
+	_, err := source.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: Session{
+			ID: gid, Project: "project", Machine: "peer-a1b2c3", Agent: "codex-cloud",
+		},
+		CodexCloudAccount: "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+	}})
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination")
+	defer destination.Close()
+	copied, err := destination.CopyOrphanedDataFrom(ctx, sourcePath)
+	require.NoError(t, err)
+	require.Equal(t, 1, copied)
+
+	var account string
+	require.NoError(t, destination.Reader().QueryRowContext(ctx,
+		`SELECT account_key FROM codex_cloud_accounts WHERE session_id = ?`, gid).Scan(&account))
+	assert.Equal(t, "0f1e2d3c4b5a69788796a5b4c3d2e1f0", account)
+}
