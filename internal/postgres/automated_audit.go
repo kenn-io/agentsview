@@ -200,6 +200,14 @@ type parentlessWorkerStepPG struct {
 	bounded       bool
 }
 
+func clearParentlessWorkersSQLPG(clearable string) string {
+	return `UPDATE sessions SET relationship_type = '',
+			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
+			relationship_inferred = CASE WHEN parser_relationship_type IS NULL THEN TRUE ELSE relationship_inferred END,
+			updated_at = NOW()
+		WHERE relationship_type = 'subagent' AND ` + clearable
+}
+
 func parentlessWorkerStepsPG(hosted bool) []parentlessWorkerStepPG {
 	clearable := clearableHeadlessWorkerPG
 	if hosted {
@@ -213,11 +221,7 @@ func parentlessWorkerStepsPG(hosted bool) []parentlessWorkerStepPG {
 			true,
 		},
 		{
-			`UPDATE sessions SET relationship_type = '',
-			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
-			relationship_inferred = CASE WHEN parser_relationship_type IS NULL THEN TRUE ELSE relationship_inferred END,
-			updated_at = NOW()
-		WHERE relationship_type = 'subagent' AND ` + clearable,
+			clearParentlessWorkersSQLPG(clearable),
 			"clearing PG automated parentless workers",
 			false,
 		},
@@ -290,26 +294,13 @@ func reconcileRawSpawnLinks(ctx context.Context, tx *sql.Tx) (bool, error) {
 	var changed bool
 	for _, query := range []string{
 		`UPDATE sessions SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE id IN (
-			SELECT id FROM sessions
-			WHERE provenance_kind = 'raw'
-			  AND COALESCE(relationship_type, '') = ''
-			  AND COALESCE(parent_session_id, '') = ''
-			  AND parser_relationship_type = 'subagent'
-			  AND ` + hostedRawSpawnExistsPG + `
-			ORDER BY id
-		)`,
-		`UPDATE sessions SET relationship_type = '',
-			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
-			relationship_inferred = CASE WHEN parser_relationship_type IS NULL THEN TRUE ELSE relationship_inferred END,
-			updated_at = NOW()
-		WHERE id IN (
-			SELECT id FROM sessions
-			WHERE provenance_kind = 'raw'
-			  AND relationship_type = 'subagent'
-			  AND ` + clearableHeadlessWorkerPG + hostedRawSpawnGuardPG + `
-			ORDER BY id
-		)`,
+		WHERE provenance_kind = 'raw'
+		  AND COALESCE(relationship_type, '') = ''
+		  AND COALESCE(parent_session_id, '') = ''
+		  AND parser_relationship_type = 'subagent'
+		  AND ` + hostedRawSpawnExistsPG,
+		clearParentlessWorkersSQLPG(clearableHeadlessWorkerPG+hostedRawSpawnGuardPG) + `
+		  AND provenance_kind = 'raw'`,
 	} {
 		res, err := tx.ExecContext(ctx, query)
 		if err != nil {

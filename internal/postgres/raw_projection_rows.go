@@ -311,6 +311,13 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
+	if _, _, ok := p.Session.RelationshipProvenance(); !ok {
+		p.Session.RecordParserRelationship()
+	}
+	p.Session.IsAutomated = refreshRawSessionAutomation(
+		p.Session, p.Messages, s.options.Content.ArchiveContent.UsageOnly(),
+	)
+	p.Session.RelationshipType = db.SessionRelationship(p.Session)
 	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
 		return err
 	}
@@ -368,6 +375,16 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 		return err
 	}
 	return insertPGFrictionFindings(ctx, tx, id, p.Friction.Findings)
+}
+
+func refreshRawSessionAutomation(s db.Session, messages []db.Message, usageOnly bool) bool {
+	if db.IsAutomatedSessionMetadata(s.SessionKind, s.Entrypoint) {
+		return true
+	}
+	if usageOnly || (len(messages) == 0 && s.FirstMessage == nil) {
+		return s.IsAutomated
+	}
+	return db.IsAutomatedTranscript(s.UserMessageCount, messages, s.FirstMessage)
 }
 
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {

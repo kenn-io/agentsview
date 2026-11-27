@@ -3,6 +3,8 @@
 package postgres
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"testing"
 
@@ -107,4 +109,142 @@ func TestRawProjectionPrefixDoesNotChooseDivergentContinuation(t *testing.T) {
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1)`, variant.SessionID).Scan(&exists))
 		assert.True(t, exists)
 	}
+}
+
+func seedLegacyRawReviewCapture(t *testing.T, f projectionFixture, sessionID string) (rawderive.ParsedManifest, string) {
+	t.Helper()
+	ctx := t.Context()
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	outcome := projectionOutcome(prompt)
+	outcome.Outcome.Results[0].Result.Session.ID = sessionID
+	outcome.Outcome.Results[0].Result.Session.SourceSessionID = sessionID
+	outcome.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
+	outcome.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
+	outcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+
+	m, _ := f.accept(t, "device-a", "legacy-capture", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, outcome))
+
+	var groupID, currentID string
+	var currentPayload []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT r.group_id, r.session_id, r.payload
+		 FROM raw_session_branches b
+		 JOIN raw_content_revisions r ON r.session_id = b.captured_session_id
+		 WHERE b.member_id = $1`, sessionID,
+	).Scan(&groupID, &currentID, &currentPayload))
+
+	prepared, err := decodeRawPayload(currentPayload)
+	require.NoError(t, err)
+	prepared.Session.IsAutomated = false
+	prepared.Session.RelationshipType = string(parser.RelSubagent)
+
+	// Encode without a trailing rawRelationshipProvenance record to match a
+	// capture stored before this upgrade.
+	var legacyBuf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&legacyBuf).Encode(prepared))
+	legacyRev, err := rawContentRevision(prepared)
+	require.NoError(t, err)
+	legacyID := "raw-row-" + rawDigest("row-v1", groupID, legacyRev)
+	require.NotEqual(t, currentID, legacyID)
+
+	_, err = f.runtime.ExecContext(ctx,
+		`INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4)`,
+		legacyID, groupID, legacyRev, legacyBuf.Bytes(),
+	)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_session_branches SET session_id=$1, captured_session_id=$1, content_revision=$2 WHERE member_id=$3`,
+		legacyID, legacyRev, sessionID,
+	)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE session_sources SET session_id=$1, physical_session_id=NULL, content_revision=$2 WHERE physical_session_id=$3`,
+		legacyID, legacyRev, currentID,
+	)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx, `DELETE FROM sessions WHERE id=$1`, currentID)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx, `DELETE FROM raw_content_revisions WHERE session_id=$1`, currentID)
+	require.NoError(t, err)
+	return outcome, legacyID
+}
+
+func TestRawProjectionUpgradeIdenticalHeadlessReviewResolvesUniquely(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	outcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-unique")
+
+	b, _ := f.accept(t, "device-b", "upgraded-capture", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, outcome))
+
+	resolved, err := f.sink.Resolve(ctx, "review-unique")
+	require.NoError(t, err)
+	assert.Equal(t, RawIdentityUnique, resolved.State, "identical pre- and post-upgrade captures must resolve to one public session")
+	assert.NotEqual(t, legacyID, resolved.SessionID, "selected revision should be the post-upgrade capture")
+
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(ctx, "review-unique")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.IsAutomated)
+	assert.Empty(t, got.RelationshipType)
+
+	var branchCount, distinctCaptured, distinctSelected int
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT count(*), count(DISTINCT captured_session_id), count(DISTINCT session_id)
+		 FROM raw_session_branches WHERE member_id=$1 AND active`, "review-unique",
+	).Scan(&branchCount, &distinctCaptured, &distinctSelected))
+	assert.Equal(t, 2, branchCount)
+	assert.Equal(t, 2, distinctCaptured, "each source retains its original captured revision")
+	assert.Equal(t, 1, distinctSelected, "both branches converge on one selected revision")
+}
+
+func TestRawProjectionWithdrawalRestoresLegacyAutomatedReview(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	shortOutcome, legacyID := seedLegacyRawReviewCapture(t, f, "review-restore")
+
+	longOutcome := shortOutcome
+	longMessages := append([]parser.ParsedMessage(nil), shortOutcome.Outcome.Results[0].Result.Messages...)
+	longMessages = append(longMessages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Check error paths too."},
+		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "Checked."},
+	)
+	longOutcome.Outcome.Results = []parser.ParseResultOutcome{{Result: shortOutcome.Outcome.Results[0].Result}}
+	longOutcome.Outcome.Results[0].Result.Messages = longMessages
+
+	b, accepted := f.accept(t, "device-b", "longer-capture", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, longOutcome))
+
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(ctx, "review-restore")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.IsAutomated)
+	assert.Equal(t, "subagent", got.RelationshipType)
+
+	// Withdrawing the longer capture restores device-a's legacy one-turn review
+	// directly from raw_content_revisions, which must re-evaluate automation.
+	b, _ = f.accept(t, "device-b", "withdrawn", accepted.Receipt, parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, b), b, rawderive.ParsedManifest{
+		Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true},
+	}))
+
+	resolved, err := f.sink.Resolve(ctx, "review-restore")
+	require.NoError(t, err)
+	assert.Equal(t, RawIdentityUnique, resolved.State)
+	assert.Equal(t, legacyID, resolved.SessionID)
+
+	got, err = h.GetSessionFull(ctx, "review-restore")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.IsAutomated, "restored legacy review must be marked automated")
+	assert.Empty(t, got.RelationshipType, "restored legacy review must not stay under Subagents")
 }

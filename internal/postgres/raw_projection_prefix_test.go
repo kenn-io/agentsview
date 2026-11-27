@@ -154,3 +154,160 @@ func TestRawTranscriptPrefixMatchesAutomatedHeadlessContinuation(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, matches, "genuine parser relationship conflicts must still reject prefix matching")
 }
+
+func TestRawTranscriptPrefixMergesEqualLengthAutomatedUpgrade(t *testing.T) {
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	base := func(isAutomated bool, rel string, recordProvenance bool) ingest.PreparedSession {
+		p := ingest.PreparedSession{
+			Session: db.Session{
+				ID: "review-1", Agent: "claude", Entrypoint: "sdk-cli",
+				FirstMessage: &prompt, RelationshipType: rel, IsAutomated: isAutomated,
+				EndedAt:      new("2026-11-27T01:00:00Z"),
+				MessageCount: 2, UserMessageCount: 1,
+			},
+			Messages: []db.Message{
+				{Ordinal: 0, Role: "user", Content: prompt},
+				{Ordinal: 1, Role: "assistant", Content: "No findings."},
+			},
+			SessionTotal: &db.SessionUsageTotal{
+				Source: "claude-cost-state", SubagentScope: "included",
+				Cost: &money.Money{Microdollars: 42},
+				Models: []db.SessionUsageTotalModel{{
+					Model: "claude-sonnet", InputTokens: 100, OutputTokens: 20,
+				}},
+			},
+		}
+		if recordProvenance {
+			p.Session.RecordParserRelationship()
+			p.Session.RelationshipType = db.SessionRelationship(p.Session)
+		}
+		return p
+	}
+
+	legacyBytes, err := encodeRawPayload(base(false, "subagent", false))
+	require.NoError(t, err)
+	legacy, err := decodeRawPayload(legacyBytes)
+	require.NoError(t, err)
+
+	legacyAutomatedBytes, err := encodeRawPayload(base(true, "subagent", false))
+	require.NoError(t, err)
+	legacyAutomated, err := decodeRawPayload(legacyAutomatedBytes)
+	require.NoError(t, err)
+
+	upgraded := base(true, "subagent", true)
+	require.Empty(t, upgraded.Session.RelationshipType)
+
+	// Both pre-upgrade forms merge into the upgraded normalized capture in one direction only.
+	for _, tc := range []struct {
+		name string
+		old  ingest.PreparedSession
+	}{
+		{"legacy non-automated subagent", legacy},
+		{"legacy automated subagent", legacyAutomated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := rawTranscriptPrefix(tc.old, upgraded)
+			require.NoError(t, err)
+			assert.True(t, matches)
+			reverse, err := rawTranscriptPrefix(upgraded, tc.old)
+			require.NoError(t, err)
+			assert.False(t, reverse)
+		})
+	}
+
+	// Genuine equal-length conflicts stay separate even when automation rank increases.
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ingest.PreparedSession)
+	}{
+		{"changed message", func(p *ingest.PreparedSession) { p.Messages[1].Content = "Different reply." }},
+		{"changed ended_at", func(p *ingest.PreparedSession) { p.Session.EndedAt = new("2026-11-27T02:00:00Z") }},
+		{"different total model with same cost and tokens", func(p *ingest.PreparedSession) {
+			p.SessionTotal.Models[0].Model = "claude-opus"
+		}},
+		{"different plan usage", func(p *ingest.PreparedSession) {
+			p.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(5.0)}
+		}},
+		{"parser relationship conflict", func(p *ingest.PreparedSession) {
+			p.Session.RestoreRelationshipProvenance("fork", false)
+		}},
+	} {
+		t.Run("conflict/"+tc.name, func(t *testing.T) {
+			cand := base(true, "subagent", true)
+			tc.mutate(&cand)
+			matches, err := rawTranscriptPrefix(legacy, cand)
+			require.NoError(t, err)
+			assert.False(t, matches)
+		})
+	}
+}
+
+func TestRefreshRawSessionAutomation(t *testing.T) {
+	reviewPrompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	humanPrompt := "Fix the nil check in raw_projection_rows.go."
+	for _, tc := range []struct {
+		name      string
+		session   db.Session
+		messages  []db.Message
+		usageOnly bool
+		want      bool
+	}{
+		{
+			name: "reclassifies legacy one-turn review prompt",
+			session: db.Session{
+				Entrypoint: "sdk-cli", FirstMessage: &reviewPrompt,
+				UserMessageCount: 1, IsAutomated: false,
+			},
+			messages: []db.Message{{Ordinal: 0, Role: "user", Content: reviewPrompt}},
+			want:     true,
+		},
+		{
+			name: "keeps two-turn review non-automated",
+			session: db.Session{
+				Entrypoint: "sdk-cli", FirstMessage: &reviewPrompt,
+				UserMessageCount: 2, IsAutomated: false,
+			},
+			messages: []db.Message{
+				{Ordinal: 0, Role: "user", Content: reviewPrompt},
+				{Ordinal: 1, Role: "user", Content: "Also check tests."},
+			},
+			want: false,
+		},
+		{
+			name: "keeps interactive prompt non-automated",
+			session: db.Session{
+				Entrypoint: "sdk-cli", FirstMessage: &humanPrompt,
+				UserMessageCount: 1, IsAutomated: false,
+			},
+			messages: []db.Message{{Ordinal: 0, Role: "user", Content: humanPrompt}},
+			want:     false,
+		},
+		{
+			name: "preserves prompt-based automation in usage-only mode",
+			session: db.Session{
+				Entrypoint: "sdk-cli", UserMessageCount: 1, IsAutomated: true,
+			},
+			usageOnly: true,
+			want:      true,
+		},
+		{
+			name: "preserves prompt-based automation when saved payload discarded prompts",
+			session: db.Session{
+				Entrypoint: "sdk-cli", UserMessageCount: 1, IsAutomated: true,
+			},
+			want: true,
+		},
+		{
+			name: "detects metadata automation even in usage-only mode",
+			session: db.Session{
+				SessionKind: "roborev", UserMessageCount: 1, IsAutomated: false,
+			},
+			usageOnly: true,
+			want:      true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, refreshRawSessionAutomation(tc.session, tc.messages, tc.usageOnly))
+		})
+	}
+}
