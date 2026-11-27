@@ -293,6 +293,7 @@
   "message_content_role_teammate": "Komanda yoldaşı",
   "message_content_role_user": "İstifadəçi",
   "message_content_copy_message": "Mesajı kopyala",
+  "message_content_copy_link": "Mesajın keçidini kopyala",
   "message_content_copied_message": "Mesaj kopyalandı",
   "message_content_copied": "Kopyalandı!",
   "message_content_code_collapsed_with_language": "Kod bloku yığılıb · {language} · genişləndir",

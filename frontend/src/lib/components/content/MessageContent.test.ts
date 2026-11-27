@@ -150,6 +150,13 @@ beforeEach(() => {
   forkMock.mockReset();
   setLocale("en");
 });
+
+it("copies a link to the message and confirms the copy", async () => {
+  await render(message({ session_id: "session-1", ordinal: 7 }));
+  await click('[aria-label="Copy link to message"]');
+  expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+  expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
+});
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.replaceChildren();

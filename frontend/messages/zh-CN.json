@@ -285,6 +285,7 @@
   "message_content_role_teammate": "队友",
   "message_content_role_user": "用户",
   "message_content_copy_message": "复制消息",
+  "message_content_copy_link": "复制消息链接",
   "message_content_copied_message": "消息已复制",
   "message_content_copied": "已复制！",
   "message_content_code_collapsed_with_language": "代码块已折叠 · {language} · 展开",
