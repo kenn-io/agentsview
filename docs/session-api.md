@@ -560,6 +560,29 @@ temporary prompt and runs `claude < prompt` from the resolved session working
 directory. Message-point forks work only for Claude, require `fork_session`,
 reject `opener_id`, and return `404` if the ordinal is not present.
 
+For a CodeBuddy session, an `opener_id` of `codebuddy-ide` or
+`codebuddy-ide-insiders` asks that IDE to open its own record of the
+conversation instead of running the command. AgentsView waits up to 10 seconds
+for the system URL launcher to hand the link to the IDE. If the IDE has no
+record of the conversation, or the launcher fails or does not finish in time,
+the response has `launched: false` and an `error` of
+`ide_conversation_unavailable` or `desktop_launch_failed`.
+
+A copied CodeBuddy command selects the home that stores the conversation,
+because the shell it is pasted into may set `CODEBUDDY_CONFIG_DIR`
+differently from the server, such as
+`cd /repo && CODEBUDDY_CONFIG_DIR='/home/me/.codebuddy' codebuddy --resume <id>`.
+On Windows the command sets the variable with
+`Set-Item -Path Env:CODEBUDDY_CONFIG_DIR -Value '<home>' &&` before resuming.
+A terminal AgentsView launches gets the variable in its environment instead,
+so any shell it runs, including a custom PowerShell terminal, starts the CLI
+against that home. On macOS the launched command also names the home,
+because Terminal and iTerm windows opened through AppleScript do not inherit
+the environment. A conversation synced from another machine copies a command
+that names the home on that machine with that machine's separators: the
+PowerShell form for a Windows path, the POSIX form otherwise. Such sessions are
+never launched here.
+
 ______________________________________________________________________
 
 ### The `agentsview://` URL scheme

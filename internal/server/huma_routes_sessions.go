@@ -1002,7 +1002,7 @@ func (s *Server) humaOpenSession(
 	if projectDir == "" {
 		return nil, apiError(http.StatusBadRequest, "session has no project directory")
 	}
-	openers := detectOpeners()
+	openers := detectOpeners(ctx)
 	var opener *Opener
 	for i := range openers {
 		if openers[i].ID == in.Body.OpenerID {
@@ -1870,6 +1870,16 @@ func (s *Server) humaResumeSession(
 			return nil, internalError("resume identity", err)
 		}
 	}
+	if session.Agent == string(parser.AgentCodeBuddy) {
+		// The CLI resumes its runtime session, which an IDE conversation
+		// can name differently from the archive id.
+		runtimeID, ok := codebuddyResumeID(session)
+		if !ok {
+			return nil, apiError(http.StatusBadRequest,
+				"this CodeBuddy session has no CLI session to resume")
+		}
+		rawID = runtimeID
+	}
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")
@@ -1908,13 +1918,35 @@ func (s *Server) humaResumeSession(
 	if session.Agent == "cursor" && workspaceDir != "" {
 		cmd += " --workspace " + shellQuote(workspaceDir)
 	}
-	responseCmd := cmd
+	// pasteCmd is the command the user copies; cmd is what a launched
+	// terminal runs. launchEnv carries settings a launched terminal gets
+	// through its environment, whatever shell it starts.
+	pasteCmd := cmd
+	var launchEnv []string
+	if session.Agent == string(parser.AgentCodeBuddy) {
+		// The command names the home that stores the conversation, since
+		// the shell it runs in may point CODEBUDDY_CONFIG_DIR elsewhere. A
+		// remote host's command is pasted on that host, a POSIX shell like
+		// the cd before it, and that session is never launched here.
+		if home, ok := codebuddyResumeHome(session, host); ok && host != "" {
+			goos := ""
+			if codebuddyRemoteHomeIsWindows(home) {
+				goos = "windows"
+			}
+			pasteCmd = withCodeBuddyHome(cmd, home, goos)
+		} else if ok {
+			pasteCmd = withCodeBuddyHome(cmd, home, runtime.GOOS)
+			launchEnv = codebuddyHomeEnv(home)
+			cmd = codebuddyLaunchCommand(cmd, home, runtime.GOOS)
+		}
+	}
+	responseCmd := pasteCmd
 	switch session.Agent {
-	case "claude", "kiro", "pi":
+	case "claude", "kiro", "pi", "codebuddy":
 		if host != "" {
-			responseCmd = commandWithDir(cmd, launchDir)
+			responseCmd = commandWithDir(pasteCmd, launchDir)
 		} else {
-			responseCmd = commandWithCwd(cmd, launchDir)
+			responseCmd = commandWithCwd(pasteCmd, launchDir)
 		}
 	}
 	if req.CommandOnly {
@@ -1927,7 +1959,7 @@ func (s *Server) humaResumeSession(
 		}, nil
 	}
 	if req.OpenerID != "" {
-		return s.humaResumeWithOpener(ctx, session, rawID, cmd, responseCmd, launchDir, req.OpenerID)
+		return s.humaResumeWithOpener(ctx, session, rawID, cmd, responseCmd, launchDir, req.OpenerID, launchEnv)
 	}
 	s.mu.RLock()
 	termCfg := s.cfg.Terminal
@@ -1967,6 +1999,7 @@ func (s *Server) humaResumeSession(
 	proc.Stdout = nil
 	proc.Stderr = nil
 	proc.Stdin = nil
+	proc.Env = launchEnv
 	if detectCwd != "" {
 		proc.Dir = detectCwd
 	}
@@ -1999,8 +2032,9 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 	responseCmd string,
 	launchDir string,
 	openerID string,
+	launchEnv []string,
 ) (*jsonOutput[resumeResponse], error) {
-	openers := detectOpeners()
+	openers := detectOpeners(ctx)
 	var opener *Opener
 	for i := range openers {
 		if openers[i].ID == openerID {
@@ -2042,6 +2076,9 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			},
 		}, nil
 	}
+	if scheme, ok := codebuddyIDEOpeners[opener.ID]; ok {
+		return s.openCodeBuddyIDEConversation(ctx, session, rawID, scheme, opener.Name, responseCmd, launchDir)
+	}
 	openerCwd := resumeLaunchCwd(
 		session.Agent, opener.ID, runtime.GOOS, launchDir,
 	)
@@ -2059,6 +2096,7 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			},
 		}, nil
 	}
+	proc.Env = launchEnv
 	if err := proc.Start(); err != nil {
 		log.Printf("resume: opener start failed: %v", err)
 		return &jsonOutput[resumeResponse]{
@@ -2079,6 +2117,50 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			Cwd:      launchDir,
 		},
 	}, nil
+}
+
+// openCodeBuddyIDEConversation asks a CodeBuddy IDE build to open the IDE
+// conversation that owns the session's CLI runtime session.
+func (s *Server) openCodeBuddyIDEConversation(ctx context.Context,
+	session *db.Session, runtimeID, scheme, name, responseCmd, launchDir string,
+) (*jsonOutput[resumeResponse], error) {
+	failed := func(code string) (*jsonOutput[resumeResponse], error) {
+		return &jsonOutput[resumeResponse]{Body: resumeResponse{
+			Launched: false, Command: responseCmd, Cwd: launchDir, Error: code,
+		}}, nil
+	}
+	if session.Agent != string(parser.AgentCodeBuddy) || session.FilePath == nil {
+		return nil, apiError(http.StatusBadRequest,
+			"CodeBuddy IDE only opens CodeBuddy sessions")
+	}
+	conversationID, ok, err := parser.CodeBuddyIDEConversationID(ctx, *session.FilePath, runtimeID)
+	if err != nil {
+		log.Printf("resume: CodeBuddy catalog lookup failed: %v", err)
+		return failed("ide_conversation_unavailable")
+	}
+	link := ""
+	if ok {
+		link = codebuddyIDEConversationURL(scheme, conversationID)
+	}
+	if link == "" {
+		return failed("ide_conversation_unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// The launcher hands the link to the IDE and exits; wait for its result
+	// so a failed hand-off is reported. The IDE is a separate process that
+	// belongs to the user, so a canceled request does not stop the launcher
+	// mid-hand-off, and the time limit stops only a stalled launcher.
+	launchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openURLLaunchTimeout)
+	defer cancel()
+	if err := openURLCommand(launchCtx, runtime.GOOS, link).Run(); err != nil {
+		log.Printf("resume: %s launch failed: %v", name, err)
+		return failed("desktop_launch_failed")
+	}
+	return &jsonOutput[resumeResponse]{Body: resumeResponse{
+		Launched: true, Terminal: name, Command: responseCmd, Cwd: launchDir,
+	}}, nil
 }
 
 func (s *Server) humaFileReferences(ctx context.Context, in *idPathInput) (*jsonOutput[service.FileReferencesResult], error) {

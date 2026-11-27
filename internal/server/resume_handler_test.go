@@ -1929,3 +1929,215 @@ func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
 		return err == nil
 	}, time.Second, 5*time.Millisecond)
 }
+
+func TestResumeCodeBuddyUsesRuntimeSession(t *testing.T) {
+	te := setup(t)
+	assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+	cwd := t.TempDir()
+	transcript := filepath.Join(t.TempDir(), "projects", "-work", "conv-1.jsonl")
+	te.seedSession(t, "codebuddy:conv-1", cwd, 2, func(s *db.Session) {
+		s.Agent = "codebuddy"
+		s.Cwd = cwd
+		s.SourceSessionID = "run-77"
+		s.FilePath = &transcript
+	})
+	w := te.post(t, "/api/v1/sessions/codebuddy:conv-1/resume", `{"command_only":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// The command enters the session directory first, in whatever form this
+	// server's copied commands use, then resumes the CLI session.
+	enterDir, _, ok := strings.Cut(resp.Command, "codebuddy --resume run-77")
+	require.True(t, ok, resp.Command)
+	assert.NotEmpty(t, enterDir, "the command enters the session directory")
+	assert.NotContains(t, resp.Command, "conv-1", "the archive id is not a CLI session")
+	assertSamePath(t, "cwd", resp.Cwd, cwd)
+
+	for _, tc := range []struct {
+		name string
+		edit func(*db.Session)
+	}{
+		{"preserved branch", func(s *db.Session) { s.SourceSessionID = "" }},
+		{"side question", func(s *db.Session) { s.SessionKind = "btw" }},
+		{"subagent", func(s *db.Session) {
+			s.RelationshipType = "subagent"
+			s.ParentSessionID = new("codebuddy:conv-1")
+		}},
+		{"4.x manifest", func(s *db.Session) {
+			legacy := filepath.Join(t.TempDir(), "history", "ws", "conv-x", "index.json")
+			s.FilePath = &legacy
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "codebuddy:" + strings.ReplaceAll(tc.name, " ", "-")
+			te.seedSession(t, id, cwd, 2, func(s *db.Session) {
+				s.Agent = "codebuddy"
+				s.SourceSessionID = "run-77"
+				s.FilePath = &transcript
+				tc.edit(s)
+			})
+			w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true}`)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		})
+	}
+}
+
+// TestResumeCodeBuddySelectsTranscriptHome checks that a resumed CodeBuddy
+// conversation runs against the home its transcript lives in, and that a
+// conversation in the home the CLI already uses keeps the plain command.
+func TestResumeCodeBuddySelectsTranscriptHome(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".codebuddy")
+	otherHome := filepath.Join(t.TempDir(), "other home")
+	linkedHome := t.TempDir()
+
+	te := setup(t)
+	assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+	cwd := t.TempDir()
+	selects := func(home string) string {
+		if runtime.GOOS == "windows" {
+			return "Set-Item -Path Env:CODEBUDDY_CONFIG_DIR -Value " +
+				powerShellSingleQuoteForTest(home) + " && "
+		}
+		return "CODEBUDDY_CONFIG_DIR='" + home + "' "
+	}
+	// The command runs in a shell whose environment the server cannot see,
+	// so it names the conversation's home whatever this process inherits.
+	for _, tc := range []struct {
+		name       string
+		configDir  string
+		home       string
+		linkToHome bool
+	}{
+		{name: "default home", home: defaultHome},
+		{name: "symlinked default home", home: linkedHome, linkToHome: true},
+		{name: "inherited home", configDir: otherHome, home: otherHome},
+		{name: "another home", home: otherHome},
+		{name: "default home under another inherited home", configDir: otherHome, home: defaultHome},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.linkToHome {
+				if runtime.GOOS == "windows" {
+					t.Skip("creating a symlink needs extra privileges on Windows")
+				}
+				require.NoError(t, os.Symlink(tc.home, defaultHome))
+				t.Cleanup(func() { _ = os.Remove(defaultHome) })
+			}
+			t.Setenv("CODEBUDDY_CONFIG_DIR", tc.configDir)
+			id := "codebuddy:" + strings.ReplaceAll(tc.name, " ", "-")
+			transcript := filepath.Join(tc.home, "projects", "-work", "conv-1.jsonl")
+			te.seedSession(t, id, cwd, 2, func(s *db.Session) {
+				s.Agent = "codebuddy"
+				s.Cwd = cwd
+				s.SourceSessionID = "run-77"
+				s.FilePath = &transcript
+			})
+			w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true}`)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var resp struct {
+				Command string `json:"command"`
+				Cwd     string `json:"cwd"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assertSamePath(t, "cwd", resp.Cwd, cwd)
+			assert.Equal(t,
+				"cd '"+resp.Cwd+"' && "+selects(tc.home)+"codebuddy --resume run-77",
+				resp.Command)
+		})
+	}
+}
+
+// A launched terminal gets the conversation's home through its environment,
+// so any shell it runs, bash or PowerShell, starts the CLI against that home,
+// and the command it runs is the plain resume command.
+func TestCodeBuddyResumeLaunchSelectsHomeThroughEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX executable script")
+	}
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	t.Setenv("CODEBUDDY_CONFIG_DIR", "")
+	seen := filepath.Join(userHome, "seen")
+	t.Setenv("RESUME_SEEN", seen)
+	binDir := filepath.Join(userHome, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "test-terminal"),
+		[]byte("#!/bin/sh\nprintf '%s\\n%s' \"$CODEBUDDY_CONFIG_DIR\" \"$*\" > \"$RESUME_SEEN\"\n"), 0o755))
+
+	te := setup(t)
+	otherHome := filepath.Join(t.TempDir(), "other home")
+	transcript := filepath.Join(otherHome, "projects", "-work", "conv-1.jsonl")
+	cwd := t.TempDir()
+	te.seedSession(t, "codebuddy:conv-1", cwd, 2, func(s *db.Session) {
+		s.Agent = "codebuddy"
+		s.Cwd = cwd
+		s.SourceSessionID = "run-77"
+		s.FilePath = &transcript
+	})
+	assertStatus(t, te.post(t, "/api/v1/config/terminal",
+		`{"mode":"custom","custom_bin":"~/bin/test-terminal","custom_args":"{cmd}"}`), http.StatusOK)
+	w := te.post(t, "/api/v1/sessions/codebuddy:conv-1/resume", `{}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(seen)
+		return err == nil && len(data) > 0
+	}, 5*time.Second, 10*time.Millisecond)
+	data, err := os.ReadFile(seen)
+	require.NoError(t, err)
+	env, args, _ := strings.Cut(string(data), "\n")
+	assert.Equal(t, otherHome, env, "the terminal's environment names the home")
+	want := "codebuddy --resume run-77"
+	if runtime.GOOS == "darwin" {
+		// macOS launchers run a POSIX shell, and AppleScript windows do not
+		// inherit the environment, so the command names the home too.
+		want = "CODEBUDDY_CONFIG_DIR='" + otherHome + "' " + want
+	}
+	assert.Equal(t, want, args)
+}
+
+// A conversation synced from another machine copies a command that names the
+// home on that machine, with the host prefix dropped from the stored path, in
+// the POSIX form that machine's cd uses.
+func TestResumeRemoteCodeBuddyNamesSourceHome(t *testing.T) {
+	te := setup(t)
+	assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+	remoteHome := "/home/user/.codebuddy-work"
+	te.seedSession(t, "devbox1~codebuddy:conv-1", "remote-project", 2, func(s *db.Session) {
+		s.Agent = "codebuddy"
+		s.Cwd = "/home/user/project"
+		s.SourceSessionID = "run-77"
+		stored := "devbox1:" + remoteHome + "/projects/-home-user-project/conv-1.jsonl"
+		s.FilePath = &stored
+	})
+	w := te.post(t, "/api/v1/sessions/devbox1~codebuddy:conv-1/resume", `{"command_only":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Command string `json:"command"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t,
+		"cd '/home/user/project' && CODEBUDDY_CONFIG_DIR='"+remoteHome+"' codebuddy --resume run-77",
+		resp.Command)
+
+	// A Windows machine's conversation copies the PowerShell form with its
+	// own separators.
+	winHome := `C:\Users\u\.codebuddy-work`
+	te.seedSession(t, "winbox~codebuddy:conv-2", "remote-project", 2, func(s *db.Session) {
+		s.Agent = "codebuddy"
+		s.Cwd = `C:\work`
+		s.SourceSessionID = "run-88"
+		stored := "winbox:" + winHome + `\projects\C--work\conv-2.jsonl`
+		s.FilePath = &stored
+	})
+	w = te.post(t, "/api/v1/sessions/winbox~codebuddy:conv-2/resume", `{"command_only":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.Command,
+		"Set-Item -Path Env:CODEBUDDY_CONFIG_DIR -Value '"+winHome+"' && codebuddy --resume run-88")
+}

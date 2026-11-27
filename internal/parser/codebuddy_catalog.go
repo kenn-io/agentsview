@@ -505,6 +505,16 @@ func CodeBuddyCatalogForProjects(projectsRoot string) string {
 	return codebuddyCatalogPathForProjects(projectsRoot)
 }
 
+// CodeBuddyHomeForTranscript returns the CodeBuddy home that holds a CLI or
+// IDE 5.x transcript: the directory above its projects folder.
+func CodeBuddyHomeForTranscript(transcriptPath string) (string, bool) {
+	root, ok := codebuddyCBCRootFromPath(transcriptPath)
+	if !ok || filepath.Base(root) != "projects" {
+		return "", false
+	}
+	return filepath.Dir(root), true
+}
+
 // CodeBuddyIDEConversationID returns the IDE conversation id that owns a CLI
 // runtime session, read from the catalog beside the transcript. ok is false
 // when the transcript has no catalog or the catalog has no local row for the

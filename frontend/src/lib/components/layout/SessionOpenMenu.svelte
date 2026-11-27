@@ -154,6 +154,21 @@
             <span class="open-menu-name">Claude Desktop</span>
           </button>
         {/if}
+        {#if openers.canLaunch && openers.codebuddyIDEOpeners.length > 0}
+          <div class="open-menu-divider"></div>
+          {#each openers.codebuddyIDEOpeners as ide (ide.id)}
+            <button
+              class="open-menu-item"
+              data-testid={`open-${ide.id}`}
+              onclick={() => openers.resumeIn(ide)}
+            >
+              <span class="open-menu-num">
+                <CirclePlayIcon size="14" aria-hidden="true" />
+              </span>
+              <span class="open-menu-name">{m.session_breadcrumb_open_in_codebuddy_ide({ app: ide.name })}</span>
+            </button>
+          {/each}
+        {/if}
       </div>
     {/if}
   </span>

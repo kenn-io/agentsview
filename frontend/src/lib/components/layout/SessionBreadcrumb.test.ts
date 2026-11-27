@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { dismissFlash, getFlashMessage } from "@kenn-io/kit-ui";
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount as mountComponent, unmount as unmountComponent, tick } from "svelte";
 import { createClassComponent as createLegacyComponent } from "svelte/legacy";
@@ -1026,6 +1027,118 @@ describe("SessionBreadcrumb", () => {
 
     unmount(component);
     messages.clear();
+  });
+
+  describe("CodeBuddy IDE openers", () => {
+    const ide = {
+      id: "codebuddy-ide",
+      name: "CodeBuddy CN",
+      kind: "action",
+      bin: "/opt/bin/buddycn",
+    };
+    const terminal = { id: "test-terminal", name: "Test Terminal", kind: "terminal", bin: "kitty" };
+
+    afterEach(() => dismissFlash());
+
+    async function clickOpener(label: string) {
+      openersService.getApiV1Openers.mockResolvedValue({ openers: [terminal, ide] });
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("codebuddy", {
+            id: "codebuddy:conv-1",
+            source_session_id: "run-77",
+          }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => expect(openersService.getApiV1Openers).toHaveBeenCalled());
+      await flushPromises();
+      document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+      await tick();
+      const item = Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item")).find(
+        (button) => button.textContent?.includes(label),
+      );
+      expect(item, label).toBeTruthy();
+      item!.click();
+    }
+
+    it("explains an IDE without the conversation instead of copying the command", async () => {
+      sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
+        launched: false,
+        command: "cd '/work/demo' && codebuddy --resume run-77",
+        cwd: "/work/demo",
+        error: "ide_conversation_unavailable",
+      });
+
+      await clickOpener("Open in CodeBuddy CN");
+
+      await vi.waitFor(() => {
+        expect(getFlashMessage()).toBe(
+          "CodeBuddy CN has no record of this conversation on this computer. Continue it in a terminal.",
+        );
+      });
+      const button = document.querySelector<HTMLButtonElement>(".resume-btn")!;
+      expect(button.textContent?.trim()).toBe("Failed to open");
+      expect(button.classList.contains("has-feedback-error")).toBe(true);
+      expect(copyToClipboard).not.toHaveBeenCalled();
+      expect(sessionsService.postApiV1SessionsByIdResume).toHaveBeenCalledWith(
+        { id: "codebuddy:conv-1" },
+        { opener_id: "codebuddy-ide" },
+      );
+    });
+
+    it("says the IDE could not launch without copying the command", async () => {
+      sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
+        launched: false,
+        command: "codebuddy --resume run-77",
+        error: "desktop_launch_failed",
+      });
+
+      await clickOpener("Open in CodeBuddy CN");
+
+      await vi.waitFor(() => {
+        expect(getFlashMessage()).toBe("Couldn't launch CodeBuddy CN to open this conversation.");
+      });
+      expect(copyToClipboard).not.toHaveBeenCalled();
+    });
+
+    it("reports a launched IDE", async () => {
+      sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
+        launched: true,
+        terminal: "CodeBuddy CN",
+        command: "codebuddy --resume run-77",
+      });
+
+      await clickOpener("Open in CodeBuddy CN");
+
+      await vi.waitFor(() => {
+        const button = document.querySelector<HTMLButtonElement>(".resume-btn")!;
+        expect(button.textContent?.trim()).toBe("Resumed in CodeBuddy CN");
+        expect(button.classList.contains("has-feedback-success")).toBe(true);
+      });
+      expect(getFlashMessage()).toBeNull();
+      expect(copyToClipboard).not.toHaveBeenCalled();
+    });
+
+    it("still copies the command when a terminal fails to launch", async () => {
+      sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
+        launched: false,
+        command: "cd '/work/demo' && codebuddy --resume run-77",
+        cwd: "/work/demo",
+        error: "terminal_launch_failed",
+      });
+
+      await clickOpener("Test Terminal");
+
+      await vi.waitFor(() => {
+        expect(copyToClipboard).toHaveBeenCalledWith(
+          "cd '/work/demo' && codebuddy --resume run-77",
+        );
+      });
+      expect(document.querySelector(".resume-btn")?.textContent?.trim()).toBe("Command copied!");
+      expect(getFlashMessage()).toBeNull();
+    });
   });
 
   it("offers a Codex Desktop deep link for a local terminal-created session", async () => {

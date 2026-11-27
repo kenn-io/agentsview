@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/google/shlex"
@@ -59,6 +61,7 @@ var resumeAgents = map[string]string{
 	"amp":              "amp --resume %s",
 	"kiro":             "kiro-cli chat --resume-id %s",
 	"pi":               "pi --session %s",
+	"codebuddy":        "codebuddy --resume %s",
 }
 
 const syntheticModel = "<synthetic>"
@@ -887,4 +890,139 @@ func launchClaudeDesktop(ctx context.Context, sessionID string, cwd string) *exe
 		u += "&cwd=" + url.QueryEscape(cwd)
 	}
 	return exec.CommandContext(ctx, "open", u)
+}
+
+// codebuddyResumeID returns the CLI runtime session a CodeBuddy session
+// resumes. A CLI or IDE 5.x conversation, including one the IDE forked, has
+// one; preserved branches, side questions, subagents, and unconverted 4.x
+// manifests do not.
+func codebuddyResumeID(session *db.Session) (string, bool) {
+	if session.RelationshipType == "subagent" || session.SessionKind != "" ||
+		session.SourceSessionID == "" || session.FilePath == nil ||
+		!strings.HasSuffix(*session.FilePath, ".jsonl") {
+		return "", false
+	}
+	return session.SourceSessionID, true
+}
+
+// codebuddyResumeHome returns the CodeBuddy home a session's transcript
+// lives in, which the resume command selects. The command runs in a
+// terminal or a pasted shell whose CODEBUDDY_CONFIG_DIR this server cannot
+// see, so it always names the home. A remote session's stored path carries
+// its host prefix, which is dropped, so the home is the one on that host.
+// ok is false when the transcript is not in a CodeBuddy home.
+func codebuddyResumeHome(session *db.Session, host string) (string, bool) {
+	if session.FilePath == nil {
+		return "", false
+	}
+	path := *session.FilePath
+	if host != "" {
+		return codebuddyRemoteHome(strings.TrimPrefix(path, host+":"))
+	}
+	return parser.CodeBuddyHomeForTranscript(path)
+}
+
+// codebuddyRemoteHome returns the CodeBuddy home of a transcript path from
+// another machine, <home>/projects/<project>/<id>.jsonl or a subagent's
+// <home>/projects/<project>/<id>/subagents/<agent>.jsonl, keeping that
+// machine's separators, since this server's path rules may differ.
+func codebuddyRemoteHome(path string) (string, bool) {
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
+	for _, depth := range []int{4, 2} {
+		i := len(parts) - depth - 1
+		if i < 1 || parts[i] != "projects" || !strings.HasSuffix(parts[len(parts)-1], ".jsonl") ||
+			(depth == 4 && parts[len(parts)-2] != "subagents") {
+			continue
+		}
+		// Cut the original path before its projects component.
+		end := len(path)
+		for range depth + 1 {
+			end = strings.LastIndexAny(path[:end], "/\\")
+			if end < 0 {
+				return "", false
+			}
+		}
+		return path[:end], end > 0
+	}
+	return "", false
+}
+
+// codebuddyRemoteHomeIsWindows reports whether a remote home is a Windows
+// path, whose copied command is pasted into PowerShell.
+func codebuddyRemoteHomeIsWindows(home string) bool {
+	return strings.Contains(home, "\\") ||
+		(len(home) >= 2 && home[1] == ':' && (home[0]|0x20) >= 'a' && (home[0]|0x20) <= 'z')
+}
+
+// withCodeBuddyHome makes a CodeBuddy command run against home. POSIX
+// shells take an environment assignment for that one command. Commands
+// pasted on Windows run in PowerShell 7, where an assignment cannot follow
+// the leading "cd ... &&", so they set the variable with Set-Item.
+func withCodeBuddyHome(cmd, home, goos string) string {
+	if goos == "windows" {
+		return "Set-Item -Path Env:CODEBUDDY_CONFIG_DIR -Value " +
+			shellquote.PowerShell(home) + " && " + cmd
+	}
+	return "CODEBUDDY_CONFIG_DIR=" + shellQuote(home) + " " + cmd
+}
+
+// codebuddyHomeEnv returns the environment a launched terminal gets so the
+// CodeBuddy CLI it starts reads home. Setting the variable on the process
+// works whatever shell the terminal runs, bash or PowerShell, and the
+// command stays the plain codebuddy --resume. nil keeps the server's own
+// environment, which exec uses when Env is nil.
+func codebuddyHomeEnv(home string) []string {
+	return append(os.Environ(), "CODEBUDDY_CONFIG_DIR="+home)
+}
+
+// codebuddyLaunchCommand returns the command a launched terminal runs. On
+// macOS, Terminal and iTerm start through AppleScript, whose new window does
+// not inherit the process environment, and every macOS launcher runs a
+// POSIX shell, so the command itself selects home there too. Elsewhere the
+// terminal's environment carries the home, which works for any shell,
+// including a custom PowerShell terminal, and the command stays plain.
+func codebuddyLaunchCommand(cmd, home, goos string) string {
+	if goos == "darwin" {
+		return withCodeBuddyHome(cmd, home, goos)
+	}
+	return cmd
+}
+
+// codebuddyIDEOpeners pairs each CodeBuddy IDE opener with its URL scheme.
+var codebuddyIDEOpeners = map[string]string{
+	"codebuddy-ide":          "codebuddycn",
+	"codebuddy-ide-insiders": "codebuddycn-insiders",
+}
+
+// codebuddyConversationIDPattern is the conversation id the IDE accepts in a
+// conversation link.
+var codebuddyConversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// codebuddyIDEConversationURL builds the IDE's link that opens one stored
+// conversation, or "" when the id is not one the IDE accepts.
+func codebuddyIDEConversationURL(scheme, conversationID string) string {
+	if !codebuddyConversationIDPattern.MatchString(conversationID) {
+		return ""
+	}
+	return scheme + "://codebuddy-ide/conversation/open?id=" + conversationID
+}
+
+// openURLLaunchTimeout bounds how long a request waits for the system URL
+// launcher. open, xdg-open, and rundll32 hand the link to the app that
+// handles it and exit, so a launcher still running after this has stalled.
+// The app it started is a separate process and keeps running. Tests shorten
+// it.
+var openURLLaunchTimeout = 10 * time.Second
+
+// openURLCommand opens a URL with the platform's default handler. Tests
+// replace it with a fake launcher.
+var openURLCommand = func(ctx context.Context, goos, link string) *exec.Cmd {
+	switch goos {
+	case "darwin":
+		return exec.CommandContext(ctx, "open", link)
+	case "windows":
+		return exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", link)
+	default:
+		return exec.CommandContext(ctx, "xdg-open", link)
+	}
 }

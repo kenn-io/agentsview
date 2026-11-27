@@ -58,6 +58,12 @@ var openerCandidates = []openerCandidate{
 	{"xfce4-terminal", "Xfce Terminal", "terminal", []string{"xfce4-terminal"}, ""},
 	{"tilix", "Tilix", "terminal", []string{"tilix"}, ""},
 	{"xterm", "xterm", "terminal", []string{"xterm"}, ""},
+
+	// CodeBuddy IDE builds open a stored conversation through their URL
+	// scheme. Their launchers install as buddycn and buddycn-insiders; on
+	// xdg platforms findOpeners also requires a handler for the scheme.
+	{"codebuddy-ide", "CodeBuddy CN", "action", []string{"buddycn"}, ""},
+	{"codebuddy-ide-insiders", "CodeBuddy CN Insiders", "action", []string{"buddycn-insiders"}, ""},
 }
 
 // macOS-specific candidates.
@@ -75,6 +81,11 @@ var darwinOpenerCandidates = []openerCandidate{
 	// Claude Desktop — detected via app bundle. Uses claude:// URL
 	// scheme for session handoff rather than terminal launch.
 	{"claude-desktop", "Claude Desktop", "action", nil, "/Applications/Claude.app"},
+
+	// CodeBuddy IDE builds open a stored conversation through their URL
+	// scheme rather than a terminal.
+	{"codebuddy-ide", "CodeBuddy CN", "action", []string{"buddycn"}, "/Applications/CodeBuddy CN.app"},
+	{"codebuddy-ide-insiders", "CodeBuddy CN Insiders", "action", []string{"buddycn-insiders"}, "/Applications/CodeBuddy CN Insiders.app"},
 
 	// Terminals — Ghostty, iTerm2, kitty, and Terminal.app are macOS
 	// GUI apps; detect via app bundle first, fall back to PATH binary
@@ -98,7 +109,11 @@ var (
 	openerCacheTTL = 60 * time.Second
 )
 
-func detectOpeners() []Opener {
+// schemeHandlerTimeout bounds one xdg-mime query, so a stuck desktop
+// helper cannot hold the opener list.
+const schemeHandlerTimeout = 2 * time.Second
+
+func detectOpeners(ctx context.Context) []Opener {
 	openerCacheMu.Lock()
 	defer openerCacheMu.Unlock()
 
@@ -106,8 +121,32 @@ func detectOpeners() []Opener {
 		return openerCache
 	}
 
+	result := findOpeners(ctx, runtime.GOOS, openerProbe{
+		lookPath:      exec.LookPath,
+		stat:          os.Stat,
+		schemeHandler: xdgSchemeHandlerRegistered,
+	})
+	// A canceled request may have cut a handler query short; let the next
+	// caller detect again instead of caching the shorter list.
+	if ctx.Err() != nil {
+		return result
+	}
+	openerCache = result
+	openerCacheAt = time.Now()
+	return result
+}
+
+// openerProbe answers what the host has installed.
+type openerProbe struct {
+	lookPath      func(file string) (string, error)
+	stat          func(name string) (os.FileInfo, error)
+	schemeHandler func(ctx context.Context, scheme string) bool
+}
+
+// findOpeners lists the candidates for goos that the host can launch.
+func findOpeners(ctx context.Context, goos string, probe openerProbe) []Opener {
 	candidates := openerCandidates
-	if runtime.GOOS == "darwin" {
+	if goos == "darwin" {
 		candidates = darwinOpenerCandidates
 	}
 
@@ -115,7 +154,7 @@ func detectOpeners() []Opener {
 	for _, c := range candidates {
 		// Try app bundle path first (macOS GUI apps).
 		if c.appPath != "" {
-			if _, err := os.Stat(c.appPath); err == nil {
+			if _, err := probe.stat(c.appPath); err == nil {
 				result = append(result, Opener{
 					ID:   c.id,
 					Name: c.name,
@@ -126,24 +165,50 @@ func detectOpeners() []Opener {
 			}
 		}
 		// Fall back to PATH-based binary detection.
+		path := ""
 		for _, bin := range c.bins {
-			path, err := exec.LookPath(bin)
-			if err != nil {
-				continue
+			if found, err := probe.lookPath(bin); err == nil {
+				path = found
+				break
 			}
-			result = append(result, Opener{
-				ID:   c.id,
-				Name: c.name,
-				Kind: c.kind,
-				Bin:  path,
-			})
-			break // found one binary for this candidate
 		}
+		if path == "" {
+			continue
+		}
+		// xdg-open opens a CodeBuddy link only through a registered handler.
+		// On a host the IDE reaches over SSH, buddycn is the IDE remote
+		// server's command and nothing handles the scheme.
+		if scheme, ok := codebuddyIDEOpeners[c.id]; ok &&
+			goos != "darwin" && goos != "windows" &&
+			!probe.schemeHandler(ctx, scheme) {
+			continue
+		}
+		result = append(result, Opener{
+			ID:   c.id,
+			Name: c.name,
+			Kind: c.kind,
+			Bin:  path,
+		})
 	}
-
-	openerCache = result
-	openerCacheAt = time.Now()
 	return result
+}
+
+// xdgSchemeHandlerRegistered reports whether xdg-open has a desktop entry
+// for links with the scheme. xdg-mime ships with xdg-open in xdg-utils and
+// reads the same mimeapps.list and mimeinfo.cache defaults.
+func xdgSchemeHandlerRegistered(ctx context.Context, scheme string) bool {
+	ctx, cancel := context.WithTimeout(ctx, schemeHandlerTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "xdg-mime", "query", "default",
+		"x-scheme-handler/"+scheme)
+	// xdg-mime is a shell script; a helper it starts may keep stdout open
+	// after the script is killed.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(strings.TrimSpace(string(out)), ".desktop")
 }
 
 type openRequest struct {

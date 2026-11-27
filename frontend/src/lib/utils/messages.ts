@@ -44,6 +44,9 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "task_notification",
   "stop_hook",
   "peer_message",
+  "api_error",
+  "content_filter",
+  "discussion_anchor",
   ...HOOK_SUBTYPES,
 ]);
 
