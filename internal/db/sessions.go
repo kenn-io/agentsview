@@ -1790,23 +1790,18 @@ func SessionRelationshipInferred(s Session) bool {
 	return relationshipInferred(s, ParserSessionRelationship(s))
 }
 
-func isNativeClaudeSubagentID(id string) bool {
-	if strings.HasPrefix(id, "agent-") {
-		return true
-	}
-	_, native, ok := strings.Cut(id, "~")
-	return ok && strings.HasPrefix(native, "agent-")
-}
-
 // relationshipInferred treats RelationshipType as the parser's relationship
 // before parentless promotion. Claude marks headless SDK runs as subagents
 // itself, so every parentless sdk-cli subagent is inferred; a non-interactive
 // session is inferred only when the parser had no explicit subagent marker.
 func relationshipInferred(s Session, parserRel string) bool {
+	_, rawID := parser.StripHostPrefix(s.ID)
+	_, rawSourceID := parser.StripHostPrefix(s.SourceSessionID)
 	if parserRel != string(parser.RelSubagent) ||
 		(s.ParentSessionID != nil && *s.ParentSessionID != "") ||
 		(s.ParserParentSessionID != nil && *s.ParserParentSessionID != "") ||
-		isNativeClaudeSubagentID(s.ID) {
+		strings.HasPrefix(rawID, "agent-") ||
+		strings.HasPrefix(rawSourceID, "agent-") {
 		return false
 	}
 	if s.Entrypoint == "sdk-cli" {

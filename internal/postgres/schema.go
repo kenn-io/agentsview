@@ -2355,7 +2355,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT source_display_name, source_deleted_at, deletion_cause, source_trash_includes_codex_pages, owner_marker, external_parent_session_id
+		`SELECT source_display_name, source_deleted_at, deletion_cause, source_trash_includes_codex_pages, owner_marker, external_parent_session_id, parser_relationship_type, relationship_inferred, spawn_linked
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

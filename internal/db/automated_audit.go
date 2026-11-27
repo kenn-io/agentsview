@@ -28,7 +28,8 @@ const parserRelationshipSQL = `COALESCE(sessions.parser_relationship_type, ` + p
 // every Grok source, and a legacy Grok worker stays a subagent as it did
 // before automated headless runs were cleared.
 const legacyRelationshipInferredSQL = `COALESCE(parser_parent_session_id, '') = ''
- AND CASE WHEN instr(id, '~') > 0 THEN substr(id, instr(id, '~') + 1, 6) ELSE substr(id, 1, 6) END <> 'agent-'
+ AND substr(id, instr(id, '~') + 1, 6) <> 'agent-'
+ AND substr(COALESCE(source_session_id, ''), instr(COALESCE(source_session_id, ''), '~') + 1, 6) <> 'agent-'
  AND COALESCE(parser_relationship_type,
 	IIF(COALESCE(relationship_type, '') = '' AND session_kind = 'non-interactive', 'subagent', relationship_type)) = 'subagent'
  AND (entrypoint = 'sdk-cli' OR (session_kind = 'non-interactive' AND agent <> 'grok'))`

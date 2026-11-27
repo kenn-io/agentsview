@@ -89,6 +89,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
 			return err
 		}
+		if err = backfillHostedAutomationPG(ctx, tx); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, dropUsageChangeJournalSQL); err != nil {
@@ -168,6 +171,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
+		return err
+	}
+	if err = backfillHostedAutomationPG(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit()

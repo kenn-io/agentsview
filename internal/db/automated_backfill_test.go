@@ -256,10 +256,18 @@ func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
 func TestLegacyRelationshipInferredProtectsImportedClaudeSubagent(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	for _, id := range []string{"origin~agent-sub1", "origin~panel-1", "agent-local1"} {
+	for _, tc := range []struct {
+		id, sourceID string
+	}{
+		{"origin~agent-sub1", "origin~agent-sub1"},
+		{"origin~panel-1", "origin~panel-1"},
+		{"agent-host~panel-2", "agent-host~panel-2"},
+		{"raw-row-child", "agent-sub2"},
+		{"agent-local1", "agent-local1"},
+	} {
 		_, err := d.getWriter().Exec(ctx, `INSERT INTO sessions
-			(id, machine, project, agent, entrypoint, relationship_type, is_automated, user_message_count, relationship_inferred)
-			VALUES (?, 'local', 'project-a', 'claude', 'sdk-cli', 'subagent', 1, 1, 0)`, id)
+			(id, machine, project, agent, entrypoint, source_session_id, relationship_type, is_automated, user_message_count, relationship_inferred)
+			VALUES (?, 'local', 'project-a', 'claude', 'sdk-cli', ?, 'subagent', 1, 1, 0)`, tc.id, tc.sourceID)
 		require.NoError(t, err)
 	}
 	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_inferred = 1 WHERE `+legacyRelationshipInferredSQL)
@@ -267,15 +275,26 @@ func TestLegacyRelationshipInferredProtectsImportedClaudeSubagent(t *testing.T) 
 	require.NoError(t, reconcileParentlessWorkers(ctx, d.getWriter(), false))
 
 	for id, wantRel := range map[string]string{
-		"origin~agent-sub1": "subagent",
-		"agent-local1":      "subagent",
-		"origin~panel-1":    "",
+		"origin~agent-sub1":  "subagent",
+		"raw-row-child":      "subagent",
+		"agent-local1":       "subagent",
+		"origin~panel-1":     "",
+		"agent-host~panel-2": "",
 	} {
 		sess, err := d.GetSession(ctx, id)
 		require.NoError(t, err)
 		require.NotNil(t, sess, id)
 		assert.Equal(t, wantRel, sess.RelationshipType, id)
 	}
+
+	assert.True(t, SessionRelationshipInferred(Session{
+		ID: "agent-host~panel-2", SourceSessionID: "agent-host~panel-2",
+		Agent: "claude", Entrypoint: "sdk-cli", RelationshipType: "subagent",
+	}), "origin prefix starting with agent- does not mask a normal session")
+	assert.False(t, SessionRelationshipInferred(Session{
+		ID: "raw-row-child", SourceSessionID: "agent-sub2",
+		Agent: "claude", Entrypoint: "sdk-cli", RelationshipType: "subagent",
+	}), "native agent-* source_session_id protects renamed sessions")
 }
 
 func TestIncrementalAppendPreservesRoborevTag(t *testing.T) {

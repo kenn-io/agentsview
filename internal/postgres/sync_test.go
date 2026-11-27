@@ -263,6 +263,45 @@ func TestCheckSchemaCompatMissingSecretsRulesVersion(t *testing.T) {
 		"CheckSchemaCompat should fail when secrets_rules_version is missing")
 }
 
+func TestSyncEnsureSchemaUpgradesMissingRelationshipProvenanceColumns(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
+
+	pg, err := Open(t.Context(), pgURL, "agentsview", true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema")
+	_, err = pg.ExecContext(ctx, `ALTER TABLE sessions
+		DROP COLUMN parser_relationship_type,
+		DROP COLUMN relationship_inferred,
+		DROP COLUMN spawn_linked`)
+	require.NoError(t, err, "simulating pre-upgrade replica schema")
+
+	require.Error(t, CheckSchemaCompat(ctx, pg),
+		"CheckSchemaCompat must fail when relationship provenance columns are missing")
+	assert.False(t, pushSchemaCurrent(ctx, pg),
+		"pushSchemaCurrent must force EnsureSchema to add missing provenance columns")
+
+	local := testDB(t)
+	started := "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: "upgrade-panel", Project: "proj", Machine: "local", Agent: "claude",
+		Entrypoint: "sdk-cli", RelationshipType: "subagent",
+		FirstMessage: new("You are a code reviewer. Review this change."),
+		StartedAt:    &started, MessageCount: 1, UserMessageCount: 1,
+		CreatedAt: started,
+	}))
+	ps, err := New(ctx, pgURL, "agentsview", local, "upgrade-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx), "Sync.EnsureSchema must add missing columns before repairs")
+	require.NoError(t, CheckSchemaCompat(ctx, pg))
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "Push must succeed after schema upgrade")
+}
+
 func TestPushSingleSession(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGSchemaURL(t, "agentsview")
