@@ -1191,3 +1191,28 @@ func TestClaudeDerivedFromNewerVersionIgnored(t *testing.T) {
 	assert.Empty(t, results[0].Session.ParentSessionID)
 	assert.Len(t, results[0].Messages, 4)
 }
+
+func TestClaudeDerivedFromClearAfterForkIsUnrelated(t *testing.T) {
+	t.Parallel()
+	// /clear in a forked session starts unrelated work that inherits
+	// the fork's provenance; it must not join the original's chain.
+	cleared := strings.Join([]string{
+		lineageDerivedFromLine("clear-3333",
+			"fork:orig-1111", "subprocess:launcher-0000", "clear:fork-2222"),
+		lineageUserLine("n1", "", "2026-01-01T12:00:00Z", "clear-3333", "", "new topic"),
+		lineageAssistantLine("n2", "n1", "2026-01-01T12:00:05Z", "clear-3333", "", "msg_n", "new answer", 3),
+	}, "\n") + "\n"
+	_, clearedPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"clear-3333.jsonl", cleared,
+	)
+
+	results, _, err := claudeParseFile(t.Context(),
+		clearedPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	assert.Len(t, results[0].Messages, 2)
+}

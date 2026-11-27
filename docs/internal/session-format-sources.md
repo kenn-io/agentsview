@@ -655,9 +655,11 @@ fixtures retain this field; missing identities remain source-local.
   transcript with `--resume <session> --fork-session`: ahead of the replayed
   chain, the fork writes a uuid-less
   `{"type":"derived-from","v":1,"sessionId":...,"sessions":[...]}` record whose
-  entries list inherited links first and end with
-  `{"id":"<original>","via":"fork"}`. The parser takes the last `fork` entry
-  in a version 1 record before the first chain entry as the parent, finds its
+  entries list inherited links first; the last `via:"fork"` entry,
+  `{"id":"<original>","via":"fork"}`, names the original, and launcher
+  (`subprocess`) entries can follow it. The parser takes the last `fork` entry
+  in a version 1 record before the first chain entry as the parent, unless a
+  later `clear` entry started unrelated work, finds its
   transcript in the fork's project directory or another one under the same
   root, and skips the sibling election. Reverified 2026-08-09
   by fork-resuming a transcript containing a uuid-less `queued_command`

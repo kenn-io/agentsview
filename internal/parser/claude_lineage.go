@@ -275,8 +275,9 @@ func claudeSniffHeadLines(
 // claudeDerivedFromForkParent returns the session a version 1
 // derived-from record names as forked from. The record lists inherited
 // links before its own, so the last via:"fork" entry is the nearest
-// ancestor. Other via values (compact, resume, clear, subprocess) are
-// not fork parents.
+// ancestor, unless a later via:"clear" entry started unrelated work.
+// Other via values (compact, resume, subprocess) are not transitions
+// between conversations.
 func claudeDerivedFromForkParent(line []byte) string {
 	if gjson.GetBytes(line, "v").Raw != "1" {
 		return ""
@@ -284,10 +285,13 @@ func claudeDerivedFromForkParent(line []byte) string {
 	self := gjson.GetBytes(line, "sessionId").Str
 	var parent string
 	gjson.GetBytes(line, "sessions").ForEach(func(_, s gjson.Result) bool {
-		if s.Get("via").Str == "fork" {
+		switch s.Get("via").Str {
+		case "fork":
 			if id := s.Get("id").Str; id != "" && id != self && IsValidSessionID(id) {
 				parent = strings.Clone(id)
 			}
+		case "clear":
+			parent = ""
 		}
 		return true
 	})
