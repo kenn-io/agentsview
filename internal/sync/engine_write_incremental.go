@@ -187,7 +187,9 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// Fold checkpoint-backed Codex deltas transactionally. Other append paths
 	// retain their debounced recompute instead of paying for state reads and
 	// signal writes on every streamed assistant message.
-	if isCodexFormatAgent(inc.agent) && inc.checkpoint != nil && !e.disableSignalRecompute &&
+	if isCodexFormatAgent(inc.agent) && inc.checkpoint != nil &&
+		!e.disableSignalRecompute &&
+		!e.db.ArchiveContent().OmitsToolContent() &&
 		!inc.hasSubstantiveUserMessage() &&
 		!inc.hasCompactBoundary() &&
 		!inc.hasResultSubagentLink() {

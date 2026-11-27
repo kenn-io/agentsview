@@ -1817,7 +1817,8 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	msgs = db.messagesForStorage(msgs)
 	update.SubagentLinks = db.subagentLinksForStorage(update.SubagentLinks)
 	update.ToolCallResultUpdates = db.toolCallResultUpdatesForStorage(update.ToolCallResultUpdates)
-	if db.ArchiveContent().OmitsToolContent() {
+	omitToolContent := db.ArchiveContent().OmitsToolContent()
+	if omitToolContent {
 		policy = config.ToolResultImagesKeep
 	}
 
@@ -1887,7 +1888,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	}
 	for _, link := range update.SubagentLinks {
 		changed, err := applyToolCallSubagentLinkTx(ctx,
-			tx, sessionID, link, update.BlockedResultCategories, policy, db.AssetsDir(),
+			tx, sessionID, link, update.BlockedResultCategories, omitToolContent, policy, db.AssetsDir(),
 		)
 		if err != nil {
 			return false, err
@@ -1898,7 +1899,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	for _, resultUpdate := range update.ToolCallResultUpdates {
 		changed, inserted, err := applyToolCallResultUpdateTx(ctx,
 			tx, sessionID, resultUpdate,
-			update.BlockedResultCategories, policy, db.AssetsDir(),
+			update.BlockedResultCategories, omitToolContent, policy, db.AssetsDir(),
 		)
 		if err != nil {
 			return false, err
@@ -3799,7 +3800,7 @@ func (db *DB) SetToolCallSubagentSession(ctx context.Context,
 		tx, sessionID, ToolCallSubagentLink{
 			ToolUseID:         toolUseID,
 			SubagentSessionID: subagentSessionID,
-		}, nil, db.ToolResultImages(), db.AssetsDir(),
+		}, nil, db.ArchiveContent().OmitsToolContent(), db.ToolResultImages(), db.AssetsDir(),
 	)
 	if err != nil {
 		return err
@@ -3871,6 +3872,7 @@ func soleToolResultEventTx(ctx context.Context,
 func applyToolCallSubagentLinkTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
+	omitToolContent bool,
 	imagePolicy config.ToolResultImages, assetsDir string,
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string
@@ -3926,7 +3928,7 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 			ToolUseID: link.ToolUseID,
 			Position:  ToolCallPosition{MessageOrdinal: messageOrdinal, CallIndex: callIndex},
 			Events:    events,
-		}, blockedResultCategories, imagePolicy, assetsDir)
+		}, blockedResultCategories, omitToolContent, imagePolicy, assetsDir)
 		if err != nil || currentSubagent == storedSubagent {
 			return changed, err
 		}
@@ -3941,7 +3943,7 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 	resultContentLen := ResolveResultContentLength(
 		resultContent, link.ResultContentLen,
 	)
-	if blockedResultCategories[category] {
+	if blockedResultCategories[category] || omitToolContent {
 		resultContent = ""
 	} else {
 		resultContent = ProjectToolResultImageContent(resultContent, imagePolicy, assetsDir)
@@ -3978,6 +3980,7 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 func applyToolCallResultUpdateTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
 	blockedResultCategories map[string]bool,
+	omitToolContent bool,
 	imagePolicy config.ToolResultImages, assetsDir string,
 ) (bool, []ToolResultEvent, error) {
 	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
@@ -4150,7 +4153,7 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 		return false, nil, err
 	}
 	var storedSummary string
-	if !blocked {
+	if !blocked && !omitToolContent {
 		// Existing events can predate a switch from keep to drop. Project the
 		// assembled summary too, so a late update cannot store their raw images
 		// again. Blocked results retain their original accounting length.

@@ -312,6 +312,11 @@ var codexResumeHashFn = codexResumeHash
 func codexResumeHash(
 	path string, offset, size int64, state []byte,
 ) ([]byte, string, error) {
+	if offset < 0 || size < offset {
+		return nil, "", fmt.Errorf(
+			"invalid hash resume range %d..%d for %s", offset, size, path,
+		)
+	}
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok {
@@ -358,6 +363,12 @@ func (e *Engine) checkpointKept(agent parser.AgentType) bool {
 func resumeHashDigests(
 	path string, stateOffset, prefixEnd, size int64, state []byte,
 ) (string, string, error) {
+	if stateOffset < 0 || prefixEnd < stateOffset || size < prefixEnd {
+		return "", "", fmt.Errorf(
+			"invalid hash resume range %d..%d..%d for %s",
+			stateOffset, prefixEnd, size, path,
+		)
+	}
 	h := sha256.New()
 	if err := h.(encoding.BinaryUnmarshaler).UnmarshalBinary(state); err != nil {
 		return "", "", fmt.Errorf("restoring hash state: %w", err)
@@ -400,7 +411,8 @@ func codexHashStateDigest(state []byte) (string, error) {
 func (e *Engine) buildCodexFullParseCheckpoint(
 	path string, pw pendingWrite,
 ) (*db.ParserCheckpoint, *db.ParserCheckpointBlobs, error) {
-	if len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
+	if !e.checkpointKept(pw.sess.Agent) ||
+		len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
 		pw.checkpointAnchorDigest == "" {
 		return nil, nil, nil
 	}

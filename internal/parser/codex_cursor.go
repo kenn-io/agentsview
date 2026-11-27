@@ -53,6 +53,11 @@ type codexPendingToolCall struct {
 // codexCursorState is the compact state needed to make a tail parse behave as
 // though the already-persisted prefix had just been scanned. It deliberately
 // excludes parsed messages, raw transcript data, tool maps, and open files.
+//
+// archive_content = "transcripts" persists this cursor in SQLite, so the
+// serialized fields must stay restricted to session metadata, digests, and
+// pending tool call IDs, names, and positions (never message text, tool input,
+// or tool output).
 type codexCursorState struct {
 	model                    string
 	reasoningEffort          string
@@ -156,6 +161,8 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 }
 
 // IsCodexCursor reports whether data decodes as a current Codex cursor.
+// Transcript-only archives rely on this check to ensure persisted cursors hold
+// only metadata and digests, never tool inputs, tool outputs, or message text.
 func IsCodexCursor(data []byte) bool {
 	var s codexCursorState
 	return s.UnmarshalBinary(data) == nil

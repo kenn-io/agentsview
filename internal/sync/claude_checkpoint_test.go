@@ -392,3 +392,26 @@ func TestClaudeCheckpointFullArchiveResumesBlockAlignedState(t *testing.T) {
 	assert.Equal(t, before, fx.engine.contentCheckBytes.Load())
 	requireClaudeCheckpointHash(t, fx, path)
 }
+
+func TestClaudeCheckpointUsageModeDroppedUserMessageKeepsResuming(t *testing.T) {
+	fx := newEngineFixture(t)
+	t.Cleanup(fx.engine.Close)
+	fx.db.SetArchiveContent(config.ArchiveContentUsage)
+	path := fx.writeClaudeSession(t, "proj", "checkpoint.jsonl", strings.Repeat("x", 200<<10))
+	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
+	claudeCheckpointAppend(t, fx, path, "bootstrap", "a")
+	requireClaudeCheckpointHash(t, fx, path)
+
+	// Append a plain user message, which usage-only storage drops from messages
+	// while advancing sessions.next_ordinal, then append another assistant turn.
+	before := fx.engine.contentCheckBytes.Load()
+	userLine := testjsonl.NewSessionBuilder().AddClaudeUser("2024-01-01T00:00:06Z", "follow-up prompt").String()
+	appendFile(t, path, userLine)
+	fx.engine.SyncPaths([]string{path})
+	assert.Equal(t, before, fx.engine.contentCheckBytes.Load())
+	requireClaudeCheckpointHash(t, fx, path)
+
+	claudeCheckpointAppend(t, fx, path, "resumed", "b")
+	assert.Equal(t, before, fx.engine.contentCheckBytes.Load())
+	requireClaudeCheckpointHash(t, fx, path)
+}

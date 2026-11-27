@@ -553,10 +553,20 @@ func (e *Engine) tryIncrementalJSONL(
 		// the full-file hash computed by the checkpoint gate.
 		// A restricted archive's state stops at a block boundary before the
 		// committed offset; the gate verified the offset it records.
-		stateOffset, _ := db.SHA256StateOffset(hashState)
-		if state, hash, hashErr := codexResumeHashFn(
-			file.Path, stateOffset, newOffset, hashState,
-		); hashErr == nil {
+		stateOffset, stateOK := db.SHA256StateOffset(hashState)
+		var (
+			state   []byte
+			hash    string
+			hashErr error
+		)
+		if !stateOK || stateOffset > newOffset {
+			hashErr = fmt.Errorf("invalid hash state offset %d for %d", stateOffset, newOffset)
+		} else {
+			state, hash, hashErr = codexResumeHashFn(
+				file.Path, stateOffset, newOffset, hashState,
+			)
+		}
+		if hashErr == nil {
 			incHash = hash
 			hashState = state
 			resumeOK = true

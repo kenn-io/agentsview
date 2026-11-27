@@ -928,6 +928,10 @@ func (db *DB) toolCallResultUpdatesForStorage(updates []ToolCallResultUpdate) []
 	for i := range stored {
 		stored[i].Events = slices.Clone(stored[i].Events)
 		for j := range stored[i].Events {
+			if stored[i].Events[j].ContentLength == 0 {
+				stored[i].Events[j].ContentLength = len(stored[i].Events[j].Content)
+			}
+			PrepareToolResultEvent(&stored[i].Events[j])
 			stored[i].Events[j].Content = ""
 		}
 	}

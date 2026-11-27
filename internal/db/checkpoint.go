@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -78,7 +79,11 @@ func SHA256StateOffset(state []byte) (n int64, ok bool) {
 	if len(state) != sha256StateSize || string(state[:4]) != "sha\x03" {
 		return 0, false
 	}
-	return int64(binary.BigEndian.Uint64(state[sha256StateSize-8:])), true
+	count := binary.BigEndian.Uint64(state[sha256StateSize-8:])
+	if count > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(count), true
 }
 
 // blockAlignedSHA256State rewinds a marshaled crypto/sha256 state to its last

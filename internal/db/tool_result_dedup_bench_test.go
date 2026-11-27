@@ -228,7 +228,7 @@ func BenchmarkToolCallResultStateFixedAgent(b *testing.B) {
 					for b.Loop() {
 						tx, err := d.getWriter().Begin(b.Context())
 						require.NoError(b, err)
-						changed, _, err := applyToolCallResultUpdateTx(b.Context(), tx, "state", ToolCallResultUpdate{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-a", Content: content}}}, nil, "", "")
+						changed, _, err := applyToolCallResultUpdateTx(b.Context(), tx, "state", ToolCallResultUpdate{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-a", Content: content}}}, nil, false, "", "")
 						require.NoError(b, err)
 						require.True(b, changed)
 						facts, err := (signalTxQuery{tx: tx, sessionID: "state"}).ToolCallsByPosition(b.Context(), []ToolCallPosition{{}})

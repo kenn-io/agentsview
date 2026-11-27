@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
 
@@ -335,11 +336,65 @@ func TestParserCheckpointBlobsKeptUnderRestrictedArchives(t *testing.T) {
 			state[40] = 'x'
 			return state
 		}()}, false},
+		{"count overflows int64", ParserCheckpointBlobs{HashState: func() []byte {
+			state := stateAfter(0)
+			binary.BigEndian.PutUint64(state[sha256StateSize-8:], uint64(math.MaxInt64)+1)
+			return state
+		}()}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, tc.blobs.keptUnder(config.ArchiveContentTranscripts))
 			assert.Equal(t, tc.want, tc.blobs.keptUnder(config.ArchiveContentUsage))
 			assert.True(t, tc.blobs.keptUnder(config.ArchiveContentFull))
+		})
+	}
+	overflow := stateAfter(0)
+	binary.BigEndian.PutUint64(overflow[sha256StateSize-8:], uint64(math.MaxInt64)+1)
+	_, ok := SHA256StateOffset(overflow)
+	assert.False(t, ok)
+}
+
+func TestUsageOnlyMetadataWritePreservesAlignedCursorlessCheckpoint(t *testing.T) {
+	cases := []struct {
+		name  string
+		blobs ParserCheckpointBlobs
+		keep  bool
+	}{
+		{
+			name:  "aligned cursorless checkpoint kept",
+			blobs: ParserCheckpointBlobs{Cursor: []byte{}, HashState: sha256StateAfter(t, 128)},
+			keep:  true,
+		},
+		{
+			name:  "unaligned full-mode state deleted",
+			blobs: ParserCheckpointBlobs{Cursor: []byte{}, HashState: sha256StateAfter(t, 100)},
+			keep:  false,
+		},
+		{
+			name:  "codex cursor deleted",
+			blobs: ParserCheckpointBlobs{Cursor: codexCursorBytes(t), HashState: sha256StateAfter(t, 128)},
+			keep:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "proj")
+			require.NoError(t, d.UpsertParserCheckpoint(t.Context(), ParserCheckpoint{
+				SessionID: "s1", Agent: "claude", FilePath: "/sessions/s1.jsonl",
+				Offset: 128, TailAnchorDigest: "anchor", Hash: "h", NextOrdinal: 1,
+			}, tc.blobs))
+
+			d.SetArchiveContent(config.ArchiveContentUsage)
+			title := "ignored title"
+			require.NoError(t, d.RenameSession(t.Context(), "s1", &title))
+
+			_, hasCP, err := d.GetParserCheckpoint(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Equal(t, tc.keep, hasCP)
+			_, hasBlobs, err := d.GetParserCheckpointBlobs(t.Context(), "s1")
+			require.NoError(t, err)
+			assert.Equal(t, tc.keep, hasBlobs)
 		})
 	}
 }

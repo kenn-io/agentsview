@@ -1445,7 +1445,10 @@ func TestArchiveProjectionOfLateToolResults(t *testing.T) {
 				MsgCount: 1,
 				ToolCallResultUpdates: []ToolCallResultUpdate{{
 					ToolUseID: "call-1", Position: ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
-					Events: []ToolResultEvent{{Content: "tool output", ContentLength: 11, Status: "ok"}},
+					Events: []ToolResultEvent{
+						{AgentID: "agent-a", Content: "tool output", ContentLength: 11, Status: "ok"},
+						{AgentID: "agent-b", Content: "second output", ContentLength: 13, Status: "ok"},
+					},
 				}},
 			})
 			require.NoError(t, err)
@@ -1458,15 +1461,20 @@ func TestArchiveProjectionOfLateToolResults(t *testing.T) {
 			}
 			require.Len(t, msgs[0].ToolCalls, 1)
 			call := msgs[0].ToolCalls[0]
-			require.Len(t, call.ResultEvents, 1)
+			require.Len(t, call.ResultEvents, 2)
 			assert.Equal(t, "ok", call.ResultEvents[0].Status)
 			assert.Equal(t, 11, call.ResultEvents[0].ContentLength)
+			assert.Equal(t, 13, call.ResultEvents[1].ContentLength)
+			wantSummary := "agent-a:\ntool output\n\nagent-b:\nsecond output"
+			assert.Equal(t, len(wantSummary), call.ResultContentLength)
 			if policy.OmitsToolContent() {
 				assert.Empty(t, call.ResultContent)
 				assert.Empty(t, call.ResultEvents[0].Content)
+				assert.Empty(t, call.ResultEvents[1].Content)
 			} else {
-				assert.Equal(t, "tool output", call.ResultContent)
+				assert.Equal(t, wantSummary, call.ResultContent)
 				assert.Equal(t, "tool output", call.ResultEvents[0].Content)
+				assert.Equal(t, "second output", call.ResultEvents[1].Content)
 			}
 		})
 	}
