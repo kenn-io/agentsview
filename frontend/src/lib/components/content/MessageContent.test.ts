@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   activeSession: null as Session | null,
   readOnly: false,
   remote: false,
+  isDesktop: false,
   searching: false,
 }));
 vi.mock("../../stores/messages.svelte.js", () => ({ messages: { sessionId: "", mainModel: "" } }));
@@ -172,6 +173,21 @@ it("does not confirm a failed message link copy", async () => {
   expect(document.querySelector('[aria-label="Copy link to message"]')).not.toBeNull();
   expect(document.querySelector('[aria-label="Copied!"]')).toBeNull();
 });
+
+it("copies a link to the selected remote server", async () => {
+  state.isDesktop = true;
+  localStorage.setItem("agentsview-server-url", "https://example.org/archive");
+  await render(message({ session_id: "session-1", ordinal: 7 }));
+  await click('[aria-label="Copy link to message"]');
+  expect(copyMock).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
+});
+
+it("copies a desktop deep link instead of the temporary backend port", async () => {
+  state.isDesktop = true;
+  await render(message({ session_id: "codex:session-1", ordinal: 7 }));
+  await click('[aria-label="Copy link to message"]');
+  expect(copyMock).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
+});
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.replaceChildren();
@@ -182,6 +198,8 @@ afterEach(async () => {
   state.activeSession = null;
   state.readOnly = false;
   state.remote = false;
+  state.isDesktop = false;
+  localStorage.removeItem("agentsview-server-url");
   state.searching = false;
   uiState.showAllBlocks();
   uiState.alwaysShowYear = false;

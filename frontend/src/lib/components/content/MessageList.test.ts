@@ -667,6 +667,19 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it("reveals an older linked message hidden by focused mode", async () => {
+    ui.setTranscriptMode("focused");
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [makeMessage(1), makeMessage(3), makeMessage(10)];
+    });
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.setFollowLatest(false);
+    (component as JumpList).scrollToOrdinal(1);
+    await vi.waitFor(() => expect(ui.transcriptMode).toBe("normal"));
+    await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
+  });
+
   function withCall(message: Message, toolUseId: string, inputJson?: string): Message {
     return {
       ...message,

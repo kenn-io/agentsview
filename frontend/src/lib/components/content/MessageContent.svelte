@@ -13,7 +13,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
-  import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
+  import { generatedErrorMessage, getServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import DocbankMatches from "./DocbankMatches.svelte";
@@ -187,8 +187,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
   }
   async function handleCopyLink() {
-    const href = router.buildMessageHref(message.session_id, message.ordinal);
-    if (!await copyToClipboard(window.location.origin + href)) return;
+    const server = getServerUrl();
+    const url = server
+      ? router.buildMessageHref(message.session_id, message.ordinal, server.replace(/\/+$/, ""))
+      : sync.isDesktop
+        ? `agentsview://sessions/${encodeURIComponent(message.session_id)}?msg=${message.ordinal}`
+        : window.location.origin + router.buildMessageHref(message.session_id, message.ordinal);
+    if (!await copyToClipboard(url)) return;
     clearTimeout(linkCopyTimer);
     linkCopied = true;
     linkCopyTimer = setTimeout(() => { linkCopied = false; }, 1500);

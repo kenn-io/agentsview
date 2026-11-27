@@ -37,6 +37,7 @@
   import { m } from "../../i18n/index.js";
   import { settleVirtualScroll } from "./staged-scroll.js";
   import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
+  import { shouldAutoSwitchTranscriptModeToNormal } from "../../utils/transcript-mode.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -730,6 +731,12 @@
       await raf();
       if (!isCurrent()) return endScrollOwnership(reqId);
       await raf();
+      if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
+    }
+
+    if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
+      ui.setTranscriptMode("normal");
+      await tick();
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
