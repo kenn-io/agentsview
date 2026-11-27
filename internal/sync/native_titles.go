@@ -22,10 +22,13 @@ type nativeTitleRetryContextKey struct{}
 
 type nativeTitleSource struct {
 	agent               parser.AgentType
+	expandRoots         func(string) ([]string, error)
 	storePath           func(string) (string, bool)
+	ownsStore           func(configuredRoot, store string) bool
 	read                func(context.Context, string) (map[string]string, parser.SQLiteContainerState, error)
 	sessionRoot         func(string) (string, bool)
 	blankClears         bool
+	ignoreFramelessWAL  bool
 	outsideWatchedRoots bool
 }
 
@@ -38,6 +41,20 @@ var nativeTitleSources = []nativeTitleSource{
 		read:                parser.AntigravityStoreTitles,
 		sessionRoot:         parser.AntigravitySessionRoot,
 		blankClears:         true,
+		ignoreFramelessWAL:  true,
+		outsideWatchedRoots: false,
+	},
+	{
+		agent:       parser.AgentAntigravityCLI,
+		expandRoots: parser.ExpandAntigravityCLIRoot,
+		storePath: func(root string) (string, bool) {
+			return filepath.Join(root, parser.AntigravitySummariesDBName), true
+		},
+		ownsStore:           parser.AntigravityCLITitleStoreOwner,
+		read:                parser.AntigravityStoreTitles,
+		sessionRoot:         parser.AntigravityCLISessionRoot,
+		blankClears:         true,
+		ignoreFramelessWAL:  true,
 		outsideWatchedRoots: false,
 	},
 	{
@@ -51,56 +68,73 @@ var nativeTitleSources = []nativeTitleSource{
 }
 
 // Reconcile after parsing so an older parsed title cannot win.
-func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncStats) {
+func (e *Engine) reconcileNativeTitlesLocked(ctx context.Context, stats *SyncStats) map[string]bool {
 	if e.db.ArchiveContent().UsageOnly() {
-		return
+		return nil
 	}
 	sources := e.sources()
 	if e.appliedNativeTitles == nil {
 		e.appliedNativeTitles = make(map[string]appliedNativeTitleStore)
 	}
+	var failedStores map[string]bool
 	for _, source := range nativeTitleSources {
 		if _, enabled := sources.providerFactories[source.agent]; !enabled {
 			continue
 		}
 		seen := make(map[string]bool)
-		for _, root := range sources.agentDirs[source.agent] {
-			if ctx.Err() != nil {
-				return
-			}
-			store, ok := source.storePath(root)
-			if !ok || seen[store] {
-				continue
-			}
-			seen[store] = true
-			state, exists := parser.StatSQLiteContainerState(store)
-			now := time.Now()
-			if prior, ok := e.appliedNativeTitles[store]; ok && exists && prior.state == state && now.Sub(prior.readAt) < parser.SQLiteContainerDigestVerifyInterval {
-				continue
-			}
-			delete(e.appliedNativeTitles, store)
-			parser.InvalidateSQLiteTitles(store)
-			titles, state, err := source.read(ctx, store)
-			if err == nil {
-				var n int
-				n, err = e.applyNativeStoreTitles(ctx, source, root, titles)
-				stats.TitlesUpdated += n
-			}
-			if err != nil {
-				stats.RecordFailed()
-				// Stores outside watched roots are retried by the next sync.
-				if retry, ok := ctx.Value(nativeTitleRetryContextKey{}).(*WatchBatch); ok && !source.outsideWatchedRoots {
-					retry.Paths = watchAppendUniqueString(retry.Paths, store)
+		for _, configuredRoot := range sources.agentDirs[source.agent] {
+			roots := []string{configuredRoot}
+			if source.expandRoots != nil {
+				var expandErr error
+				roots, expandErr = source.expandRoots(configuredRoot)
+				if expandErr != nil {
+					stats.RecordFailed()
+					log.Printf("%s titles %s: %v", source.agent, configuredRoot, expandErr)
 				}
-				parser.InvalidateSQLiteTitles(store)
-				log.Printf("%s titles %s: %v", source.agent, store, err)
-				continue
 			}
-			if state != (parser.SQLiteContainerState{}) {
-				e.appliedNativeTitles[store] = appliedNativeTitleStore{state: state, readAt: now}
+			for _, root := range roots {
+				if ctx.Err() != nil {
+					return failedStores
+				}
+				store, ok := source.storePath(root)
+				if !ok || seen[store] {
+					continue
+				}
+				seen[store] = true
+				state, exists := parser.StatSQLiteContainerState(store)
+				now := time.Now()
+				if prior, ok := e.appliedNativeTitles[store]; ok && exists && prior.state == state && now.Sub(prior.readAt) < parser.SQLiteContainerDigestVerifyInterval {
+					continue
+				}
+				delete(e.appliedNativeTitles, store)
+				parser.InvalidateSQLiteTitles(store)
+				titles, state, err := source.read(ctx, store)
+				if err == nil {
+					var n int
+					n, err = e.applyNativeStoreTitles(ctx, source, root, titles)
+					stats.TitlesUpdated += n
+				}
+				if err != nil {
+					if failedStores == nil {
+						failedStores = make(map[string]bool)
+					}
+					failedStores[store] = true
+					stats.RecordFailed()
+					// Stores outside watched roots are retried by the next sync.
+					if retry, ok := ctx.Value(nativeTitleRetryContextKey{}).(*WatchBatch); ok && !source.outsideWatchedRoots {
+						retry.Paths = watchAppendUniqueString(retry.Paths, store)
+					}
+					parser.InvalidateSQLiteTitles(store)
+					log.Printf("%s titles %s: %v", source.agent, store, err)
+					continue
+				}
+				if state != (parser.SQLiteContainerState{}) {
+					e.appliedNativeTitles[store] = appliedNativeTitleStore{state: state, readAt: now}
+				}
 			}
 		}
 	}
+	return failedStores
 }
 
 func (e *Engine) invalidateNativeTitleCache(paths []string) {
@@ -108,24 +142,47 @@ func (e *Engine) invalidateNativeTitleCache(paths []string) {
 		clear(e.appliedNativeTitles)
 	}
 	for _, source := range nativeTitleSources {
-		reachable := make(map[string]bool)
-		for _, root := range e.sources().agentDirs[source.agent] {
-			if store, ok := source.storePath(root); ok {
-				reachable[store] = true
-			}
-		}
+		configuredRoots := e.sources().agentDirs[source.agent]
 		if paths == nil {
-			for store := range reachable {
-				parser.InvalidateSQLiteTitles(store)
+			for _, configuredRoot := range configuredRoots {
+				roots := []string{configuredRoot}
+				if source.expandRoots != nil {
+					roots, _ = source.expandRoots(configuredRoot)
+				}
+				for _, root := range roots {
+					if store, ok := source.storePath(root); ok {
+						parser.InvalidateSQLiteTitles(store)
+					}
+				}
 			}
 			continue
 		}
+		var reachable map[string]bool
+		if source.ownsStore == nil {
+			reachable = make(map[string]bool, len(configuredRoots))
+			for _, root := range configuredRoots {
+				if store, ok := source.storePath(root); ok {
+					reachable[store] = true
+				}
+			}
+		}
 		for _, path := range paths {
 			store := strings.TrimSuffix(filepath.Clean(path), "-wal")
-			if !reachable[store] {
+			owned := false
+			if source.ownsStore != nil {
+				for _, root := range configuredRoots {
+					if source.ownsStore(root, store) {
+						owned = true
+						break
+					}
+				}
+			} else {
+				owned = reachable[store]
+			}
+			if !owned {
 				continue
 			}
-			if source.agent == parser.AgentAntigravity {
+			if source.ignoreFramelessWAL {
 				if _, ok := parser.SQLiteContainerPathForEvent(filepath.Dir(store), path, parser.AntigravitySummariesDBName, true); !ok {
 					continue
 				}
@@ -212,16 +269,20 @@ func (e *Engine) applyNativeStoreTitles(ctx context.Context, source nativeTitleS
 // nativeRootOwns keeps a store from renaming a same-ID session that
 // belongs to another configured root.
 func (e *Engine) nativeRootOwns(source nativeTitleSource, root, storedPath string) bool {
+	resolved, ok := e.resolveStoredNativePath(storedPath)
+	if !ok {
+		return false
+	}
+	owner, ok := source.sessionRoot(resolved)
+	return ok && sameReconciliationSourcePath(owner, root)
+}
+
+func (e *Engine) resolveStoredNativePath(storedPath string) (string, bool) {
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
-			return false
+			return "", false
 		}
-		resolved, ok := e.storedPathResolver(storedPath)
-		if !ok {
-			return false
-		}
-		storedPath = resolved
+		return e.storedPathResolver(storedPath)
 	}
-	owner, ok := source.sessionRoot(storedPath)
-	return ok && sameReconciliationSourcePath(owner, root)
+	return storedPath, true
 }

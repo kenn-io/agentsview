@@ -4530,6 +4530,96 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 	return identities, nil
 }
 
+// SessionSummaryIdentity is the minimal stored identity needed to compare a
+// session's summary fingerprint digest against an external summary store.
+type SessionSummaryIdentity struct {
+	ID       string
+	FilePath string
+	FileHash string
+}
+
+const listSessionSummaryIdentitiesUnderPathQuery = `
+	SELECT id, file_path, COALESCE(file_hash, '')
+	FROM sessions INDEXED BY idx_sessions_file_path
+	WHERE file_path >= ?
+	  AND file_path < ?
+	  AND file_path IS NOT NULL
+	  AND agent = ?`
+
+// ListSessionSummaryIdentitiesUnderPathContext returns stored sessions for
+// agent whose file_path lies beneath root, including trashed and
+// source-missing retained sessions. It seeks idx_sessions_file_path over the
+// bounded [lower, upper) path range instead of scanning all sessions for agent.
+func (db *DB) ListSessionSummaryIdentitiesUnderPathContext(
+	ctx context.Context,
+	agent, root string,
+) ([]SessionSummaryIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if agent == "" || root == "" {
+		return nil, nil
+	}
+	lower, upper := sourcePathPrefixBounds(root)
+	rows, err := db.getReader().QueryContext(
+		ctx, listSessionSummaryIdentitiesUnderPathQuery, lower, upper, agent,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing session summary identities under path: %w", err)
+	}
+	defer rows.Close()
+
+	var identities []SessionSummaryIdentity
+	for rows.Next() {
+		var identity SessionSummaryIdentity
+		if err := rows.Scan(&identity.ID, &identity.FilePath, &identity.FileHash); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scanning session summary identity: %w", err)
+		}
+		identities = append(identities, identity)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterating session summary identities: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing session summary identities: %w", err)
+	}
+	sort.Slice(identities, func(i, j int) bool {
+		return identities[i].ID < identities[j].ID
+	})
+	return identities, nil
+}
+
+// sourcePathPrefixBounds computes a byte-exact [lower, upper) B-tree seek range
+// for descendants of root, preserving remote separator syntax across platforms.
+func sourcePathPrefixBounds(root string) (lower, upper string) {
+	var sep byte
+	switch {
+	case strings.Contains(root, `\`) && !strings.Contains(root, "/"):
+		sep = '\\'
+		lower = strings.TrimRight(root, `\`)
+		if lower == "" {
+			lower = `\`
+		} else {
+			lower += `\`
+		}
+	case strings.Contains(root, "/"):
+		sep = '/'
+		lower = strings.TrimRight(root, "/")
+		if lower == "" {
+			lower = "/"
+		} else {
+			lower += "/"
+		}
+	default:
+		return activeSessionSourceBounds(root)
+	}
+	upperBytes := []byte(lower)
+	upperBytes[len(upperBytes)-1] = sep + 1
+	return lower, string(upperBytes)
+}
+
 // ListSessionMachinesByID returns the stored machine attribution for each
 // requested session, including tombstoned rows that may be revived by a later
 // successful parse. Requests are chunked below SQLite's bind-variable limit.

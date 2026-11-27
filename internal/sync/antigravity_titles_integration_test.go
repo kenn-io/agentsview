@@ -242,3 +242,90 @@ func TestAntigravityTrashedSessionRestoresWithCurrentTitle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, new("Renamed in trash"), nativeStoredTitle(t, archive, "antigravity:"+dbtest.AntigravityTitleID))
 }
+
+func writeAntigravityCLITitleConversation(t *testing.T, root, prompt string) string {
+	t.Helper()
+	convDir := filepath.Join(root, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(convDir, dbtest.AntigravityTitleID+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, prompt)
+	dbtest.WriteAntigravityTitleTranscript(t, root, prompt)
+	return dbPath
+}
+
+func TestAntigravityCLITitlesFollowStore(t *testing.T) {
+	for _, layout := range []string{"standalone", "container"} {
+		t.Run(layout, func(t *testing.T) {
+			base := t.TempDir()
+			configuredRoot := base
+			sessionRoot := base
+			if layout == "container" {
+				configuredRoot = filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+				sessionRoot = filepath.Join(configuredRoot, "instance-a", "antigravity-acp")
+			}
+			dbPath := writeAntigravityCLITitleConversation(t, sessionRoot, "hello")
+			store := dbtest.SetAntigravityTitle(t, sessionRoot, "First")
+
+			archive := dbtest.OpenTestDB(t)
+			engine := newNativeTitleEngine(t, archive, parser.AgentAntigravityCLI, configuredRoot)
+			const sessionID = "antigravity-cli:" + dbtest.AntigravityTitleID
+
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+			require.Equal(t, new("First"), nativeStoredTitle(t, archive, sessionID), "a new session takes its saved title")
+			before, err := archive.GetSessionFull(t.Context(), sessionID)
+			require.NoError(t, err)
+			assert.Equal(t, new(dbPath), before.FilePath)
+
+			dbtest.SetAntigravityTitle(t, sessionRoot, "Second")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			after, err := archive.GetSessionFull(t.Context(), sessionID)
+			require.NoError(t, err)
+			assert.Equal(t, new("Second"), after.SessionName, "a store-only rename updates the title")
+			assert.Equal(t, 1, engine.LastSyncStats().TitlesUpdated)
+			assert.Equal(t, before.FileHash, after.FileHash, "a rename leaves the transcript fingerprint alone")
+
+			dbtest.SetAntigravityTitle(t, sessionRoot, "  ")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			assert.Nil(t, nativeStoredTitle(t, archive, sessionID), "a blank saved title clears the name")
+
+			dbtest.SetAntigravityTitle(t, sessionRoot, "Saved title")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			require.Equal(t, new("Saved title"), nativeStoredTitle(t, archive, sessionID))
+
+			// An unreadable store keeps the archived title even if the session reparses.
+			savedStore, err := os.ReadFile(store)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(store, []byte("not a database"), 0o600))
+			dbtest.WriteAntigravityTitleTranscript(t, sessionRoot, "hello updated")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath, store}))
+			stats := engine.SyncAll(t.Context(), nil)
+			assert.Equal(t, 1, stats.Failed)
+			assert.Equal(t, new("Saved title"), nativeStoredTitle(t, archive, sessionID), "an unreadable store keeps the stored title")
+
+			// Restoring the store lets subsequent renames apply again.
+			require.NoError(t, os.WriteFile(store, savedStore, 0o600))
+			dbtest.SetAntigravityTitle(t, sessionRoot, "Recovered title")
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store}))
+			assert.Equal(t, new("Recovered title"), nativeStoredTitle(t, archive, sessionID))
+		})
+	}
+}
+
+func TestAntigravityCLIFullSyncBackfillsTitlesInContainer(t *testing.T) {
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	rootA := filepath.Join(container, "instance-a", "antigravity-acp")
+	rootB := filepath.Join(container, "instance-b", "antigravity-acp")
+	dbPathA := writeAntigravityCLITitleConversation(t, rootA, "hello")
+	archive := dbtest.OpenTestDB(t)
+	const sessionID = "antigravity-cli:" + dbtest.AntigravityTitleID
+
+	require.NoError(t, newNativeTitleEngine(t, archive, parser.AgentAntigravityCLI, container).SyncPathsContext(t.Context(), []string{dbPathA}))
+	require.Nil(t, nativeStoredTitle(t, archive, sessionID))
+
+	dbtest.SetAntigravityTitle(t, rootA, "Saved while closed")
+	// A sibling instance with the same conversation ID must not overwrite rootA's session.
+	require.NoError(t, os.MkdirAll(rootB, 0o755))
+	dbtest.SetAntigravityTitle(t, rootB, "Wrong instance title")
+	newNativeTitleEngine(t, archive, parser.AgentAntigravityCLI, container).SyncAll(t.Context(), nil)
+	assert.Equal(t, new("Saved while closed"), nativeStoredTitle(t, archive, sessionID))
+}

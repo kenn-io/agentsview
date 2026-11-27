@@ -241,6 +241,113 @@ func TestStoredSourcePathHintVirtualMemberLookupUsesBoundedRangeSeek(t *testing.
 		"directory children and virtual members must each use bounded seeks")
 }
 
+func TestListSessionSummaryIdentitiesUnderPathUsesFilePathRangeSeek(t *testing.T) {
+	d := testDB(t)
+	root := filepath.Join(t.TempDir(), "antigravity-acp")
+	lower, upper := sourcePathPrefixBounds(root)
+	rows, err := d.getReader().Query(
+		t.Context(),
+		"EXPLAIN QUERY PLAN "+listSessionSummaryIdentitiesUnderPathQuery,
+		lower, upper, "antigravity-cli",
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+
+	plan := strings.Join(details, "\n")
+	assert.Contains(t, plan, "idx_sessions_file_path")
+	assert.Contains(t, plan, "file_path>? AND file_path<?",
+		"summary identity lookup must seek only the affected store root range")
+}
+
+func TestListSessionSummaryIdentitiesUnderPathScopesAndRetainsSessions(t *testing.T) {
+	d := testDB(t)
+	base := t.TempDir()
+	storeRoot := filepath.Join(base, "antigravity-acp")
+	siblingRoot := filepath.Join(base, "antigravity-acp2")
+
+	activePath := filepath.Join(storeRoot, "conversations", "active.db")
+	trashedPath := filepath.Join(storeRoot, "conversations", "trashed.db")
+	missingPath := filepath.Join(storeRoot, "conversations", "missing.db")
+	siblingPath := filepath.Join(siblingRoot, "conversations", "sibling.db")
+	otherAgentPath := filepath.Join(storeRoot, "conversations", "other-agent.db")
+
+	insertSessionWithSourcePath(t, d, "antigravity-cli:active", "antigravity-cli", activePath, func(s *Session) {
+		s.FileHash = new("hash-active.digest")
+	})
+	insertSessionWithSourcePath(t, d, "antigravity-cli:trashed", "antigravity-cli", trashedPath, func(s *Session) {
+		s.FileHash = new("hash-trashed.digest")
+	})
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "antigravity-cli:trashed"))
+	insertSessionWithSourcePath(t, d, "antigravity-cli:missing", "antigravity-cli", missingPath, func(s *Session) {
+		s.FileHash = new("hash-missing.digest")
+	})
+	baselineSessionSource(t, d, defaultMachine, "antigravity-cli", missingPath)
+	marked, err := d.MarkSessionSourceMissing(t.Context(), defaultMachine, "antigravity-cli", "antigravity-cli:missing", missingPath)
+	require.NoError(t, err)
+	require.True(t, marked)
+	insertSessionWithSourcePath(t, d, "antigravity-cli:sibling", "antigravity-cli", siblingPath)
+	insertSessionWithSourcePath(t, d, "antigravity:other-agent", "antigravity", otherAgentPath)
+
+	// Remote Unix, Windows, and UNC mirrors stored under host-prefixed paths.
+	remoteUnixRoot := "devbox:/home/user/.t3/userdata/providers/antigravity/h1/antigravity-acp"
+	remoteUnixPath := remoteUnixRoot + "/conversations/u1.db"
+	remoteUnixOtherHost := "otherbox:/home/user/.t3/userdata/providers/antigravity/h1/antigravity-acp/conversations/u2.db"
+	remoteWinRoot := `winbox:C:\Users\user\.gemini\antigravity-cli`
+	remoteWinPath := remoteWinRoot + `\conversations\w1.db`
+	remoteUNCRoot := `winbox:\\server\share\.gemini\antigravity-cli`
+	remoteUNCPath := remoteUNCRoot + `\conversations\unc1.db`
+	insertSessionWithSourcePath(t, d, "devbox~antigravity-cli:u1", "antigravity-cli", remoteUnixPath, func(s *Session) {
+		s.FileHash = new("hash-u1.digest")
+	})
+	insertSessionWithSourcePath(t, d, "otherbox~antigravity-cli:u2", "antigravity-cli", remoteUnixOtherHost)
+	insertSessionWithSourcePath(t, d, "winbox~antigravity-cli:w1", "antigravity-cli", remoteWinPath, func(s *Session) {
+		s.FileHash = new("hash-w1.digest")
+	})
+	insertSessionWithSourcePath(t, d, "winbox~antigravity-cli:unc1", "antigravity-cli", remoteUNCPath, func(s *Session) {
+		s.FileHash = new("hash-unc1.digest")
+	})
+
+	gotLocal, err := d.ListSessionSummaryIdentitiesUnderPathContext(t.Context(), "antigravity-cli", storeRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionSummaryIdentity{
+		{ID: "antigravity-cli:active", FilePath: activePath, FileHash: "hash-active.digest"},
+		{ID: "antigravity-cli:missing", FilePath: missingPath, FileHash: "hash-missing.digest"},
+		{ID: "antigravity-cli:trashed", FilePath: trashedPath, FileHash: "hash-trashed.digest"},
+	}, gotLocal)
+
+	gotUnix, err := d.ListSessionSummaryIdentitiesUnderPathContext(t.Context(), "antigravity-cli", remoteUnixRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionSummaryIdentity{
+		{ID: "devbox~antigravity-cli:u1", FilePath: remoteUnixPath, FileHash: "hash-u1.digest"},
+	}, gotUnix)
+
+	gotWin, err := d.ListSessionSummaryIdentitiesUnderPathContext(t.Context(), "antigravity-cli", remoteWinRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionSummaryIdentity{
+		{ID: "winbox~antigravity-cli:w1", FilePath: remoteWinPath, FileHash: "hash-w1.digest"},
+	}, gotWin)
+
+	gotUNC, err := d.ListSessionSummaryIdentitiesUnderPathContext(t.Context(), "antigravity-cli", remoteUNCRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionSummaryIdentity{
+		{ID: "winbox~antigravity-cli:unc1", FilePath: remoteUNCPath, FileHash: "hash-unc1.digest"},
+	}, gotUNC)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = d.ListSessionSummaryIdentitiesUnderPathContext(ctx, "antigravity-cli", storeRoot)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestListActiveSessionSourceOwnershipScopesPageUsesStableBoundedKeyset(t *testing.T) {
 	d := testDB(t)
 	root := t.TempDir()

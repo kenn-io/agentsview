@@ -230,7 +230,11 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 	assert.False(t, plan.Roots[1].Recursive)
 	assert.Equal(t, filepath.Clean(root), filepath.Clean(plan.Roots[2].Path))
 	assert.False(t, plan.Roots[2].Recursive)
-	assert.Equal(t, []string{"history.jsonl"}, plan.Roots[2].IncludeGlobs)
+	assert.Equal(t, []string{
+		"history.jsonl",
+		AntigravitySummariesDBName,
+		AntigravitySummariesDBName + "-wal",
+	}, plan.Roots[2].IncludeGlobs)
 	assert.Equal(t, filepath.Join(root, "cache"), plan.Roots[3].Path)
 	assert.False(t, plan.Roots[3].Recursive)
 	assert.Equal(t, []string{"last_conversations.json"}, plan.Roots[3].IncludeGlobs)

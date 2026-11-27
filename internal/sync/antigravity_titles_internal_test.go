@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +73,45 @@ func TestAntigravityFramelessWALEventsDoNotRereadStore(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.Empty(t, spy.queries, "reader-created WAL events must not reread titles")
+}
+
+func TestAntigravityCLIFramelessWALEventsDoNotRereadStore(t *testing.T) {
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	sessionRoot := filepath.Join(container, "inst-a", "antigravity-acp")
+	convDir := filepath.Join(sessionRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(convDir, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, sessionRoot, "hello")
+	store := dbtest.SetAntigravityTitle(t, sessionRoot, "First")
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {container}},
+		Machine:   "host-a",
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	spy := &antigravityTitleQuerySpy{Store: archive, reader: archive}
+	engine.archiveStore = spy
+	engine.deferredNativeTitles = make(map[string]*string)
+	for _, size := range []int{0, 32} {
+		require.NoError(t, os.WriteFile(store+"-wal", make([]byte, size), 0o600))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store + "-wal"}))
+		require.NoError(t, os.Remove(store+"-wal"))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{store + "-wal"}))
+		plan, err := engine.PlanChangedPathsContext(t.Context(), []string{store + "-wal"})
+		require.NoError(t, err)
+		assert.Empty(t, plan.Files)
+		assert.Empty(t, plan.FallbackProviders)
+		_, err = engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+		require.NoError(t, err)
+	}
+	assert.Empty(t, spy.queries, "reader-created WAL events must not reread CLI titles")
 }
 
 func TestQoderTitleStoreOutsideWatchedRootsDoesNotRetry(t *testing.T) {
@@ -260,6 +300,103 @@ func TestAntigravityMatchingMarkersExpireOrRefreshOnRequest(t *testing.T) {
 				assert.Equal(t, new("Later"), session.SessionName)
 				assert.Equal(t, 1, engine.LastSyncStats().TitlesUpdated)
 			})
+		})
+	}
+}
+
+func TestAntigravitySummaryReadFailureRetriesWatchBatchWhenTitlesSucceed(t *testing.T) {
+	const (
+		convID   = "11111111-2222-3333-4444-555555555551"
+		parentID = "cccccccc-dddd-eeee-ffff-000000000000"
+	)
+	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI} {
+		t.Run(string(agent), func(t *testing.T) {
+			base := t.TempDir()
+			configuredRoot := base
+			sessionRoot := base
+			if agent == parser.AgentAntigravityCLI {
+				configuredRoot = filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+				sessionRoot = filepath.Join(configuredRoot, "inst-a", "antigravity-acp")
+			}
+			convDir := filepath.Join(sessionRoot, "conversations")
+			require.NoError(t, os.MkdirAll(convDir, 0o755))
+			dbPath := filepath.Join(convDir, convID+".db")
+			conn, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(),
+				"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			testjsonl.WriteAntigravityBrainTranscript(t, sessionRoot, convID,
+				`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"hello"}`+"\n")
+			store := testjsonl.WriteAntigravitySummaries(t, sessionRoot, map[string]testjsonl.AntigravitySummary{
+				convID: {Title: "Alpha", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+			})
+
+			archive := openTestDB(t)
+			engine := NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {configuredRoot}},
+				Machine:   "host-a",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+			// Update title, workspace, and parent, then fail the first summary
+			// metadata read while letting title reconciliation succeed.
+			testjsonl.WriteAntigravitySummaries(t, sessionRoot, map[string]testjsonl.AntigravitySummary{
+				convID: {
+					Title:         "Alpha renamed",
+					WorkspaceURIs: `["file:///tmp/ws-new"]`,
+					ParentID:      parentID,
+				},
+			})
+			failedOnce := false
+			engine.antigravitySummaryDigests = func(ctx context.Context, root string) (map[string]string, error) {
+				if !failedOnce {
+					failedOnce = true
+					return nil, errors.New("database is locked")
+				}
+				return parser.AntigravitySummaryDigests(ctx, root)
+			}
+
+			stats, err := engine.SyncWatchBatchThenRun(
+				t.Context(), WatchBatch{Paths: []string{store}}, nil, nil,
+			)
+			require.Error(t, err, "transient metadata-read failure must schedule a watcher retry even when title reads succeed")
+			assert.Equal(t, 0, stats.Synced)
+			assert.Equal(t, 1, stats.TitlesUpdated)
+			assert.Equal(t, 1, stats.Failed)
+			assert.Empty(t, engine.SnapshotAntigravityTitleStates(), "title state must not persist after metadata-read failure")
+
+			retryErr, ok := errors.AsType[interface {
+				error
+				WatchRetryBatch() WatchBatch
+			}](err)
+			require.True(t, ok)
+			retry := retryErr.WatchRetryBatch()
+			assert.Equal(t, []string{store}, retry.Paths)
+
+			sessionID := string(agent) + ":" + convID
+			beforeRetry, err := archive.GetSessionFull(t.Context(), sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, beforeRetry)
+			assert.Equal(t, new("Alpha renamed"), beforeRetry.SessionName)
+			assert.Equal(t, "/tmp/ws-old", beforeRetry.Cwd)
+
+			retryStats, err := engine.SyncWatchBatchThenRun(t.Context(), retry, nil, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, retryStats.Synced)
+			assert.Equal(t, 0, retryStats.Failed)
+			assert.Contains(t, engine.SnapshotAntigravityTitleStates(), store)
+
+			afterRetry, err := archive.GetSessionFull(t.Context(), sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, afterRetry)
+			assert.Equal(t, "/tmp/ws-new", afterRetry.Cwd)
+			assert.Equal(t, "ws_new", afterRetry.Project)
+			assert.Equal(t, new(string(agent)+":"+parentID), afterRetry.ParentSessionID)
+			assert.Equal(t, "subagent", afterRetry.RelationshipType)
+			assert.Equal(t, new("Alpha renamed"), afterRetry.SessionName)
 		})
 	}
 }
