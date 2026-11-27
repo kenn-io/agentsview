@@ -363,6 +363,10 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
+.PHONY: test-archive-copy
+test-archive-copy: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/rawarchive ./internal/db ./internal/server ./cmd/agentsview -run '^(TestCopyPreservesAssetReferences|TestCopyDetachedArchive|TestCopyOmitsRecoveryVaults|TestCopyRefusesIncompleteSources|TestCopyExcludesUnreadableUsageCache|TestCopySelectsUsageCaches|TestClearHostSources|TestCopyProjectLabels|TestDetachedVersionSurvivesRebuildMetadataCopy|TestDetachedArchiveCommitRepositories|TestDetachedArchiveRejectsHostActions|TestDetachedArchivePreservesSessionsOnRebuild)$$' -count=1
+
 # Keep this focused target separate: `make test` also runs perfsim's
 # unrelated TestActiveAppendGrowth case.
 .PHONY: test-scoped-upgrade-startup
