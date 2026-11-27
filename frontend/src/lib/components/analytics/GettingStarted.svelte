@@ -8,6 +8,11 @@
   import { m } from "../../i18n/index.js";
 
   const uid = $props.id();
+  const visible = $derived(
+    gettingStarted.visible &&
+      sessions.sessions.length === 0 &&
+      !gettingStarted.done.has("session"),
+  );
 
   function openFirstSession() {
     const first = sessions.sessions[0];
@@ -28,7 +33,7 @@
   };
 </script>
 
-{#if gettingStarted.visible}
+{#if visible}
   <Card level="default" padding="sm" class="getting-started" title={m.getting_started_title()}>
     {#snippet actions()}
       <IconButton

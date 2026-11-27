@@ -8,6 +8,7 @@ import { insights } from "../../stores/insights.svelte.js";
 import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { sidebarIndexRowToSession } from "../../stores/sessionRows.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -53,6 +54,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   localStorage.clear();
   gettingStarted.done = new Set();
+  sessions.sessions = [];
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
@@ -1028,6 +1030,40 @@ describe("getting started checklist", () => {
     document
       .querySelector<HTMLButtonElement>('.getting-started button[aria-label="Dismiss"]')!
       .click();
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
+  });
+
+  it("hides the checklist once a session is listed", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).not.toBeNull();
+    sessions.sessions = [sidebarIndexRowToSession({ id: "session-1", project: "demo", machine: "local", agent: "codex", started_at: null, ended_at: null, created_at: "2026-01-01T00:00:00Z", message_count: 1 })];
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
+  });
+
+  it("stays hidden after a session was opened", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    gettingStarted.done = new Set(["session"]);
+    component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")).toBeNull();
   });
