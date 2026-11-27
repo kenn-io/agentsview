@@ -582,7 +582,7 @@ func claudeResolveRecordedForkLineage(
 		return plan, nil
 	}
 	run := 0
-	var forkSeq []claudeForkLine
+	forkSeq := make([]claudeForkLine, 0)
 	complete, err = claudeScanUUIDs(ctx, path, func(line claudeForkLine) {
 		if _, ok := parentUUIDs[line.uuid]; ok && run == len(forkSeq) {
 			run++
