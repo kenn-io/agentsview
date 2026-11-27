@@ -97,31 +97,26 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		ordered = append(ordered, group)
 	}
 	slices.Sort(ordered)
-	// Lock known and newly introduced public aliases before sorted group locks.
-	// This includes first publication, where legacy validation cannot lock a row.
-	var aliases []string
-	rows, err := tx.QueryContext(ctx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=ANY($1) ORDER BY alias_id`, ordered)
+	// Lock known and newly introduced public aliases, plus outgoing spawn
+	// targets, before sorted group locks. This includes first publication,
+	// where legacy validation cannot lock a row, and serializes concurrent
+	// launcher/worker imports and link removals in one lock order.
+	aliases, err := queryStrings(ctx, tx, `SELECT alias_id FROM raw_session_public_aliases WHERE group_id=ANY($1) ORDER BY alias_id`, ordered)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var alias string
-		if err = rows.Scan(&alias); err != nil {
-			rows.Close()
-			return err
-		}
-		aliases = append(aliases, alias)
-	}
-	err = rows.Err()
-	rows.Close()
+	priorTargets, err := queryStrings(ctx, tx, rawGroupSpawnTargetsSQL, ordered)
 	if err != nil {
 		return err
 	}
+	aliases = append(aliases, priorTargets...)
 	for group, base := range groups {
 		if base != "" {
 			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), candidates[group].Session.ID)
 			aliases = append(aliases, pgSessionAliasIDs(candidates[group].Session)...)
+		}
+		if c, ok := candidates[group]; ok {
+			aliases = append(aliases, rawCandidateSpawnTargets(c.Messages)...)
 		}
 	}
 	if err = lockHostedAliases(ctx, tx, aliases); err != nil {
@@ -415,6 +410,23 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 // loadRawPayload is transaction-bound and does not use alias resolution.
 func loadRawPayload(ctx context.Context, tx *sql.Tx, id string) (ingest.PreparedSession, error) {
 	return loadRawPayloadBytes(ctx, tx, id, nil)
+}
+
+func rawCandidateSpawnTargets(messages []db.Message) []string {
+	var targets []string
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			if tc.SubagentSessionID != "" {
+				targets = append(targets, tc.SubagentSessionID)
+			}
+			for _, ev := range tc.ResultEvents {
+				if ev.SubagentSessionID != "" {
+					targets = append(targets, ev.SubagentSessionID)
+				}
+			}
+		}
+	}
+	return targets
 }
 
 // syncRawRelationshipProvenance updates stored relationship provenance when a

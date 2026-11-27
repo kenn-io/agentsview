@@ -508,3 +508,69 @@ func TestRawProjectionConcurrentLauncherDeletionAndFirstWorkerImport(t *testing.
 		})
 	}
 }
+
+func TestRawProjectionConcurrentFirstLauncherAndWorkerImport(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	launcherManifest, _ := f.acceptScoped(t, "device-a", "launcher-first", "", parser.AgentCodex, "root-a", "launcher.jsonl")
+	launcherOutcome := projectionOutcome("launcher prompt")
+	launcherOutcome.Outcome.Results[0].Result.Session.ID = "codex:launcher"
+	launcherOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "launcher"
+	launcherOutcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:worker"
+	launcherOutcome.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	launcherLease := f.lease(t, launcherManifest)
+
+	workerManifest, _ := f.acceptScoped(t, "device-a", "worker-first", "", parser.AgentCodex, "root-a", "worker.jsonl")
+	workerOutcome := projectionOutcome("You are a code reviewer. Review this change.")
+	workerOutcome.Outcome.Results[0].Result.Session.ID = "codex:worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "worker"
+	workerOutcome.Outcome.Results[0].Result.Session.SessionKind = parser.SessionKindNonInteractive
+	workerLease := f.lease(t, workerManifest)
+
+	f.parkOn(t, "INSERT", "sessions", "NEW.is_automated")
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = gate.Rollback() }()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+
+	advisoryWaiters := func(want int) func() bool {
+		return func() bool {
+			var parked int
+			err := f.admin.QueryRowContext(ctx,
+				`SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`,
+				f.role,
+			).Scan(&parked)
+			return err == nil && parked == want
+		}
+	}
+
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- f.sink.Project(ctx, workerLease, workerManifest, workerOutcome)
+	}()
+	require.Eventually(t, advisoryWaiters(1), 3*time.Second, 10*time.Millisecond)
+
+	launcherDone := make(chan error, 1)
+	go func() {
+		launcherDone <- f.sink.Project(ctx, launcherLease, launcherManifest, launcherOutcome)
+	}()
+	// Launcher import must wait on its outgoing spawn target alias lock so the
+	// two first imports cannot miss each other's uncommitted rows.
+	require.Eventually(t, advisoryWaiters(2), 3*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, gate.Commit())
+	require.NoError(t, <-workerDone)
+	require.NoError(t, <-launcherDone)
+
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(ctx, "codex:worker")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.IsAutomated)
+	assert.Equal(t, "subagent", got.RelationshipType, "spawned worker must stay Subagents when imported concurrently with its launcher")
+}

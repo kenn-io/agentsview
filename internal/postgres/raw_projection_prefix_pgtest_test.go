@@ -7,10 +7,12 @@ import (
 	"encoding/gob"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -140,6 +142,12 @@ func seedLegacyRawReviewCapture(t *testing.T, f projectionFixture, sessionID, so
 	prepared.Session.SourceSessionID = sourceSessionID
 	prepared.Session.IsAutomated = false
 	prepared.Session.RelationshipType = string(parser.RelSubagent)
+	prepared.Signals = ingest.RefreshSignalRecencyAt(
+		prepared.Session, prepared.Messages, prepared.Signals,
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	)
+	require.Equal(t, "completed", prepared.Signals.Outcome)
+	require.Equal(t, "medium", prepared.Signals.OutcomeConfidence)
 
 	// Encode without a trailing rawRelationshipProvenance record to match a
 	// capture stored before this upgrade.
@@ -257,6 +265,8 @@ func TestRawProjectionWithdrawalRestoresLegacyAutomatedReview(t *testing.T) {
 	require.NotNil(t, got)
 	assert.True(t, got.IsAutomated, "restored legacy review must be marked automated")
 	assert.Empty(t, got.RelationshipType, "restored legacy review must not stay under Subagents")
+	assert.Equal(t, "unknown", got.Outcome, "restored automated review must refresh outcome from completed to unknown")
+	assert.Equal(t, "low", got.OutcomeConfidence, "restored automated review must refresh confidence from medium to low")
 }
 
 func TestRawProjectionWithdrawalPreservesLegacyAgentSubagent(t *testing.T) {

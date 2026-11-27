@@ -317,10 +317,14 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
+	prevAutomated := p.Session.IsAutomated
 	p.Session.IsAutomated = refreshRawSessionAutomation(
 		p.Session, p.Messages, s.options.Content.ArchiveContent.UsageOnly(),
 	)
 	p.Session.RelationshipType = db.SessionRelationship(p.Session)
+	if p.Session.IsAutomated != prevAutomated {
+		p.Signals = ingest.RefreshSignalRecencyAt(p.Session, p.Messages, p.Signals, s.options.Now())
+	}
 	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
 		return err
 	}
