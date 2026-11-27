@@ -471,3 +471,76 @@ func TestRawProjectionLegacyGrokPreservesExplicitStatusOnInferredUpload(t *testi
 	require.NoError(t, err)
 	assert.False(t, db.SessionRelationshipInferred(stored.Session))
 }
+
+func TestHostedTenantUpgradeRefreshesSignalsForReclassifiedRawReview(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	prompt := `Read the complete task prompt from "/tmp/review.md" and follow all instructions.`
+	outcome := projectionOutcome(prompt)
+	outcome.Outcome.Results[0].Result.Session.ID = "review-upgrade-signals"
+	outcome.Outcome.Results[0].Result.Session.SourceSessionID = "review-upgrade-signals"
+	outcome.Outcome.Results[0].Result.Session.Agent = parser.AgentClaude
+	outcome.Outcome.Results[0].Result.Session.Entrypoint = "sdk-cli"
+	outcome.Outcome.Results[0].Result.Session.RelationshipType = parser.RelSubagent
+	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls = nil
+
+	m, _ := f.accept(t, "device-a", "upgrade-signals", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, outcome))
+
+	resolved, err := f.sink.Resolve(ctx, "review-upgrade-signals")
+	require.NoError(t, err)
+
+	// Simulate pre-upgrade state where this two-message review was stored as
+	// non-automated with completed/medium outcome and a scored health grade.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE sessions
+		 SET is_automated = FALSE,
+		     relationship_type = 'subagent',
+		     parser_relationship_type = NULL,
+		     relationship_inferred = FALSE,
+		     outcome = 'completed',
+		     outcome_confidence = 'medium',
+		     health_score = 100,
+		     health_grade = 'A'
+		 WHERE id = $1`, resolved.SessionID,
+	)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE raw_content_revisions
+		 SET recency_state = '{"outcome":"completed","outcome_confidence":"medium","health_score":100,"health_grade":"A"}'::jsonb
+		 WHERE session_id = $1`, resolved.SessionID,
+	)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+
+	var isAutomated bool
+	var rel, gotOutcome, gotConfidence string
+	var gotHealthScore *int
+	var gotHealthGrade *string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT is_automated, relationship_type, outcome, outcome_confidence, health_score, health_grade
+		 FROM sessions WHERE id = $1`, resolved.SessionID,
+	).Scan(&isAutomated, &rel, &gotOutcome, &gotConfidence, &gotHealthScore, &gotHealthGrade))
+	assert.True(t, isAutomated)
+	assert.Empty(t, rel)
+	assert.Equal(t, "unknown", gotOutcome, "upgraded raw review must refresh outcome to unknown")
+	assert.Equal(t, "low", gotConfidence, "upgraded raw review must refresh confidence to low")
+	assert.Nil(t, gotHealthScore, "upgraded raw review without other signals must clear stale health_score")
+	assert.Nil(t, gotHealthGrade, "upgraded raw review without other signals must clear stale health_grade")
+
+	var recencyBytes []byte
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT recency_state FROM raw_content_revisions WHERE session_id = $1`, resolved.SessionID,
+	).Scan(&recencyBytes))
+	recency, err := decodeRawRecency(recencyBytes)
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", recency.Outcome)
+	assert.Equal(t, "low", recency.OutcomeConfidence)
+	assert.Nil(t, recency.HealthScore)
+	assert.Nil(t, recency.HealthGrade)
+}

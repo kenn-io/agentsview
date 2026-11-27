@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 )
 
 type automatedAuditPGProgress struct {
@@ -48,14 +49,15 @@ func backfillIsAutomatedPGWithProgress(
 	if err != nil {
 		return automatedAuditPGProgress{}, err
 	}
-	progress, _, err := backfillIsAutomatedPGCore(ctx, pg, tracking, column, false)
+	progress, _, _, err := backfillIsAutomatedPGCore(ctx, pg, tracking, column, false)
 	return progress, err
 }
 
 // backfillHostedAutomationPG reconciles automation verdicts and parentless
 // headless worker relationships inside a hosted tenant provisioning/upgrade
-// transaction and advances raw_corpus_state.corpus_revision when any row
-// changes.
+// transaction, refreshes outcome and health signals for raw sessions whose
+// automation status changed, and advances raw_corpus_state.corpus_revision
+// when any row changes.
 func backfillHostedAutomationPG(ctx context.Context, tx *sql.Tx) error {
 	column, err := sessionVersionColumnPG(ctx, tx)
 	if err != nil {
@@ -68,8 +70,11 @@ func backfillHostedAutomationPG(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
-	_, changed, err := backfillIsAutomatedPGCore(ctx, tx, tracking, column, true)
+	_, changed, changedAutomationIDs, err := backfillIsAutomatedPGCore(ctx, tx, tracking, column, true)
 	if err != nil {
+		return err
+	}
+	if err := refreshHostedRawSignalsPG(ctx, tx, changedAutomationIDs); err != nil {
 		return err
 	}
 	if !changed {
@@ -82,9 +87,57 @@ func backfillHostedAutomationPG(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+func refreshHostedRawSignalsPG(ctx context.Context, tx *sql.Tx, changedIDs []string) error {
+	if len(changedIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT s.id, s.is_automated
+		 FROM sessions s
+		 JOIN raw_content_revisions r ON r.session_id = s.id
+		 WHERE s.id = ANY($1)
+		   AND s.provenance_kind = 'raw'
+		 ORDER BY s.id`,
+		changedIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("loading changed hosted raw sessions for signal refresh: %w", err)
+	}
+	defer rows.Close()
+	type changedRaw struct {
+		id          string
+		isAutomated bool
+	}
+	var targets []changedRaw
+	for rows.Next() {
+		var item changedRaw
+		if err := rows.Scan(&item.id, &item.isAutomated); err != nil {
+			return err
+		}
+		targets = append(targets, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	now := time.Now().UTC()
+	for _, target := range targets {
+		p, err := loadRawPayload(ctx, tx, target.id)
+		if err != nil {
+			return fmt.Errorf("loading raw payload for signal refresh %s: %w", target.id, err)
+		}
+		p.Session.IsAutomated = target.isAutomated
+		p.Signals = ingest.RefreshSignalRecencyAt(p.Session, p.Messages, p.Signals, now)
+		if _, err := publishRawRecency(ctx, tx, target.id, p.Signals); err != nil {
+			return fmt.Errorf("publishing refreshed signals for %s: %w", target.id, err)
+		}
+	}
+	return nil
+}
+
 func backfillIsAutomatedPGCore(
 	ctx context.Context, pg storeExecutor, tracking bool, column string, hosted bool,
-) (automatedAuditPGProgress, bool, error) {
+) (automatedAuditPGProgress, bool, []string, error) {
 	var progress automatedAuditPGProgress
 	current := db.ClassifierHash()
 	var stored string
@@ -93,7 +146,7 @@ func backfillIsAutomatedPGCore(
 		db.ClassifierHashKey,
 	).Scan(&stored)
 	if errHash != nil && !errors.Is(errHash, sql.ErrNoRows) {
-		return progress, false, fmt.Errorf(
+		return progress, false, nil, fmt.Errorf(
 			"probing PG classifier hash: %w", errHash,
 		)
 	}
@@ -101,30 +154,35 @@ func backfillIsAutomatedPGCore(
 	classifier := db.SnapshotAutomationClassifier()
 	var verdicts []automationVerdictPG
 	var candidateIDs []string
-	var automationChanged bool
+	var changedAutomationIDs []string
+	appendChanged := func(batch []automationVerdictPG) {
+		for _, v := range batch {
+			if v.changed {
+				changedAutomationIDs = append(changedAutomationIDs, v.id)
+			}
+		}
+	}
 	var err error
 	fullReconcile := stored != current
 	if tracking {
 		if errors.Is(errHash, sql.ErrNoRows) {
 			if _, err := pg.ExecContext(ctx, `UPDATE sessions SET automation_audit_hash = NULL WHERE automation_audit_hash IS NOT NULL`); err != nil {
-				return progress, false, err
+				return progress, false, nil, err
 			}
 		}
 		candidateIDs, err = automationCandidateIDsPG(ctx, pg, current)
 		if err != nil {
-			return progress, false, err
+			return progress, false, nil, err
 		}
 		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
 			batch, err := auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, chunk)
 			if err != nil {
 				return err
 			}
-			automationChanged = automationChanged || slices.ContainsFunc(batch, func(v automationVerdictPG) bool {
-				return v.changed
-			})
+			appendChanged(batch)
 			return writeAutomationVerdictsPG(ctx, pg, batch, column, current)
 		}); err != nil {
-			return progress, false, err
+			return progress, false, nil, err
 		}
 	} else if stored == current {
 		verdicts, err = auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, nil)
@@ -132,17 +190,15 @@ func backfillIsAutomatedPGCore(
 		verdicts, err = auditAutomatedFullPG(ctx, pg, classifier, &progress, column)
 	}
 	if err != nil {
-		return progress, false, err
+		return progress, false, nil, err
 	}
-	automationChanged = automationChanged || slices.ContainsFunc(verdicts, func(v automationVerdictPG) bool {
-		return v.changed
-	})
+	appendChanged(verdicts)
 	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, ""); err != nil {
-		return progress, false, err
+		return progress, false, nil, err
 	}
 	reconciled, err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, column, fullReconcile, candidateIDs, hosted)
 	if err != nil {
-		return progress, false, err
+		return progress, false, nil, err
 	}
 
 	if _, err := pg.ExecContext(ctx,
@@ -152,11 +208,11 @@ func backfillIsAutomatedPGCore(
 		 SET value = EXCLUDED.value`,
 		db.ClassifierHashKey, current,
 	); err != nil {
-		return progress, false, fmt.Errorf(
+		return progress, false, nil, fmt.Errorf(
 			"storing PG classifier hash: %w", err,
 		)
 	}
-	return progress, automationChanged || reconciled, nil
+	return progress, len(changedAutomationIDs) > 0 || reconciled, changedAutomationIDs, nil
 }
 
 // clearableHeadlessWorkerPG mirrors the SQLite rule: an automated parentless

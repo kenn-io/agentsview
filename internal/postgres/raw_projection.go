@@ -112,10 +112,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	aliases = append(aliases, priorTargets...)
 	for group, base := range groups {
 		if base != "" {
-			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), candidates[group].Session.ID)
-			aliases = append(aliases, pgSessionAliasIDs(candidates[group].Session)...)
-		}
-		if c, ok := candidates[group]; ok {
+			c := candidates[group]
+			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), c.Session.ID)
+			aliases = append(aliases, pgSessionAliasIDs(c.Session)...)
 			aliases = append(aliases, rawCandidateSpawnTargets(c.Messages)...)
 		}
 	}
