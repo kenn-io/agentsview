@@ -5,6 +5,7 @@ import { setLocale } from "../../i18n/index.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
+import AppearanceSettings from "../settings/AppearanceSettings.svelte";
 import TranscriptViewMenu from "./TranscriptViewMenu.svelte";
 
 function trigger(): HTMLButtonElement {
@@ -88,19 +89,27 @@ describe("TranscriptViewMenu", () => {
   });
 
   it("shares reading width with Appearance and keeps the menu open", async () => {
-    ui.setReadingWidth("full");
-    await open();
-    const group = document.querySelector('[role="group"][aria-label="Reading width"]')!;
-    const choices = Array.from(group.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-    expect(choices.map((choice) => choice.textContent?.trim())).toEqual(["Default", "Wider", "Full"]);
-    expect(choices[2]!.getAttribute("aria-checked")).toBe("true");
-    choices[1]!.click();
-    await tick();
-    expect(ui.readingWidth).toBe("wider");
-    expect(document.querySelector('[role="menu"]')).not.toBeNull();
-    ui.setReadingWidth("default");
-    await tick();
-    expect(choices[0]!.getAttribute("aria-checked")).toBe("true");
+    const appearance = mount(AppearanceSettings, { target: document.body });
+    try {
+      await tick();
+      const settingsGroup = document.querySelector('[role="radiogroup"][aria-label="Reading width"]')!;
+      const settingsChoices = Array.from(settingsGroup.querySelectorAll<HTMLElement>('[role="radio"]'));
+      settingsChoices[2]!.click();
+      await tick();
+      await open();
+      const group = document.querySelector('[role="group"][aria-label="Reading width"]')!;
+      const choices = Array.from(group.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+      expect(choices.map((choice) => choice.textContent?.trim())).toEqual(["Default", "Wider", "Full"]);
+      expect(choices[2]!.getAttribute("aria-checked")).toBe("true");
+      expect(localStorage.getItem("agentsview-reading-width")).toBe("full");
+      choices[1]!.click();
+      await tick();
+      expect(settingsChoices[1]!.getAttribute("aria-checked")).toBe("true");
+      expect(localStorage.getItem("agentsview-reading-width")).toBe("wider");
+      expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    } finally {
+      unmount(appearance);
+    }
   });
 
   it("toggles a block type without closing the menu", async () => {
