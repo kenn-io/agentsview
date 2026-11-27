@@ -15,6 +15,7 @@
     ui,
     type BlockType,
     type MessageLayout,
+    type ReadingWidth,
     type TranscriptMode,
   } from "../../stores/ui.svelte.js";
 
@@ -32,6 +33,12 @@
   const MODES: { id: TranscriptMode; name: () => string }[] = [
     { id: "normal", name: m.header_view_mode_normal },
     { id: "focused", name: m.header_view_mode_focused },
+  ];
+
+  const WIDTHS: { id: ReadingWidth; name: () => string }[] = [
+    { id: "default", name: m.appearance_reading_width_default },
+    { id: "wider", name: m.appearance_reading_width_wider },
+    { id: "full", name: m.appearance_reading_width_full },
   ];
 
   const BLOCK_LABELS: Record<BlockType, () => string> = {
@@ -149,6 +156,19 @@
             </span>
             {@render preview(layout.id)}
           </span>
+        </MenuRadioItem>
+      {/each}
+    </MenuRadioGroup>
+    <MenuSeparator />
+    <div class="view-heading" role="presentation">{m.appearance_reading_width()}</div>
+    <MenuRadioGroup
+      value={ui.readingWidth}
+      onchange={(value) => ui.setReadingWidth(value as ReadingWidth)}
+      ariaLabel={m.appearance_reading_width()}
+    >
+      {#each WIDTHS as width (width.id)}
+        <MenuRadioItem value={width.id} closeOnSelect={false} textValue={width.name()} class="view-option">
+          <span class="option-name">{width.name()}</span>
         </MenuRadioItem>
       {/each}
     </MenuRadioGroup>
