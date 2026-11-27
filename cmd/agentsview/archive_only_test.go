@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -55,6 +56,40 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 		err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
 		assert.ErrorContains(t, err, "archive-only", mode)
 	}
+}
+
+func TestDetachedArchivePreservesSessionsOnRebuild(t *testing.T) {
+	ctx := t.Context()
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database, err := db.Open(ctx, cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "retained", Agent: "claude", Project: "project"}))
+	require.NoError(t, database.ClearHostSources(ctx))
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	require.NoError(t, database.Close())
+	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", (1<<21)+(1<<20)+db.CurrentDataVersion()-1))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess", []string{"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data), "AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0]}, "listening at")
+	require.NoError(t, err, string(out))
+	database, err = db.OpenReadOnly(ctx, cfg.DBPath)
+	require.NoError(t, err)
+	defer database.Close()
+	session, err := database.GetSessionFull(ctx, "retained")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	detached, err := database.HostPathsDetached(ctx)
+	require.NoError(t, err)
+	assert.True(t, detached)
+	require.ErrorIs(t, database.RequireSourceSync(ctx), db.ErrArchiveOnly)
+	var raw int
+	require.NoError(t, database.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
+	assert.Equal(t, (1<<21)+(1<<20)+db.CurrentDataVersion(), raw)
 }
 
 func TestRawSyncRejectsUnreadableArchive(t *testing.T) {

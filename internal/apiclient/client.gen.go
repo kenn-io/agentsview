@@ -32725,6 +32725,7 @@ type VersionInfo struct {
 	FrictionAvailable          bool   `json:"friction_available"`
 	FrictionBuildAllowed       bool   `json:"friction_build_allowed"`
 	FrictionReadable           *bool  `json:"friction_readable,omitempty"`
+	HostPathsDetached          *bool  `json:"host_paths_detached,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	KataAvailable              bool   `json:"kata_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`

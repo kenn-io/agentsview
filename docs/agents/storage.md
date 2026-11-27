@@ -213,7 +213,8 @@ The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
 store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending
+builds refuse them. Detached copies also add `1 << 21`, so older readers
+refuse host-session actions against copied IDs. This build decodes both ranges and preserves pending
 rebuilds; ordinary archives keep their parser version unchanged. Data version
 173 requires no source reparse; it keeps older binaries from writing archives
 whose image-text index they cannot maintain.

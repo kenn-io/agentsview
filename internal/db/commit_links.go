@@ -473,6 +473,10 @@ func bumpIncrementalTranscriptRevisionTx(ctx context.Context, tx transactionQuer
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
+	var detached bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
+		return err
+	}
 	var calls []commitCall
 	var cwd string
 	load := func(filter string, args ...any) error {
@@ -591,6 +595,9 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 		return err
 	}
 	for _, l := range commitLinks(calls, cwd) {
+		if detached {
+			l.Repository = ""
+		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project) SELECT ?,?,?,?,?,?,?,?,?,project FROM sessions WHERE id=?`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt, sessionID); err != nil {
 			return err
 		}
@@ -703,6 +710,13 @@ var commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value A
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) (int, error) {
 	var stored int
 	err := d.Update(ctx, func(tx *sql.Tx) error {
+		var detached bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
+			return err
+		}
+		if detached {
+			repo = ""
+		}
 		changed := map[string]bool{}
 		if d.ArchiveContent().UsageOnly() {
 			commits = nil

@@ -499,6 +499,15 @@ func usageCacheGenerationPath(
 	return filepath.Join(filepath.Dir(archivePath), name)
 }
 
+// UsageCacheFiles returns supported generation paths for an archive identity.
+func UsageCacheFiles(archivePath, databaseID string) []string {
+	var paths []string
+	for version := usageCacheUpgradeFrom; version <= usageCacheFormatVersion; version++ {
+		paths = append(paths, usageCacheGenerationPath(archivePath, version, databaseID))
+	}
+	return paths
+}
+
 func (m *usageCacheManager) Generation(
 	ctx context.Context, databaseID string,
 ) (*usageCache, error) {

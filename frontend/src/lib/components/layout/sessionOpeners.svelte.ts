@@ -5,9 +5,10 @@ import {
   type Opener,
   type ResumeRequest,
 } from "../../api/generated/index";
-import { isAbortError } from "../../api/runtime.js";
+import { ApiError, isAbortError } from "../../api/runtime.js";
 import { m } from "../../i18n/index.js";
 import { messages as messagesStore } from "../../stores/messages.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { claudeCodeLink } from "../../utils/claude.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { codexDesktopLink } from "../../utils/codex.js";
@@ -60,18 +61,26 @@ export class SessionOpeners {
   readonly isLocal = $derived(!this.session?.id.includes("~"));
 
   readonly canLaunch = $derived(
-    this.session ? supportsResume(this.session.agent) && this.isLocal : false,
+    sync.hostSessionActionsAvailable && this.session
+      ? supportsResume(this.session.agent) && this.isLocal
+      : false,
   );
 
   readonly codexLink = $derived(
-    this.session ? codexDesktopLink(this.session.agent, this.session.id) : null,
+    sync.hostSessionActionsAvailable && this.session
+      ? codexDesktopLink(this.session.agent, this.session.id)
+      : null,
   );
 
   readonly claudeLink = $derived(
-    this.session?.agent === "claude" && this.isLocal ? claudeCodeLink(this.sessionDir) : null,
+    sync.hostSessionActionsAvailable && this.session?.agent === "claude" && this.isLocal
+      ? claudeCodeLink(this.sessionDir)
+      : null,
   );
 
-  readonly canCopyCommand = $derived(this.session ? supportsResume(this.session.agent) : false);
+  readonly canCopyCommand = $derived(
+    sync.hostSessionActionsAvailable && this.session ? supportsResume(this.session.agent) : false,
+  );
 
   readonly terminalOpeners = $derived(this.openers.filter((o) => o.kind === "terminal"));
 
@@ -86,15 +95,17 @@ export class SessionOpeners {
   readonly fileOpeners = $derived(this.openers.filter((o) => o.kind === "files"));
 
   readonly showDropdown = $derived(
-    this.canCopyCommand ||
-      this.codexLink !== null ||
-      (this.isLocal &&
-        (this.editorOpeners.length > 0 ||
-          this.fileOpeners.length > 0 ||
-          (this.sessionDir !== null && !!this.session?.file_path))),
+    sync.hostSessionActionsAvailable &&
+      (this.canCopyCommand ||
+        this.codexLink !== null ||
+        (this.isLocal &&
+          (this.editorOpeners.length > 0 ||
+            this.fileOpeners.length > 0 ||
+            (this.sessionDir !== null && !!this.session?.file_path)))),
   );
 
   private readOpeners() {
+    if (!sync.hostSessionActionsAvailable) return;
     const signal = this.openersRead.begin();
     OpenersService.getApiV1Openers({ signal })
       .then((res) => {
@@ -108,6 +119,7 @@ export class SessionOpeners {
   }
 
   private readDirectory() {
+    if (!sync.hostSessionActionsAvailable) return;
     const session = this.getSession();
     if (!session) {
       this.directoryRead.cancel();
@@ -153,6 +165,7 @@ export class SessionOpeners {
   // could neither launch nor return one. The model comes from the session
   // the request was for, even if another session opened while it ran.
   private async copyLocalResumeCommand(session: Session) {
+    if (!sync.hostSessionActionsAvailable) return;
     const cmd = buildResumeCommand(session.agent, session.id, {
       model: messagesStore.resumeModelFor(session.id),
     });
@@ -168,6 +181,7 @@ export class SessionOpeners {
   }
 
   async resumeIn(opener: Opener) {
+    if (!sync.hostSessionActionsAvailable) return;
     const session = this.getSession();
     if (!session) return;
     this.menuOpen = false;
@@ -193,13 +207,15 @@ export class SessionOpeners {
         );
         return;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) return;
       // Fall back to local command build.
     }
     await this.copyLocalResumeCommand(session);
   }
 
   async copyResumeCommand() {
+    if (!sync.hostSessionActionsAvailable) return;
     const session = this.getSession();
     if (!session) return;
     this.menuOpen = false;
@@ -216,13 +232,15 @@ export class SessionOpeners {
         );
         return;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) return;
       // Fall back to local build.
     }
     await this.copyLocalResumeCommand(session);
   }
 
   async copyFilePath() {
+    if (!sync.hostSessionActionsAvailable) return;
     this.menuOpen = false;
     if (!this.sessionDir) {
       this.showFeedback(m.session_breadcrumb_no_path_available(), "error");
@@ -236,6 +254,7 @@ export class SessionOpeners {
   }
 
   async openIn(opener: Opener) {
+    if (!sync.hostSessionActionsAvailable) return;
     const session = this.getSession();
     if (!session) return;
     this.menuOpen = false;
@@ -252,6 +271,7 @@ export class SessionOpeners {
   }
 
   async resumeDefault() {
+    if (!sync.hostSessionActionsAvailable) return;
     const session = this.getSession();
     if (!session) return;
     this.menuOpen = false;
@@ -274,7 +294,8 @@ export class SessionOpeners {
         );
         return;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) return;
       // Fall back to local command build.
     }
     await this.copyLocalResumeCommand(session);

@@ -69,3 +69,24 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
 	assert.Equal(t, (1<<20)+dataVersion, raw)
 }
+
+func TestDetachedVersionSurvivesRebuildMetadataCopy(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	require.NoError(t, source.UpsertSession(ctx, Session{ID: "detached", Agent: "claude", Project: "project"}))
+	require.NoError(t, source.ClearHostSources(ctx))
+	require.NoError(t, source.EnableArchiveOnly(ctx))
+	replacement := testDB(t)
+	require.NoError(t, replacement.CopySessionMetadataFrom(ctx, source.Path()))
+	require.NoError(t, replacement.setDataVersion(ctx))
+	var raw int
+	require.NoError(t, replacement.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
+	assert.Equal(t, detachedVersionBase+archiveOnlyVersionBase+dataVersion, raw)
+	version, archiveOnly := DecodeUserVersion(raw)
+	assert.Equal(t, dataVersion, version)
+	assert.True(t, archiveOnly)
+	assert.Greater(t, raw-archiveOnlyVersionBase, dataVersion)
+	detached, err := replacement.HostPathsDetached(ctx)
+	require.NoError(t, err)
+	assert.True(t, detached)
+}

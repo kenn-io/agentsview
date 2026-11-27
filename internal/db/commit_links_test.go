@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,27 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
+
+func TestDetachedArchiveCommitRepositories(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
+	insertMessages(t, d, commitMessages("s1", `{"command":"git -C /work/repo commit -m fix"}`, "[main abc1234] Fix parser")...)
+	_, err := d.StoreTrailerCommitLinks(t.Context(), "/work/repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("a", 40), Sessions: []string{"claude:s1"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
+	var repository string
+	require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT repository FROM commit_links WHERE session_id='s1'`).Scan(&repository))
+	assert.Equal(t, "/work/repo", repository)
+	require.NoError(t, d.ClearHostSources(t.Context()))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionCommitLinksTx(tx, "s1") }))
+	_, err = d.StoreTrailerCommitLinks(t.Context(), "/work/repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s1"}, CommittedAt: tsZero}})
+	require.NoError(t, err)
+	for _, table := range []string{"commit_links", "commit_trailers"} {
+		var count, paths int
+		require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT count(*), count(NULLIF(repository,'')) FROM `+table).Scan(&count, &paths))
+		assert.Positive(t, count)
+		assert.Zero(t, paths)
+	}
+}
 
 func commitMessages(id, input, result string) []Message {
 	var events []ToolResultEvent

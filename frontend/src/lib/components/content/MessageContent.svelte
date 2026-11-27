@@ -197,7 +197,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
   }
   let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
-    !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
+    sync.hostSessionActionsAvailable && !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
   async function handleForkFromHere() {
     if (!canForkFromMessage) return;
     clearTimeout(forkTimer);

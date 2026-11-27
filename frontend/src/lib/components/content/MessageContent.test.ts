@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   view: (row: Session) => row,
   activeSession: null as Session | null,
   readOnly: false,
+  hostSessionActionsAvailable: true,
   remote: false,
   searching: false,
 }));
@@ -159,6 +160,7 @@ afterEach(async () => {
   state.sessions = [];
   state.activeSession = null;
   state.readOnly = false;
+  state.hostSessionActionsAvailable = true;
   state.remote = false;
   state.searching = false;
   uiState.showAllBlocks();
@@ -166,6 +168,12 @@ afterEach(async () => {
 });
 
 describe("MessageContent", () => {
+  it("hides message-point resume in a copied archive", async () => {
+    state.hostSessionActionsAvailable = false;
+    state.sessions = [session()];
+    await render();
+    expect(document.querySelector(".fork-btn")).toBeNull();
+  });
   it("shows the year in message timestamps when enabled", async () => {
     uiState.alwaysShowYear = true;
     await render(message());

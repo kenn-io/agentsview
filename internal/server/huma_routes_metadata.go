@@ -213,6 +213,10 @@ func (s *Server) humaGetVersion(
 		if err != nil {
 			return nil, serverError(err)
 		}
+		version.HostPathsDetached, err = database.HostPathsDetached(ctx)
+		if err != nil {
+			return nil, serverError(err)
+		}
 	}
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	_, version.SessionStatsAvailable = s.db.(*db.DB)

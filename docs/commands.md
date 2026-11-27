@@ -284,6 +284,25 @@ prevents capture because its stopped-owner copying support is still required.
 If the source already contains a raw archive, use `archive backup` to preserve
 both its vault and its database, since `capture` refuses that input.
 
+For a throwaway preview instance, stop AgentsView and copy an ordinary archive
+to a new directory outside the source:
+
+```bash
+AGENTSVIEW_DATA_DIR=/source/archive agentsview archive copy /new/archive
+```
+
+The copy keeps sessions, messages, stars, pins, trash, assets, and
+supported usage caches. It clears source paths, folder and worktree identity,
+credentials, and replica connections. Ordinary project labels remain; labels
+that contain paths become stable aliases. Opening and resuming host sessions
+is disabled in the copy. Archive-only mode disables source discovery, sync,
+and publication. Older releases refuse to open the detached copy.
+Raw archive and artifact vault data and external archive bindings are omitted;
+the report lists omitted vaults. Transcript text and tool output remain intact,
+so the copy is not a redacted dataset.
+Copied image text is cleared on first start. Configure OCR with a new endpoint
+to process images again.
+
 Passing `--writers-stopped` records your attestation that source writers were
 stopped; it does not stop them for you. A rolling capture is not a final
 retirement cutoff. The destination must be new and outside the selected inputs,

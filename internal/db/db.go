@@ -716,6 +716,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 const dataVersion = 192
 
 const archiveOnlyVersionBase = 1 << 20
+const detachedVersionBase = 1 << 21
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2560,6 +2561,9 @@ func readUserVersion(ctx context.Context, conn interface {
 
 // DecodeUserVersion returns the parser version and permanent archive-only mode.
 func DecodeUserVersion(version int) (int, bool) {
+	if version >= detachedVersionBase {
+		version -= detachedVersionBase
+	}
 	if version >= archiveOnlyVersionBase {
 		return version - archiveOnlyVersionBase, true
 	}
@@ -2572,12 +2576,15 @@ func writeUserVersion(ctx context.Context, tx *sql.Tx, version int) error {
 		return err
 	}
 	if metadataExists {
-		var archiveOnly bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM archive_metadata WHERE key = 'archive_only' AND value = '1')`).Scan(&archiveOnly); err != nil {
+		var archiveOnly, detached bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM archive_metadata WHERE key = 'archive_only' AND value = '1'), EXISTS (SELECT 1 FROM archive_metadata WHERE key = 'host_paths_detached' AND value = '1')`).Scan(&archiveOnly, &detached); err != nil {
 			return err
 		}
 		if archiveOnly {
 			version += archiveOnlyVersionBase
+		}
+		if detached {
+			version += detachedVersionBase
 		}
 	}
 	_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version))
