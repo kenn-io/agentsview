@@ -8,6 +8,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type reportingSourceLoadStats struct {
@@ -20,6 +21,7 @@ type reportingSourceLoadStats struct {
 type reportingExportSource struct {
 	localMachineID      string
 	machineAliases      map[string]string
+	codexCloudAccounts  map[string]string
 	activitySessions    []reportingSourceSession
 	activityEvents      []activity.ActivityEvent
 	usageSessions       []activity.SessionMeta
@@ -61,6 +63,11 @@ type reportingDaySource struct {
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
 	references       map[string]export.ProjectReference
+
+	// codexCloudAccounts maps each Codex cloud session ID to the account
+	// key it was fetched for, in schemas that report those sessions by
+	// account.
+	codexCloudAccounts map[string]string
 }
 
 func (db *DB) loadReportingExportSource(
@@ -169,6 +176,12 @@ func (db *DB) loadReportingExportSource(
 	}
 
 	allSessions := mergeReportingSessions(sessions, usageSessions)
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		source.codexCloudAccounts, err = reportingCodexCloudAccountsFrom(ctx, tx, allSessions)
+		if err != nil {
+			return source, err
+		}
+	}
 	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
@@ -306,6 +319,8 @@ func (src reportingExportSource) forDate(
 		createdAt:        createdAt,
 		projects:         projects,
 		references:       references,
+
+		codexCloudAccounts: src.codexCloudAccounts,
 	}
 }
 
@@ -385,6 +400,48 @@ func reportingCreatedAtFrom(
 		return nil, nil, err
 	}
 	return rawValues, parsedValues, nil
+}
+
+// reportingCodexCloudAccountsFrom maps each Codex cloud session to the
+// account key named by its mirror file's directory. A session whose stored
+// path names no key is left out and stays under its machine.
+func reportingCodexCloudAccountsFrom(
+	ctx context.Context,
+	q sessionExportQuerier,
+	sessions []activity.SessionMeta,
+) (map[string]string, error) {
+	var ids []string
+	for _, session := range sessions {
+		if session.Agent == string(parser.AgentCodexCloud) {
+			ids = append(ids, session.SessionID)
+		}
+	}
+	accounts := make(map[string]string, len(ids))
+	err := queryChunked(ids, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := q.QueryContext(ctx,
+			`SELECT id, COALESCE(file_path, '') FROM sessions WHERE id IN `+placeholders,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying reporting Codex cloud accounts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, path string
+			if err := rows.Scan(&id, &path); err != nil {
+				return fmt.Errorf("scanning reporting Codex cloud account: %w", err)
+			}
+			if account := parser.CodexCloudAccountFromPath(path); account != "" {
+				accounts[id] = account
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating reporting Codex cloud accounts: %w", err)
+		}
+		return nil
+	})
+	return accounts, err
 }
 
 func reportingTerminalTimestampsFrom(

@@ -109,7 +109,17 @@ across all sources. Otherwise count it under the archive of the lowest-ID device
 holding the event. Consumers must implement this reconciliation to count shared
 events once. Schemas 5 and 6 lack the event identities needed for it. Use one
 schema version across reporters. Schema 7 uses the same machine ID hashing as
-schema 6.
+schema 6, and also hashes machine IDs starting with `codex-cloud-account:`.
+
+Schema 7 reports Codex Cloud chats under `codex-cloud-account:<key>`. These
+chats run on OpenAI's servers, and every computer that syncs the same ChatGPT
+login downloads the same chats. `<key>` is the 32-character hex account key
+that AgentsView derives from the login's workspace and user IDs, and it names
+the folder that holds the login's chats under `<data dir>/sources/codex-cloud/`.
+Every computer that syncs the login uses the same key, so a consumer that keeps
+one snapshot per origin and UTC hour counts each chat once. A chat whose stored
+file path does not name its account key, and every Codex Cloud chat in schemas
+5 and 6, stays under the machine that synced it.
 
 Events without a conversation ID and older rows that have not been fetched
 again retain fingerprint-only ambiguity. Each archive stores one row per

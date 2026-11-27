@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-26
+last_edited: 2026-11-27
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -14,6 +14,12 @@ The latest release is
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
   Integrations must reconcile event keys and poll times across reports.
+- Reporting schema 7 counts each Codex Cloud chat once when several computers
+  sync the same ChatGPT login. Schema 5 and 6 `--by-machine` exports put the
+  chats under each computer that downloaded them, so an integration that keeps
+  one copy per origin counts every chat once per computer. Schema 7 reports
+  them under `codex-cloud-account:<key>`, a key that is the same on every
+  computer for that login. See [Reporting Export](/docs/reporting-export/).
 
 - `agentsview source import --type gemini-apps` now imports real Google
   Takeout exports. It used to reject every export with `input does not contain
