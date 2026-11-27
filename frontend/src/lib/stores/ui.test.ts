@@ -41,6 +41,18 @@ describe("UIStore", () => {
   });
 
   describe("pendingScrollOrdinal null flows", () => {
+    it("keeps link reveal intent only for the pending link", () => {
+      ui.scrollToOrdinal(5, "sess-123", undefined, true);
+      expect(ui.pendingScrollRevealFiltered).toBe(true);
+      ui.scrollToOrdinal(6, "sess-123");
+      expect(ui.pendingScrollRevealFiltered).toBe(false);
+      ui.scrollToOrdinal(5, "sess-123", undefined, true);
+      ui.clearScrollState();
+      expect(ui.pendingScrollRevealFiltered).toBe(false);
+      ui.scrollToOrdinal(5, "sess-123", undefined, true);
+      ui.setFollowLatest(true);
+      expect(ui.pendingScrollRevealFiltered).toBe(false);
+    });
     it("should set both selected and pending via scrollToOrdinal", () => {
       ui.scrollToOrdinal(10);
       expect(ui.selectedOrdinal).toBe(10);

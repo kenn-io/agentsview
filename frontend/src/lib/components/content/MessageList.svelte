@@ -698,7 +698,7 @@
     return ++lastScrollRequest;
   }
 
-  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
+  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall, revealFiltered = false) {
     const reqId = endScrollOwnership();
     const sessionId = messages.sessionId;
     const isCurrent = () => requestIsCurrent(reqId, sessionId);
@@ -735,7 +735,7 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
-    if (!normalDisplayItemsAsc.some((item) => item.ordinals.includes(ordinal))) {
+    if (revealFiltered && !normalDisplayItemsAsc.some((item) => item.ordinals.includes(ordinal))) {
       const message = messages.messages.find((item) => item.ordinal === ordinal);
       const hiddenBlock = message && !hasVisibleSegments(message, (type) =>
         type === "code" || ui.isBlockVisible(type),
@@ -751,7 +751,7 @@
       }
     }
 
-    if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
+    if (revealFiltered && shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, displayItemsAsc, normalDisplayItemsAsc)) {
       ui.setTranscriptMode("normal");
       await tick();
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
@@ -778,8 +778,12 @@
     ordinalJump = { reqId, ordinal, sessionId, targetHolds, until: performance.now() + 5000, sawLoadingOlder: false };
   }
 
-  export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
-    void scrollToOrdinalInternal(ordinal, call);
+  export function scrollToOrdinal(ordinal: number, call?: ScrollCall, revealFiltered = false) {
+    void scrollToOrdinalInternal(ordinal, call, revealFiltered);
+  }
+
+  export function getNormalDisplayItems(): DisplayItem[] {
+    return normalDisplayItemsAsc;
   }
 
   function scrollToLatestInternal() {

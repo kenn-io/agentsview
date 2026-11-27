@@ -200,6 +200,17 @@ describe("RouterStore", () => {
     setURL("/");
   });
 
+  it("distinguishes browser links from in-app navigation", () => {
+    setURL("/sessions/first?msg=2");
+    store = new RouterStore();
+    expect(store.fromHistory).toBe(true);
+    store.navigateToSession("second", { msg: "3" });
+    expect(store.fromHistory).toBe(false);
+    setURL("/sessions/first?msg=2");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(store.fromHistory).toBe(true);
+  });
+
   it("reproduces the issue URL through buildSessionHref and parsing", () => {
     setURL("/sessions");
     store = new RouterStore();

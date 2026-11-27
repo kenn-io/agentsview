@@ -675,7 +675,7 @@ describe("MessageList follow cancellation", () => {
     component = mount(MessageList, { target: document.body });
     await tick();
     ui.setFollowLatest(false);
-    (component as JumpList).scrollToOrdinal(1);
+    (component as JumpList).scrollToOrdinal(1, undefined, true);
     await vi.waitFor(() => expect(ui.transcriptMode).toBe("normal"));
     await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
   });
@@ -695,10 +695,21 @@ describe("MessageList follow cancellation", () => {
     component = mount(MessageList, { target: document.body });
     await tick();
     ui.setFollowLatest(false);
-    (component as JumpList).scrollToOrdinal(ordinal);
+    (component as JumpList).scrollToOrdinal(ordinal, undefined, true);
     await vi.waitFor(() => expect(ui.isBlockVisible(block)).toBe(true));
     expect(ui.isBlockVisible("hook")).toBe(false);
     await vi.waitFor(() => expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" }));
+  });
+
+  it("keeps block filters unchanged for an ordinary jump", async () => {
+    ui.setBlockVisible("assistant", false);
+    messages.messages = [makeMessage(1), makeMessage(10)];
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    ui.setFollowLatest(false);
+    (component as JumpList).scrollToOrdinal(1);
+    await flushScrollUpdates();
+    expect(ui.isBlockVisible("assistant")).toBe(false);
   });
 
   function withCall(message: Message, toolUseId: string, inputJson?: string): Message {
@@ -711,7 +722,7 @@ describe("MessageList follow cancellation", () => {
   }
 
   type JumpList = ReturnType<typeof mount> & {
-    scrollToOrdinal: (ordinal: number, call?: ScrollCall) => void;
+    scrollToOrdinal: (ordinal: number, call?: ScrollCall, revealFiltered?: boolean) => void;
   };
 
   it("cancels a queued jump before the first frame of a new session", async () => {

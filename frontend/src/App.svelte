@@ -103,6 +103,8 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
+  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import { parseContent, enrichSegments } from "./lib/utils/content-parser.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import {
@@ -134,8 +136,9 @@
 
   let messageListRef:
     | {
-        scrollToOrdinal: (o: number, call?: ScrollCall) => void;
+        scrollToOrdinal: (o: number, call?: ScrollCall, revealFiltered?: boolean) => void;
         getDisplayItems: () => DisplayItem[];
+        getNormalDisplayItems: () => DisplayItem[];
       }
     | undefined = $state(undefined);
 
@@ -182,6 +185,7 @@
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
         ui.pendingScrollSession = null;
+        ui.pendingScrollRevealFiltered = false;
       }
       if (id) {
         if (ui.isMobileViewport) {
@@ -226,6 +230,7 @@
   $effect(() => {
     const ordinal = ui.pendingScrollOrdinal;
     const loading = messages.loading;
+    const thinkingVisible = ui.isBlockVisible("thinking");
     untrack(() => {
       if (ordinal === null || loading || !messageListRef) return;
       // A missing session keeps the anchor armed: recovery reloads
@@ -236,15 +241,33 @@
         return;
       }
 
+      const revealFiltered = ui.pendingScrollRevealFiltered;
+      if (!revealFiltered) {
+        const items = messageListRef.getDisplayItems();
+        const normalItems = messageListRef.getNormalDisplayItems();
+        if (!items.some((item) => item.ordinals.includes(ordinal))) {
+          if (shouldAutoSwitchTranscriptModeToNormal(ui.transcriptMode, ordinal, items, normalItems)) {
+            ui.setTranscriptMode("normal");
+            return;
+          }
+          const msg = messages.messages.find((item) => item.ordinal === ordinal);
+          if (msg && !thinkingVisible && enrichSegments(parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length), msg.tool_calls).some((segment) => segment.type === "thinking")) {
+            ui.setBlockVisible("thinking", true);
+            return;
+          }
+        }
+      }
+
       const call = ui.pendingScrollCall;
       ui.pendingScrollOrdinal = null;
       ui.pendingScrollSession = null;
       ui.pendingScrollCall = null;
+      ui.pendingScrollRevealFiltered = false;
       // Ensure highlight is set (the session-change effect
       // may have cleared it before this effect ran). The list clears it
       // again when the message no longer holds the expected call.
       ui.selectedOrdinal = ordinal;
-      messageListRef.scrollToOrdinal(ordinal, call ?? undefined);
+      messageListRef.scrollToOrdinal(ordinal, call ?? undefined, revealFiltered);
     });
   });
 
@@ -650,10 +673,11 @@
       if (msgParam === "last") {
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
+        ui.pendingScrollRevealFiltered = router.fromHistory;
       } else {
         const ordinal = parseInt(msgParam, 10);
         if (Number.isFinite(ordinal)) {
-          ui.scrollToOrdinal(ordinal, sid, call);
+          ui.scrollToOrdinal(ordinal, sid, call, router.fromHistory);
         }
       }
     });
@@ -669,7 +693,7 @@
       const target = ui.pendingScrollSession;
       if (target !== null && target !== messages.sessionId) return;
       const lastOrdinal = msgs[msgs.length - 1]!.ordinal;
-      ui.scrollToOrdinal(lastOrdinal, target ?? undefined);
+      ui.scrollToOrdinal(lastOrdinal, target ?? undefined, undefined, ui.pendingScrollRevealFiltered);
     });
   });
 
