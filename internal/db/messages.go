@@ -591,6 +591,9 @@ func (db *DB) GetMessages(
 
 // MessageSnapshot reads messages from one read-only transaction, so every
 // page sees the same transcript while sync keeps writing the archive.
+// While a snapshot is open, read through it instead of the DB: the snapshot
+// holds a reader connection, and a DB read paused by an archive swap would
+// keep that connection from draining until the swap gives up.
 type MessageSnapshot struct {
 	tx *sql.Tx
 }
@@ -610,6 +613,24 @@ func (s *MessageSnapshot) GetMessages(
 	sessionID string, from, limit int, asc bool,
 ) ([]Message, error) {
 	return getMessagesWith(ctx, s.tx, sessionID, from, limit, asc)
+}
+
+// GetUsageEvents works like DB.GetUsageEvents, reading from the snapshot.
+func (s *MessageSnapshot) GetUsageEvents(
+	ctx context.Context, sessionID string,
+) ([]UsageEvent, error) {
+	return usageEventsWithQuerier(ctx, s.tx, sessionID, 0)
+}
+
+// SortedUsageEventFingerprints works like DB.SortedUsageEventFingerprints,
+// reading from the snapshot.
+func (s *MessageSnapshot) SortedUsageEventFingerprints(
+	ctx context.Context, sessionIDs []string,
+	normalizeTimestamp func(string) string,
+) (map[string]string, error) {
+	return usageEventFingerprintsWithQuerier(
+		ctx, s.tx, sessionIDs, normalizeTimestamp, true,
+	)
 }
 
 // LegacyVSCodeReplyAnchors reads request anchors from the publication snapshot.
