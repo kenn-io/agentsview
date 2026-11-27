@@ -164,7 +164,7 @@
       ariaLabel={m.appearance_reading_width()}
     >
       {#each WIDTHS as width (width.value)}
-        <MenuRadioItem value={width.value} closeOnSelect={false} textValue={width.label} class="view-option">
+        <MenuRadioItem value={width.value} textValue={width.label} class="view-option">
           <span class="option-text">
             <span class="option-name">{width.label}</span>
           </span>
