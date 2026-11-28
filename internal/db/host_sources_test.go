@@ -58,7 +58,6 @@ func TestClearHostSources(t *testing.T) {
 			`INSERT INTO artifact_checkpoint_stage_sessions(origin,sequence,gid,manifest_hash) VALUES('origin',1,'gid','hash')`,
 			`INSERT INTO worktree_project_mappings(machine,path_prefix,project) VALUES('machine','/work','project')`,
 			`INSERT INTO project_identity_observations(project,machine,observed_at) VALUES('project','machine','now')`,
-			`INSERT INTO session_project_identity_snapshots(session_id,project,machine,observed_at) VALUES('a','project','machine','now')`,
 			`INSERT INTO repository_project_names VALUES('remote','project','reason')`,
 			`INSERT INTO commit_links VALUES('a','sha','','','/work/repo',0,0,'','','/work/project')`,
 			`INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at,project) VALUES('a','sha','','','/work/repo','','/work/project')`,
@@ -75,6 +74,9 @@ func TestClearHostSources(t *testing.T) {
 	}))
 	_, err := d.AppendDiagnostic(ctx, DiagnosticEvent{ID: "00000000-0000-4000-8000-000000000001", Source: "test", Message: "failed reading /work/private/session.jsonl"})
 	require.NoError(t, err)
+	var snapshots int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM session_project_identity_snapshots WHERE session_id='a'`).Scan(&snapshots))
+	require.Equal(t, 1, snapshots)
 	require.NoError(t, d.ClearHostSources(ctx))
 	for _, table := range []string{"provider_freshness", "skipped_files", "source_failures", "local_session_source_baselines", "claude_subagent_sources", "remote_skipped_files", "parser_checkpoint_blobs", "parser_checkpoints", "artifact_export_queue", "artifact_publications", "artifact_publication_revisions", "artifact_checkpoint_heads", "artifact_checkpoint_floors", "artifact_import_queue", "artifact_import_attempt_generations", "artifact_peer_checkpoint_heads", "artifact_checkpoint_landing_sessions", "artifact_checkpoint_landings", "artifact_checkpoint_stage_sessions", "artifact_checkpoint_stages", "worktree_project_mappings", "project_identity_observations", "session_project_identity_snapshots", "repository_project_names", "worktree_project_mapping_changes", "project_identity_observation_changes", "session_project_identity_snapshot_changes", "diagnostic_events", "git_cache", "friction_issue_links", "friction_filing_state", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int

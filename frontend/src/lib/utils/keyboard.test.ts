@@ -93,9 +93,7 @@ describe("registerShortcuts", () => {
     ["claude", null],
   ])("does not copy a %s resume command for version %j", async (agent, version) => {
     sync.serverVersion = version as typeof sync.serverVersion;
-    sessions.sessions = [
-      { id: `${agent}:copied`, agent } as (typeof sessions.sessions)[number],
-    ];
+    sessions.sessions = [{ id: `${agent}:copied`, agent } as (typeof sessions.sessions)[number]];
     sessions.activeSessionId = `${agent}:copied`;
     const resume = vi
       .spyOn(SessionsService, "postApiV1SessionsByIdResume")
