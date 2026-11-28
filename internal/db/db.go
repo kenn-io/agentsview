@@ -722,7 +722,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (194: link Claude Code forks to the session their derived-from record
 // names and trim the replayed prefix. Re-parse Claude sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 194
+// (195: identify launched sessions from shell calls.)
+const dataVersion = 195
 
 const archiveOnlyVersionBase = 1 << 20
 

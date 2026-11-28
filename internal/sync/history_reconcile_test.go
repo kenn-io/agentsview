@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 type providerHistoryReadSpy struct {
@@ -100,22 +101,24 @@ func TestReconcileProviderHistoryPropagatesTransientArchiveReadError(t *testing.
 func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	t *testing.T,
 ) {
+	const childID = "12345678-1234-1234-1234-123456789abc"
 	root := t.TempDir()
-	projectDir := filepath.Join(root, "project")
+	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
+	projectDir := filepath.Join(claudeRoot, "project")
 	sessionPath := filepath.Join(projectDir, "parent-session.jsonl")
 	sidecarPath := filepath.Join(
 		projectDir, "parent-session", "tool-results", "output.txt",
 	)
 	require.NoError(t, os.MkdirAll(filepath.Dir(sidecarPath), 0o755))
 	require.NoError(t, os.WriteFile(
-		sidecarPath, []byte("full persisted output\n"), 0o644,
+		sidecarPath, []byte("OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n"), 0o644,
 	))
 
 	placeholder := "<persisted-output>\nOutput too large. Full output saved to: " +
 		sidecarPath + "\n</persisted-output>"
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"codex exec review"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` +
 			mustSyncJSONString(t, placeholder) +
 			`}]},"toolUseResult":{"persistedOutputPath":` +
@@ -123,15 +126,22 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	}, "\n") + "\n"
 	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
 
+	require.NoError(t, os.MkdirAll(codexRoot, 0o755))
+	rollout := filepath.Join(codexRoot, "rollout-2024-01-01T00-00-00-"+childID+".jsonl")
+	child := testjsonl.CodexSessionMetaJSON(childID, "/workspace", "codex_exec", "2024-01-01T00:00:00Z") + "\n" +
+		testjsonl.CodexMsgJSON("user", "review", "2024-01-01T00:00:01Z") + "\n"
+	require.NoError(t, os.WriteFile(rollout, []byte(child), 0o644))
+
 	database := openTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {root},
+			parser.AgentClaude: {claudeRoot},
+			parser.AgentCodex:  {codexRoot},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 	var sessionID string
 	require.NoError(t, database.Reader().QueryRow(
 		t.Context(), "SELECT id FROM sessions WHERE agent='claude'",
@@ -142,8 +152,13 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	require.NoError(t, err)
 	require.Len(t, initialMessages, 2)
 	require.Len(t, initialMessages[1].ToolCalls, 1)
-	require.Equal(t, "full persisted output\n",
+	require.Equal(t, "OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n",
 		initialMessages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "codex:"+childID, initialMessages[1].ToolCalls[0].SubagentSessionID)
+	children, err := database.GetChildSessions(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "codex:"+childID, children[0].ID)
 
 	require.NoError(t, os.RemoveAll(filepath.Dir(filepath.Dir(sidecarPath))))
 
@@ -155,6 +170,11 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, "full persisted output\n",
+	assert.Equal(t, "OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n",
 		messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "codex:"+childID, messages[1].ToolCalls[0].SubagentSessionID)
+	children, err = database.GetChildSessions(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "codex:"+childID, children[0].ID)
 }

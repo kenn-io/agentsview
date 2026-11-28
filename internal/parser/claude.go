@@ -496,6 +496,7 @@ func claudeParseFile(
 	}
 
 	meta := claudeSessionMeta{
+		foreign:         opts.foreign,
 		sourceSessionID: sourceSessionID,
 		sourceVersion:   sourceVersion,
 		cwd:             cwd,
@@ -1165,9 +1166,18 @@ func claudeParseSessionFrom(
 	if err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
+	// An unmatched result's call is stored; only a full parse can link it.
+	for _, link := range links {
+		if link.SubagentSessionID == "" && link.HasResult && hasLaunchedOutputID(DecodeContent(link.ResultContentRaw)) {
+			return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		}
+	}
 	if err := annotateSubagentSessionsContext(
 		ctx, msgs, subagentMap,
 	); err != nil {
+		return nil, nil, time.Time{}, 0, err
+	}
+	if err := annotateClaudeLaunchedRuns(ctx, msgs, false); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
 	if len(attachments) > 0 {
@@ -1603,6 +1613,7 @@ func extractMessagesFrom(
 // claudeSessionMeta holds source metadata extracted during the
 // main parse loop and applied to all resulting ParsedSessions.
 type claudeSessionMeta struct {
+	foreign         bool
 	sourceSessionID string
 	sourceVersion   string
 	cwd             string
@@ -1647,6 +1658,9 @@ func parseLinear(
 	startedAt = earlierTime(globalStart, startedAt)
 	endedAt = laterTime(globalEnd, endedAt)
 	if err := annotateSubagentSessionsContext(ctx, messages, subagentMap); err != nil {
+		return nil, err
+	}
+	if err := annotateClaudeLaunchedRuns(ctx, messages, meta.foreign); err != nil {
 		return nil, err
 	}
 
@@ -1871,6 +1885,9 @@ func parseDAG(
 		if err := annotateSubagentSessionsContext(
 			ctx, messages, subagentMap,
 		); err != nil {
+			return nil, nil, err
+		}
+		if err := annotateClaudeLaunchedRuns(ctx, messages, meta.foreign); err != nil {
 			return nil, nil, err
 		}
 

@@ -1,6 +1,7 @@
 package ingest_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -651,5 +652,32 @@ func openCodeHistoryCandidate(hash, content string) ingest.Candidate {
 				Path: "/synthetic/storage/session/session-1.json", Hash: hash,
 			},
 		}},
+	}
+}
+
+func TestReconcileClaudeRestoredLaunchOutput(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	ts := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
+	stamp := timeutil.Format(ts)
+	banner := "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n--------\n"
+	for _, tc := range []struct{ name, storedID, parsedID, prior, want string }{
+		{"local", "parent", "parent", banner, "codex:" + id},
+		{"stored prefixed", "remote~parent", "parent", banner, "remote~codex:" + id},
+		{"parsed prefixed", "remote~parent", "remote~parent", banner, "remote~codex:" + id},
+		{"conflicting", "remote~parent", "remote~parent", banner + strings.ReplaceAll(banner, id, "abcdefab-1234-1234-1234-123456789abc"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := ingest.Candidate{
+				Session:  db.Session{ID: tc.storedID, Agent: "claude"},
+				Parsed:   parser.ParseResult{Session: parser.ParsedSession{ID: tc.parsedID, Agent: parser.AgentClaude, File: parser.FileInfo{Path: "/synthetic/parent.jsonl"}}, Messages: []parser.ParsedMessage{{Timestamp: ts, ToolResults: []parser.ParsedToolResult{{ToolUseID: "call", Source: "tool_result", PersistedOutputUnresolved: true}}}}},
+				Messages: []db.Message{{ToolCalls: []db.ToolCall{{ToolUseID: "call", Category: "Bash", InputJSON: `{"command":"codex exec review"}`, ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool_result", Timestamp: stamp, Content: "placeholder"}}}}}},
+			}
+			prior := &ingest.PriorSession{Messages: []db.Message{{ToolCalls: []db.ToolCall{{ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool_result", Timestamp: stamp, Content: tc.prior, ContentLength: len(tc.prior)}}}}}}}
+			result, err := ingest.ReconcileProviderHistory(t.Context(), candidate, prior, ingest.ContentOptions{})
+			require.NoError(t, err)
+			call := result.Candidate.Messages[0].ToolCalls[0]
+			assert.Equal(t, tc.want, call.SubagentSessionID)
+			assert.Equal(t, tc.prior, call.ResultEvents[0].Content)
+		})
 	}
 }

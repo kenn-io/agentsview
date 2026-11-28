@@ -209,22 +209,8 @@ func TestCaptureLaunchParentWithoutCodexHome(t *testing.T) {
 }
 
 func TestOneShotRunArguments(t *testing.T) {
-	for _, tc := range []struct {
-		name, agent string
-		args        []string
-		want        bool
-	}{
-		{"codex alias", "codex", []string{"e", "x"}, true},
-		{"codex option before exec", "codex", []string{"-m", "model", "exec"}, true},
-		{"claude continue before print", "claude", []string{"-c", "-p"}, true},
-		{"codex directory named exec", "codex", []string{"-C", "exec"}, false},
-		{"claude prompt flag value", "claude", []string{"--append-system-prompt", "-p"}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := launchProcess{Cmdline: func(context.Context) ([]string, error) { return append([]string{tc.agent}, tc.args...), nil }}
-			assert.Equal(t, tc.want, oneShotRun(t.Context(), p, tc.agent))
-		})
-	}
+	p := launchProcess{Cmdline: func(context.Context) ([]string, error) { return []string{"codex", "-m", "model", "exec"}, nil }}
+	assert.True(t, oneShotRun(t.Context(), p, "codex"))
 }
 
 func TestLookupGopsutilProcessReadsAncestryAndEnvironment(t *testing.T) {

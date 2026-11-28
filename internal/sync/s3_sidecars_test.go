@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -485,7 +486,9 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 func TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput(
 	t *testing.T,
 ) {
+	const childID = "12345678-1234-1234-1234-123456789abc"
 	database := openTestDB(t)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "laptop~codex:" + childID, Agent: "codex", Machine: "laptop", Project: "test-proj"}))
 	path := "s3://bucket/laptop/raw/claude/test-proj/parent-session.jsonl"
 	sidecarPath := "s3://bucket/laptop/raw/claude/test-proj/" +
 		"parent-session/tool-results/out.txt"
@@ -498,10 +501,10 @@ func TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput(
 	resultPathJSON := mustSyncJSONString(t, localResultPath)
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"codex exec review"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + persistedContentJSON + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `,"persistedOutputSize":32}}`,
 	}, "\n")
-	sidecarContent := "full output\n"
+	sidecarContent := "OpenAI Codex v0.1.0\n--------\nsession id: " + childID + "\n--------\n"
 	sidecarAvailable := true
 	oldFetch := fetchS3Object
 	t.Cleanup(func() { fetchS3Object = oldFetch })
@@ -563,6 +566,13 @@ func TestProcessS3ClaudeMissingSidecarKeepsStoredHydratedOutput(
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, sidecarContent, msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "laptop~codex:"+childID, msgs[1].ToolCalls[0].SubagentSessionID)
+	_, err = database.LinkSubagentSessionsContext(t.Context())
+	require.NoError(t, err)
+	children, err := database.GetChildSessions(t.Context(), "laptop~parent-session")
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "laptop~codex:"+childID, children[0].ID)
 }
 
 func TestProcessS3ClaudeFetchesSidecarFromCustomProjectsRoot(t *testing.T) {

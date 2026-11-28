@@ -1,0 +1,3 @@
+{"type":"user","uuid":"u1","timestamp":"2026-09-02T10:00:00Z","message":{"role":"user","content":"Review the change"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-09-02T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_launch","name":"Bash","input":{"command":"codex exec review"}}]}}
+{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-09-02T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_launch","content":"OpenAI Codex v0.1.0\n--------\nsession id: 66666666-6666-4666-8666-666666666666\n--------\n"}]}}

@@ -191,8 +191,8 @@ func ParseQoderSession(path, project, machine string) ([]ParseResult, error) {
 func ParseQoderSessionWithExclusions(
 	ctx context.Context, path, project, machine string,
 ) ([]ParseResult, []string, error) {
-	results, excluded, err := claudeParseWithExclusions(
-		ctx, path, project, machine,
+	results, excluded, err := claudeParseFile(
+		ctx, path, project, machine, claudeParseOptions{foreign: true},
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("qoder parse %s: %w", path, err)

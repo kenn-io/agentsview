@@ -2372,21 +2372,14 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	)`
 }
 
-// clearDanglingSubagentParentQuery repairs a captured former child whose LAST spawn
-// edge was removed together with its spawner: both UNION branches of the
-// linking statement select from remaining tool_calls, so an edge-less child
-// can never be re-resolved there, and its parent now points at a session
-// that no longer exists. Clearing is deliberately restricted to that
-// dangling case — when the stored parent still exists, only the edge is
-// gone, and nothing distinguishes an edge-derived parent (stale) from a
-// path-derived one (still valid, e.g. a Claude subagent whose directory
-// proves membership), so the safer failure mode is to keep the historical
-// claim. relationship_type stays 'subagent'; if an edge reappears, linking
-// re-parents the NULL-parent row (see the null-safe IS NOT predicate).
+// clearDanglingSubagentParentQuery repairs captured former children with no
+// surviving spawn edge. An edge-derived parent gives way to the parser parent,
+// including one not yet ingested. Other dangling parents clear unless the
+// parser parent exists. The subagent classification survives for a later edge.
 func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
-	SET parent_session_id = NULL,
+	SET parent_session_id = (` + parserParentSQL + `),
 	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
@@ -2396,10 +2389,14 @@ func clearDanglingSubagentParentQuery(ph string) string {
 		SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id
 		AND tc.session_id IS NOT tc.subagent_session_id
 	)
-	AND NOT EXISTS (
+	AND s.parent_session_id IS NOT (` + parserParentSQL + `)
+	AND (s.spawn_linked = 1 OR NOT EXISTS (
 		SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id
-	)`
+	))`
 }
+
+const parserParentSQL = `SELECT IIF(s.spawn_linked = 1, NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id),
+	(SELECT p.id FROM sessions p WHERE p.id = s.parser_parent_session_id AND p.id IS NOT s.id))`
 
 // LinkSubagentSessionsForSessions is LinkSubagentSessions scoped to the
 // sessions written by one sync batch: only children reachable from a batch

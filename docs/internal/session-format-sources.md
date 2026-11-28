@@ -155,6 +155,8 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Launched runs (checked 2026-11-27):** The [CLI reference](https://code.claude.com/docs/en/cli-reference) documents `-p`, `--session-id`, and the resume and continue flags. A Bash `tool_use` and its `tool_result` can identify a one-shot run when the command passes its UUID or the result contains a supported session event. The parser records the ID on that same call; output from later calls is not used. When an archived side-file result is restored, ingestion derives the link again from the restored events.
+
 - **Modified-time refresh without a write (observed 2026-11-15):** On a machine
   running Claude Code 2.1.325, four transcripts of open sessions received new
   modified times exactly 3,600 seconds apart while their size and SHA-256
@@ -788,6 +790,14 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Launched runs (checked 2026-11-27):** The pinned [exec event schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/exec/src/exec_events.rs) defines the `thread.started` event and its `thread_id`. The parser uses an ID from the starting shell call or its own result and keeps that ID on the original call. Text-block array output is decoded for link detection while the stored result stays intact. Output from later polling or log-search calls does not establish a link.
+
+  Code-mode shell calls were observed as JavaScript passed to `exec`, including
+  `tools.exec_command` with a `cmd` field (`no-public-source`). The pinned
+  [output formatter](https://github.com/openai/codex/blob/b34808060a51e98b8cb3dcf77824703757737cda/codex-rs/core/src/tools/code_mode/output.rs)
+  emits status, timing, and output as text blocks. Agentsview recognizes a
+  single literal shell call whose output the script prints.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned

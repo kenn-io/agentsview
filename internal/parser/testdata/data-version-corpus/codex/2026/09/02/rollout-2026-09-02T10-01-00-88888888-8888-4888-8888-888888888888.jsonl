@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-09-02T10:01:00Z","payload":{"id":"88888888-8888-4888-8888-888888888888","cwd":"/work/project","originator":"codex_cli_rs"}}
+{"type":"response_item","timestamp":"2026-09-02T10:01:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review the change"}]}}
+{"type":"response_item","timestamp":"2026-09-02T10:01:02Z","payload":{"type":"function_call","name":"exec_command","call_id":"call_launch","arguments":"{\"cmd\":\"codex exec review\"}"}}
+{"type":"response_item","timestamp":"2026-09-02T10:01:03Z","payload":{"type":"function_call_output","call_id":"call_launch","output":[{"type":"input_text","text":"OpenAI Codex v0.1.0\n--------\nsession id: 66666666-6666-4666-8666-666666666666\n--------\n"}]}}
