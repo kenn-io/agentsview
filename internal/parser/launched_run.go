@@ -90,7 +90,7 @@ func launchedRunArgs(agent string, words []string) (ids map[string]bool, jsonEve
 			jsonEvents = true
 		case "--output-format":
 			jsonEvents = agent == "claude" && (value == "json" || value == "stream-json")
-		case "-r", "--resume", "-c", "--continue":
+		case "-r", "--resume", "-c", "--continue", "--from-pr", "--teleport":
 			resumed = resumed || agent == "claude"
 		}
 	}
@@ -102,7 +102,7 @@ func launchedRunID(ctx context.Context, input, output string) string {
 	if command, ok := codeModeCommand(input); ok {
 		input = command
 		output = codeModeOutput(output)
-	} else if strings.Contains(input, "tools.exec_command") {
+	} else if !jsontext.Value(input).IsValid() && strings.Contains(input, "tools.exec_command") {
 		return ""
 	}
 	commands, ok := ShellInputCommands(input)
