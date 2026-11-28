@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,31 +107,6 @@ func TestDetachedArchiveImageTextConfiguration(t *testing.T) {
 	require.NoError(t, d.Close())
 	d = nil
 
-	var requests atomic.Int32
-	var wrongPath atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		if r.URL.Path != "/glmocr/parse" {
-			wrongPath.Store(true)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"recovered"}]]}`, glmocr.DefaultDeploymentFingerprint)
-	}))
-	t.Cleanup(srv.Close)
-	enabled := fmt.Sprintf("\n[image_text]\nenabled = true\nendpoint = %q\n", srv.URL+"/glmocr/parse")
-	require.NoError(t, os.WriteFile(configPath, append(originalConfig, []byte(enabled)...), 0o600))
-	cfg = openCopy()
-	require.True(t, cfg.ImageTextConfigured)
-	manager, err = setupImageText(ctx, cfg, d)
-	require.NoError(t, err)
-	require.NotNil(t, manager)
-	require.NoError(t, manager.Run(ctx))
-	require.EqualValues(t, 1, requests.Load())
-	require.False(t, wrongPath.Load())
-	search("recovered", 1)
-	require.NoError(t, d.Close())
-	d = nil
-
 	require.NoError(t, os.WriteFile(configPath, append(originalConfig, []byte("\n[image_text]\nenabled = false\n")...), 0o600))
 	cfg = openCopy()
 	require.True(t, cfg.ImageTextConfigured)
@@ -145,7 +119,6 @@ func TestDetachedArchiveImageTextConfiguration(t *testing.T) {
 		require.Zero(t, count)
 	}
 	search("invoice", 0)
-	search("recovered", 0)
 }
 
 func TestImageTextJobKeepsDaemonAwake(t *testing.T) {

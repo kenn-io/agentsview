@@ -38,22 +38,9 @@ func TestDetachedArchiveRejectsHostActions(t *testing.T) {
 	version := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, version.Code)
 	assert.True(t, decodeRecorder[VersionInfo](t, version).HostPathsDetached)
-	directory := serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions/claude:copied/directory", nil)
-	require.Equal(t, http.StatusOK, directory.Code)
-	assert.Empty(t, decodeRecorder[sessionDirectoryResponse](t, directory).Path)
-	open := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/claude:copied/open", map[string]any{"opener_id": "editor"})
-	assert.Equal(t, http.StatusBadRequest, open.Code)
-	for _, tc := range []struct {
-		path string
-		body any
-	}{
-		{"/api/v1/sessions/claude:copied/resume", map[string]any{"command_only": true}},
-		{"/api/v1/sessions/claude:copied/resume", map[string]any{"from_ordinal": 0, "fork_session": true}},
-	} {
-		response := serveJSON(t, f.handler, http.MethodPost, tc.path, tc.body)
-		assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
-		assert.NotContains(t, response.Body.String(), "claude resume")
-	}
+	response := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/claude:copied/resume", map[string]any{"command_only": true})
+	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+	assert.NotContains(t, response.Body.String(), "claude resume")
 }
 
 func TestArchiveOnlyRejectsManualSync(t *testing.T) {

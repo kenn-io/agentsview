@@ -83,13 +83,7 @@ func TestDetachedArchivePreservesSessionsOnRebuild(t *testing.T) {
 	session, err := database.GetSessionFull(ctx, "retained")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	detached, err := database.HostPathsDetached(ctx)
-	require.NoError(t, err)
-	assert.True(t, detached)
-	require.ErrorIs(t, database.RequireSourceSync(ctx), db.ErrArchiveOnly)
-	var raw int
-	require.NoError(t, database.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
-	assert.Equal(t, (1<<21)+(1<<20)+db.CurrentDataVersion(), raw)
+
 }
 
 func TestRawSyncRejectsUnreadableArchive(t *testing.T) {

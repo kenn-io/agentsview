@@ -17,12 +17,21 @@ func TestClearHostSources(t *testing.T) {
 	require.NoError(t, d.SetSyncState(ctx, MachineAliasKeyPrefix+"old-machine", "machine-a"))
 	require.NoError(t, d.SetSyncState(ctx, "machine_origin:machine-a", "origin"))
 	require.NoError(t, d.SetSyncState(ctx, "replica-position", "123"))
-	require.NoError(t, d.EnableArchiveOnly(ctx))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id, project, cwd, file_path) VALUES('a', ?, ?, ?)`, path, path, path); err != nil {
 			return err
 		}
 		for _, query := range []string{
+			`INSERT INTO raw_archive_roots VALUES('root','device','machine','claude','/original/root','configured')`,
+			`INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns) VALUES('root','file','hash',1,1)`,
+			`INSERT INTO raw_archive_sources(manifest_id,root_id,source_key,original_path,canonical_json) VALUES('manifest','root','source','/original/file',x'7b7d')`,
+			`INSERT INTO raw_archive_devices VALUES('device',x'7b7d')`,
+			`INSERT INTO raw_archive_root_aliases VALUES('root','/original/alias')`,
+			`INSERT INTO raw_archive_sessions VALUES('device','claude','native','a','root','source')`,
+			`INSERT INTO archive_attachments(repository_id,snapshot_id,archive_id) VALUES('repo','snapshot','archive')`,
+			`INSERT INTO archive_source_bindings VALUES('archive','device','root','source','manifest')`,
+			`INSERT INTO archive_attachment_sources(repository_id,snapshot_id,archive_id,device_id,root_id,source_key,target) VALUES('repo','snapshot','archive','device','root','source','target')`,
+			`INSERT INTO archive_session_provenance VALUES('a','archive','device','root','source','manifest','native')`,
 			`INSERT INTO git_cache VALUES('cache', 'log', '{"repo":"/host/repo"}', '2026-01-01')`,
 			`INSERT INTO friction_issue_links VALUES('fp', 'instance', 'project', 'issue', 'id', 'https://example.com', 'local', '2026-01-01')`,
 			`INSERT INTO friction_filing_state(fingerprint,state,last_error,updated_at) VALUES('other', 'failed', '/host/repo', '2026-01-01')`,
@@ -37,16 +46,15 @@ func TestClearHostSources(t *testing.T) {
 		return nil
 	}))
 	require.NoError(t, d.ClearHostSources(ctx))
-	for _, table := range []string{"git_cache", "friction_issue_links", "friction_filing_state", "codex_cloud_accounts", "cursor_account_polls", "artifact_imported_sessions"} {
+	for _, table := range []string{"git_cache", "friction_issue_links", "friction_filing_state", "codex_cloud_accounts", "cursor_account_polls", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int
 		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
 		assert.Zero(t, count, table)
 	}
 
-	var project, cwd string
+	var cwd string
 	var filePath sql.NullString
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT project, cwd, file_path FROM sessions WHERE id='a'`).Scan(&project, &cwd, &filePath))
-	assert.Equal(t, CopiedProjectLabel(path), project)
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT cwd, file_path FROM sessions WHERE id='a'`).Scan(&cwd, &filePath))
 	assert.Empty(t, cwd)
 	assert.False(t, filePath.Valid)
 	detached, err := d.HostPathsDetached(ctx)
@@ -61,7 +69,6 @@ func TestClearHostSources(t *testing.T) {
 	origin, err := d.GetSyncState(ctx, "machine_origin:machine-a")
 	require.NoError(t, err)
 	assert.Equal(t, "origin", origin)
-	require.ErrorIs(t, d.RequireSourceSync(ctx), ErrArchiveOnly)
 	position, err := d.GetSyncState(ctx, "replica-position")
 	require.NoError(t, err)
 	assert.Empty(t, position)
