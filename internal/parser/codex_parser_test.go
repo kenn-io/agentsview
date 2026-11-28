@@ -3605,9 +3605,12 @@ func TestParseCodexCodeModeLaunchedRun(t *testing.T) {
 	input := `const r = await tools.exec_command({cmd: "codex exec review"}); text(r.output);`
 	output := "Script completed\nWall time 1 seconds\nOutput:\nOpenAI Codex v0.1.0\n--------\nsession id: " + child + "\n--------\n"
 	call := testjsonl.CodexFunctionCallWithCallIDJSON("exec", "call_exec", input, tsEarlyS5)
+	require.Contains(t, call, `"type":"function_call"`)
+	require.Contains(t, call, `"arguments":`)
 	call = strings.Replace(call, `"type":"function_call"`, `"type":"custom_tool_call"`, 1)
 	call = strings.Replace(call, `"arguments":`, `"input":`, 1)
 	result := testjsonl.CodexFunctionCallOutputJSON("call_exec", []map[string]any{{"type": "input_text", "text": output}}, tsLate)
+	require.Contains(t, result, `"type":"function_call_output"`)
 	result = strings.Replace(result, `"type":"function_call_output"`, `"type":"custom_tool_call_output"`, 1)
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON("parent", "/workspace", "codex_cli_rs", tsEarly),
