@@ -1203,8 +1203,6 @@ type Config struct {
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
-	// ImageTextConfigured distinguishes an omitted section from explicit disabling.
-	ImageTextConfigured bool `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
 	InstallationID string `json:"-" toml:"-"`
 	// InstallationCreatedAt is when InstallationID was created, or zero for
@@ -2389,7 +2387,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	c.mergeRecallExtractTOML(file.Recall, meta)
 	if meta.IsDefined("image_text") {
 		c.ImageText = file.ImageText
-		c.ImageTextConfigured = true
 	}
 	if meta.IsDefined("integrations") {
 		c.Integrations = file.Integrations

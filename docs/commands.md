@@ -296,12 +296,10 @@ supported usage caches. It clears source paths, folder and worktree identity,
 credentials, and replica connections. Ordinary project labels remain; labels
 that contain paths become stable aliases. Opening and resuming host sessions
 is disabled in the copy. Archive-only mode disables source discovery, sync,
-and publication. Older releases refuse to open the detached copy.
-Raw archive and artifact vault data and external archive bindings are omitted;
-the report lists omitted vaults. Transcript text and tool output remain intact,
+and publication.
+Raw archive and artifact vault data and external archive bindings are omitted.
+Transcript text and tool output remain intact,
 so the copy is not a redacted dataset.
-Copied image text remains searchable. Configure OCR with a new endpoint to
-process images again, or explicitly disable OCR to clear the text.
 
 Passing `--writers-stopped` records your attestation that source writers were
 stopped; it does not stop them for you. A rolling capture is not a final

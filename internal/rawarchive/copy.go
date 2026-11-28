@@ -66,13 +66,6 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 	if err = errors.Join(err, database.Close()); err != nil {
 		return report, err
 	}
-	for _, name := range []string{Directory, "artifacts"} {
-		if _, err := os.Lstat(filepath.Join(source, name)); err == nil {
-			report.Excluded = append(report.Excluded, name+": recovery vault")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return report, err
-		}
-	}
 	assets := filepath.Join(source, "assets")
 	if info, err := os.Lstat(assets); err == nil {
 		if !info.IsDir() {
@@ -97,13 +90,7 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 			err = rawcapture.SnapshotSQLite(ctx, cache, target, info)
 		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return report, ctx.Err()
-			}
-			if removeErr := os.Remove(target); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				return report, removeErr
-			}
-			report.Excluded = append(report.Excluded, filepath.Base(cache)+": unreadable cache")
+			return report, err
 		}
 	}
 	if err := writeRecoveryConfig(stage, options.Settings); err != nil {
@@ -113,7 +100,7 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 	if err != nil {
 		return report, err
 	}
-	report.Gaps, err = database.MissingAssets(ctx, filepath.Join(stage, "assets"))
+	err = database.VerifyAssets(ctx, filepath.Join(stage, "assets"))
 	if err = errors.Join(err, database.Close()); err != nil {
 		return report, err
 	}

@@ -72,11 +72,7 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 			require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
 			var raw int
 			require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
-			want := archiveOnlyVersionBase + dataVersion
-			if detached {
-				want += detachedVersionBase
-			}
-			assert.Equal(t, want, raw)
+			assert.Equal(t, archiveOnlyVersionBase+dataVersion, raw)
 			version, archiveOnly := DecodeUserVersion(raw)
 			assert.Equal(t, dataVersion, version)
 			assert.True(t, archiveOnly)

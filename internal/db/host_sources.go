@@ -29,8 +29,7 @@ func CopiedProjectLabel(value string) string {
 // ClearHostSources detaches a staged archive from its original host.
 func (db *DB) ClearHostSources(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		version, err := beginHostDetach(ctx, tx)
-		if err != nil {
+		if err := retainCodexCloudAccounts(ctx, tx); err != nil {
 			return err
 		}
 		for _, statement := range []string{
@@ -63,9 +62,6 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return err
 			}
-		}
-		if err := writeUserVersion(ctx, tx, version); err != nil {
-			return err
 		}
 		return relabelCopiedProjects(ctx, tx)
 	})
@@ -119,16 +115,6 @@ func applyProjectAliases(ctx context.Context, tx *sql.Tx, tables []string) error
 	}
 	_, err := tx.ExecContext(ctx, `DROP TABLE copied_project_aliases`)
 	return err
-}
-
-// beginHostDetach returns the archive's user version after retaining the
-// identities that clearing host paths would otherwise lose.
-func beginHostDetach(ctx context.Context, tx *sql.Tx) (int, error) {
-	version, _, err := readUserVersion(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
-	return version, retainCodexCloudAccounts(ctx, tx)
 }
 
 // retainCodexCloudAccounts keeps each Codex cloud session's account grouping key,

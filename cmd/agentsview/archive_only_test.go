@@ -70,7 +70,7 @@ func TestDetachedArchivePreservesSessionsOnRebuild(t *testing.T) {
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", (1<<21)+(1<<20)+db.CurrentDataVersion()-1))
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", (1<<20)+db.CurrentDataVersion()-1))
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	data, err := json.Marshal(cfg)

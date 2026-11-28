@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -50,15 +49,15 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 			}
 			parent := t.TempDir()
 			dest := filepath.Join(parent, "copy")
-			report, err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
+			_, err = Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
+			if state != "valid" {
+				require.ErrorContains(t, err, "asset")
+				entries, err := os.ReadDir(parent)
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				return
+			}
 			require.NoError(t, err)
-			if state == "missing" || state == "missing directory" {
-				assert.Contains(t, strings.Join(append(report.Gaps, report.Excluded...), "\n"), strings.TrimPrefix(ref, "asset://"))
-				delete(files, strings.TrimPrefix(ref, "asset://"))
-			}
-			if state == "missing directory" {
-				clear(files)
-			}
 			for name, want := range files {
 				for _, dir := range []string{assetDir, filepath.Join(dest, "assets")} {
 					got, err := os.ReadFile(filepath.Join(dir, name))
@@ -116,25 +115,6 @@ func TestCopyDetachedArchive(t *testing.T) {
 	assert.Equal(t, path, filePath.String)
 }
 
-func TestCopyOmitsRecoveryVaults(t *testing.T) {
-	ctx := t.Context()
-	source := t.TempDir()
-	for _, dir := range []string{source, filepath.Join(source, Directory)} {
-		repository, err := artifact.OpenRepository(ctx, dir)
-		require.NoError(t, err)
-		require.NoError(t, repository.Close())
-	}
-	database, err := db.OpenIsolatedContext(ctx, filepath.Join(source, "sessions.db"))
-	require.NoError(t, err)
-	require.NoError(t, database.EnableArchiveOnly(ctx))
-	require.NoError(t, database.Close())
-	dest := filepath.Join(t.TempDir(), "copy")
-	report, err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
-	require.NoError(t, err)
-	assert.Contains(t, report.Excluded, "raw-archive: recovery vault")
-	assert.Contains(t, report.Excluded, "artifacts: recovery vault")
-}
-
 func TestCopyRefusesIncompleteSources(t *testing.T) {
 	for _, kind := range []string{"missing database", "cancelled"} {
 		t.Run(kind, func(t *testing.T) {
@@ -189,13 +169,13 @@ func TestCopyUsageCache(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(source, "usage-cache-v999-unrelated.db"), []byte("unrelated"), 0o600))
 			}
 			dest := filepath.Join(t.TempDir(), "copy")
-			report, err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
-			require.NoError(t, err)
+			_, err = Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
 			if state == "unreadable" {
-				assert.Contains(t, report.Excluded, filepath.Base(cache)+": unreadable cache")
-				assert.NoFileExists(t, filepath.Join(dest, filepath.Base(cache)))
+				require.Error(t, err)
+				assert.NoDirExists(t, dest)
 				return
 			}
+			require.NoError(t, err)
 			copied, err := sql.Open("sqlite3", filepath.Join(dest, filepath.Base(cache)))
 			require.NoError(t, err)
 			var input, output int
