@@ -312,7 +312,9 @@ func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, f
 			}
 		}
 		for _, result := range messages[i].ToolResults {
-			if calls[result.ToolUseID] != nil {
+			if result.Status == "errored" {
+				delete(calls, result.ToolUseID)
+			} else if calls[result.ToolUseID] != nil {
 				outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
 			}
 		}
