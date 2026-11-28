@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -4383,4 +4384,23 @@ func TestCodexUsageOnlyRowAfterReasoningKeepsResumeOrdinals(t *testing.T) {
 	require.Len(t, cold.toolCallUpdates, 1)
 	assert.Equal(t, 4, cold.toolCallUpdates[0].MessageOrdinal)
 	assert.True(t, cold.toolCallUpdates[0].TargetKnown)
+}
+
+func TestParseCodexLaunchedRunTextBlockOutput(t *testing.T) {
+	const child = "12345678-1234-1234-1234-123456789abc"
+	output := "OpenAI Codex v0.1.0\n--------\nsession id: " + child + "\n--------\n"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("parent", "/workspace", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call_exec", map[string]any{"cmd": "codex exec review"}, tsEarlyS5),
+		testjsonl.CodexFunctionCallOutputJSON("call_exec", []map[string]any{{"type": "input_text", "text": output}}, tsLate),
+	)
+	path := createTestFile(t, "text-block-launch.jsonl", content)
+	_, msgs, err := parseCodexTestSession(t, path, "local", false)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "codex:"+child, msgs[1].ToolCalls[0].SubagentSessionID)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.JSONEq(t, `[{"type":"input_text","text":`+strconv.Quote(output)+`}]`, msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }

@@ -108,14 +108,14 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	)
 	require.NoError(t, os.MkdirAll(filepath.Dir(sidecarPath), 0o755))
 	require.NoError(t, os.WriteFile(
-		sidecarPath, []byte("full persisted output\n"), 0o644,
+		sidecarPath, []byte("OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n"), 0o644,
 	))
 
 	placeholder := "<persisted-output>\nOutput too large. Full output saved to: " +
 		sidecarPath + "\n</persisted-output>"
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"codex exec review"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` +
 			mustSyncJSONString(t, placeholder) +
 			`}]},"toolUseResult":{"persistedOutputPath":` +
@@ -142,7 +142,7 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	require.NoError(t, err)
 	require.Len(t, initialMessages, 2)
 	require.Len(t, initialMessages[1].ToolCalls, 1)
-	require.Equal(t, "full persisted output\n",
+	require.Equal(t, "OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n",
 		initialMessages[1].ToolCalls[0].ResultContent)
 
 	require.NoError(t, os.RemoveAll(filepath.Dir(filepath.Dir(sidecarPath))))
@@ -155,6 +155,7 @@ func TestClaudeForcedReparseKeepsArchivedToolResultAfterSidecarDeleted(
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, "full persisted output\n",
+	assert.Equal(t, "OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n",
 		messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "codex:12345678-1234-1234-1234-123456789abc", messages[1].ToolCalls[0].SubagentSessionID)
 }

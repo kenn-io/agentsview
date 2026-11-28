@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -231,6 +232,33 @@ func reconcileClaudePersistedToolResults(
 	}
 	if len(touched) == 0 {
 		return result, ctx.Err()
+	}
+	// Re-derive Claude launch links from the complete restored result events.
+	if candidate.Parsed.Session.Agent == parser.AgentClaude || candidate.Parsed.Session.Agent == "" && candidate.Session.Agent == string(parser.AgentClaude) {
+		prefix := ""
+		if candidate.Parsed.Session.ID != "" {
+			if p, ok := strings.CutSuffix(candidate.Session.ID, candidate.Parsed.Session.ID); ok {
+				prefix = p
+			}
+		}
+		for _, pos := range touched {
+			call := &candidate.Messages[pos.mi].ToolCalls[pos.ci]
+			if call.Category != "Bash" {
+				continue
+			}
+			var output strings.Builder
+			failed := false
+			for _, event := range call.ResultEvents {
+				output.WriteString(event.Content)
+				output.WriteByte('\n')
+				failed = failed || event.Status == "errored"
+			}
+			id := parser.LaunchedRunID(ctx, call.InputJSON, output.String(), failed)
+			call.SubagentSessionID = id
+			if id != "" {
+				call.SubagentSessionID = prefix + id
+			}
+		}
 	}
 	// A restored event can reintroduce image bytes the live policy drops, the
 	// same risk VSCopilot's own merge above guards against, so reapply the

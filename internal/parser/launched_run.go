@@ -148,6 +148,11 @@ func launchedArgsFixed(name string, args []*syntax.Word, words []string, literal
 	return true
 }
 
+// LaunchedRunID derives a launch link from a shell call and its own output.
+func LaunchedRunID(ctx context.Context, input, output string, failed bool) string {
+	return launchedRunID(ctx, input, output, failed)
+}
+
 // launchedRunID returns the one run ID a starting shell call shows. A failed
 // call links only an ID its own output shows.
 func launchedRunID(ctx context.Context, input, output string, failed bool) string {
@@ -244,6 +249,7 @@ func launchedRunID(ctx context.Context, input, output string, failed bool) strin
 
 // launchedRunOutput unwraps the shell tool's output envelope.
 func launchedRunOutput(text string) string {
+	text = codeModeOutput(text)
 	var envelope struct {
 		Output string `json:"output"`
 	}

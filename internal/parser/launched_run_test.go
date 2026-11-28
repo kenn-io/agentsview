@@ -17,6 +17,7 @@ func TestLaunchedRunID(t *testing.T) {
 		name, command, output, want string
 		failed                      bool
 	}{
+		{"Codex text block output", "codex exec hello", `[{"type":"input_text","text":` + strconv.Quote(startup) + `}]`, "codex:" + id, false},
 		{"codex output", "codex exec hello", strings.ReplaceAll(startup, "\n", "\r\n"), "codex:" + id, false},
 		{"option value is not a flag", "claude -p --model --session-id " + id, "", "", false},
 		{"assistant text is not a startup ID", "codex exec hello", "codex\nsession id: " + id, "", false},
