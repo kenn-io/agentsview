@@ -56,6 +56,7 @@ var (
 	launchedOutputID   = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
 	launchedValidID    = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
 	launchedOutputHint = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
+	launchedExitCode   = regexp.MustCompile(`(?m)^(?:Process exited with code |Exit code: )(-?[0-9]+)\r?$`)
 )
 
 // IsLaunchedClaudeSessionID reports whether id can name a launched Claude session.
@@ -308,11 +309,36 @@ func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
-// collectLaunchedResults keeps output from the calls' results. A failed result
-// drops its call, so a launch that never started links to no session.
+func launchedResultID(ctx context.Context, input, output string, failed bool) string {
+	if failed && !hasLaunchedOutputID(output) {
+		return ""
+	}
+	return launchedRunID(ctx, input, output)
+}
+
+func launchedResultFailed(output string) bool {
+	output = codeModeOutput(output)
+	var envelope struct {
+		Output string `json:"output"`
+	}
+	if jsonv2.Unmarshal([]byte(output), &envelope) == nil && envelope.Output != "" {
+		output = envelope.Output
+	}
+	if strings.HasPrefix(output, "Script completed\n") {
+		output = launchedRunOutput(output)
+	}
+	header, _, ok := strings.Cut(output, "\nOutput:\n")
+	if !ok || !(strings.HasPrefix(header, "Chunk ID: ") || strings.HasPrefix(header, "Wall time: ") || strings.HasPrefix(header, "Process exited with code ") || strings.HasPrefix(header, "Exit code: ")) {
+		return false
+	}
+	match := launchedExitCode.FindStringSubmatch(header)
+	return len(match) > 1 && strings.TrimLeft(match[1], "0") != ""
+}
+
+// collectLaunchedResults keeps output from the calls' results.
 func collectLaunchedResults(calls map[string]*ParsedToolCall, outputs map[string]string, results []ParsedToolResult) {
 	for _, result := range results {
-		if result.Status == "errored" {
+		if result.Status == "errored" && !hasLaunchedOutputID(outputs[result.ToolUseID]+DecodeContent(result.ContentRaw)) {
 			delete(calls, result.ToolUseID)
 		} else if calls[result.ToolUseID] != nil {
 			outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
