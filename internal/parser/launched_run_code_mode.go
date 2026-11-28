@@ -69,12 +69,12 @@ func codeModeCommand(input string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	print, ok := statement.Value.(*js.CallExpr)
-	if !ok || print.Optional || len(print.Args.List) != 1 || print.Args.List[0].Rest {
+	outputCall, ok := statement.Value.(*js.CallExpr)
+	if !ok || outputCall.Optional || len(outputCall.Args.List) != 1 || outputCall.Args.List[0].Rest {
 		return "", false
 	}
-	name, ok := print.X.(*js.Var)
-	if !ok || string(name.Data) != "text" || !codeModeDot(print.Args.List[0].Value, string(variable.Data), "output") {
+	name, ok := outputCall.X.(*js.Var)
+	if !ok || string(name.Data) != "text" || !codeModeDot(outputCall.Args.List[0].Value, string(variable.Data), "output") {
 		return "", false
 	}
 	return args.Cmd, true
