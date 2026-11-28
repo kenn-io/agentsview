@@ -33,6 +33,7 @@ func TestToolCallPRLinks(t *testing.T) {
 			bash("Bash", `{"command":["codex","exec","Review https://github.com/example/repo/pull/43"]}`),
 		}, []int{52, 53, 51, 50, 42, 48, 49}},
 		{"command", []db.ToolCall{bash("Bash", `{"command":"gh pr view 42 -R example/repo"}`)}, []int{42}},
+		{"plain text", []db.ToolCall{bash("shell", `gh pr view 42 -R example/repo`)}, []int{42}},
 		{"code mode exec", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}))`)}, []int{42}},
 		{"code mode batch", []db.ToolCall{bash("exec", `await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}); await tools.exec_command({cmd:'gh pr view 43 -R example/repo'})`)}, []int{42, 43}},
 		{"code mode concatenation", []db.ToolCall{bash("exec", `await tools.exec_command({cmd:"gh pr view 42 -R example/repo" + "-fork"})`)}, nil},

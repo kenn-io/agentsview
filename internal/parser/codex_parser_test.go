@@ -3600,6 +3600,22 @@ func TestParseCodexSessionFrom_CollabAgentSpawnEndRequiresFullParse(t *testing.T
 	assert.Contains(t, err.Error(), "full parse")
 }
 
+func TestParseCodexFailedLaunchedRun(t *testing.T) {
+	const child = "12345678-1234-1234-1234-123456789abc"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("parent", "/workspace", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call_exec", map[string]any{"cmd": "claude -p --session-id " + child}, tsEarlyS5),
+		testjsonl.CodexFunctionCallOutputJSON("call_exec", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 1\nOutput:\nSession ID is already in use", tsLate),
+	)
+	path := createTestFile(t, "failed-launch.jsonl", content)
+	_, msgs, err := parseCodexTestSession(t, path, "local", false)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
+}
+
 func TestParseCodexCodeModeLaunchedRun(t *testing.T) {
 	const child = "12345678-1234-1234-1234-123456789abc"
 	input := `const r = await tools.exec_command({cmd: "codex exec review"}); text(r.output);`

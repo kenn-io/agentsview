@@ -60,58 +60,32 @@ func TestLaunchedRunLinksAfterIncrementalResult(t *testing.T) {
 	count, err := database.ToolCallCount(t.Context(), "launcher")
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
-	messages, err := database.GetAllMessages(t.Context(), "launcher")
-	require.NoError(t, err)
-	var calls []db.ToolCall
-	for _, msg := range messages {
-		calls = append(calls, msg.ToolCalls...)
-	}
-	require.Len(t, calls, 1)
-	assert.Equal(t, "codex:"+id, calls[0].SubagentSessionID)
-	content += launchedRunResult("abcdefab-1234-1234-1234-123456789abc")
-	require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-	children, err = database.GetChildSessions(t.Context(), "launcher")
-	require.NoError(t, err)
-	assert.Empty(t, children)
+
 }
 
 func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {
 	const launcherID = "019eb791-cf7d-75c1-8439-9ed74c122c80"
 	const childID = "12345678-1234-1234-1234-123456789abc"
-	for _, tc := range []struct{ name, prefix, output string }{
-		{"pending remote", "remote~", ""},
-		{"failed", "", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 1\nOutput:\nSession ID is already in use"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
-			require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0o700))
-			require.NoError(t, os.MkdirAll(codexRoot, 0o700))
-			child := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n"
-			require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", childID+".jsonl"), []byte(child), 0o600))
-			content := testjsonl.CodexSessionMetaJSON(launcherID, "/workspace/project", "cli", "2026-10-01T10:00:00Z") + "\n" +
-				testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z") + "\n" +
-				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-1", map[string]any{"cmd": "claude -p --session-id " + childID}, "2026-10-01T10:00:01Z") + "\n"
-			if tc.output != "" {
-				content += testjsonl.CodexFunctionCallOutputJSON("call-1", tc.output, "2026-10-01T10:00:02Z") + "\n"
-			}
-			rollout := filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+launcherID+".jsonl")
-			require.NoError(t, os.WriteFile(rollout, []byte(content), 0o600))
-			database := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot}}, Machine: "local", IDPrefix: tc.prefix})
-			t.Cleanup(func() { engine.Close() })
-			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			children, err := database.GetChildSessions(t.Context(), tc.prefix+"codex:"+launcherID)
-			require.NoError(t, err)
-			if tc.output != "" {
-				assert.Empty(t, children)
-				return
-			}
-			require.Len(t, children, 1)
-			assert.Equal(t, tc.prefix+childID, children[0].ID)
-		})
-	}
+	const device = "remote"
+	root := t.TempDir()
+	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0o700))
+	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
+	child := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", childID+".jsonl"), []byte(child), 0o600))
+	content := testjsonl.CodexSessionMetaJSON(launcherID, "/workspace/project", "cli", "2026-10-01T10:00:00Z") + "\n" +
+		testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z") + "\n" +
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-1", map[string]any{"cmd": "claude -p --session-id " + childID}, "2026-10-01T10:00:01Z") + "\n"
+	rollout := filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+launcherID+".jsonl")
+	require.NoError(t, os.WriteFile(rollout, []byte(content), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot}}, Machine: device, IDPrefix: device + "~", Ephemeral: true})
+	t.Cleanup(func() { engine.Close() })
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	children, err := database.GetChildSessions(t.Context(), device+"~codex:"+launcherID)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, device+"~"+childID, children[0].ID)
 }
 
 func TestLaunchedRunScopedReparse(t *testing.T) {

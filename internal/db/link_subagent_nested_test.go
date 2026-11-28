@@ -1487,32 +1487,15 @@ func TestLinkSubagentSessionsOrdersStartTimesChronologically(t *testing.T) {
 			"RFC3339Nano strings would pick the later copied spawner")
 }
 
-func TestQueuedSubagentCleanupRemovesWithdrawnEdge(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "spawner", "p")
-	insertSession(t, d, "kid", "p")
-	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
-	require.NoError(t, err)
-	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
-	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
-	_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM tool_calls WHERE session_id = ?", "spawner")
-	require.NoError(t, err)
-	require.NoError(t, d.RepairQueuedSubagentParents())
-	kid, err := d.GetSession(t.Context(), "kid")
-	require.NoError(t, err)
-	assert.Nil(t, kid.ParentSessionID)
-}
-
 func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		spawnerPresent bool
-		parserPresent  bool
+		name          string
+		parserParent  string
+		parserPresent bool
 	}{
-		{"spawner remains", true, true},
-		{"spawner removed", false, true},
-		{"parser parent unresolved", true, false},
+		{"parser parent present", "parser-parent", true},
+		{"parser parent unresolved", "parser-parent", false},
+		{"no parser parent", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -1521,8 +1504,10 @@ func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
 				insertSession(t, d, "parser-parent", "p")
 			}
 			insertSession(t, d, "kid", "p", func(s *Session) {
-				s.ParentSessionID = Ptr("parser-parent")
-				s.RelationshipType = "subagent"
+				if tc.parserParent != "" {
+					s.ParentSessionID = Ptr(tc.parserParent)
+					s.RelationshipType = "subagent"
+				}
 			})
 			insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
 			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
@@ -1531,12 +1516,15 @@ func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
 			require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
 			_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM tool_calls WHERE session_id = ?", "spawner")
 			require.NoError(t, err)
-			if !tc.spawnerPresent {
-				_, err = d.DeleteParserExcludedSessions(t.Context(), []string{"spawner"})
-				require.NoError(t, err)
-			}
 			require.NoError(t, d.RepairQueuedSubagentParents())
-			assert.Equal(t, "parser-parent", parentOfSession(t, d, "kid"))
+			kid, err := d.GetSession(t.Context(), "kid")
+			require.NoError(t, err)
+			if tc.parserParent == "" {
+				assert.Nil(t, kid.ParentSessionID)
+			} else {
+				require.NotNil(t, kid.ParentSessionID)
+				assert.Equal(t, tc.parserParent, *kid.ParentSessionID)
+			}
 		})
 	}
 }

@@ -13,81 +13,76 @@ func TestLaunchedRunID(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	const other = "abcdefab-1234-1234-1234-123456789abc"
 	startup := "OpenAI Codex v0.1.0\n--------\nworkdir: /tmp\nsession id: " + id + "\n--------\nuser\nhello\n"
-	tests := []struct{ name, command, output, want string }{
-		{"codex output", "codex exec hello", strings.ReplaceAll(startup, "\n", "\r\n"), "codex:" + id},
-		{"option value is not a flag", "claude -p --model --session-id " + id, "", ""},
-		{"assistant text is not a startup ID", "codex exec hello", "codex\nsession id: " + id, ""},
-		{"truncated startup", "codex exec hello", "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n", ""},
-		{"startup ID before child output", "codex exec hello", startup + "codex\nsession id: " + other, "codex:" + id},
-		{"conflicting startup banners", "for i in 1 2; do codex exec hello; done", startup + strings.ReplaceAll(startup, id, other), ""},
-		{"conflicting thread events", "for i in 1 2; do codex exec --json hello; done", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + other + `"}`, ""},
-		{"repeated same thread event", "codex exec --json hello", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
-		{"setup before launch", "cd project && codex exec hello", startup, "codex:" + id},
-		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
-		{"claude argument", "claude -p --session-id " + id, "", id},
-		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", ""},
-		{"trailing command substitution prompt", `claude -p --session-id ` + id + ` "$(cat p)"`, "", id},
-		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"quoted substitution after option value delimiter", `claude --model -- "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"quoted substitution as option value", `claude -p --model "$(cat model)" --session-id ` + id, "", id},
-		{"shell JSON prompt mentions tool", `{"command":"claude -p --session-id ` + id + ` 'see tools.exec_command'"}`, "", id},
-		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
-		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
-		{"json flag as model", "codex exec --model --json hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
-		{"powershell", `& 'C:\Program Files\claude.exe' -p --session-id ` + id, "", id},
-		{"resume", "codex exec resume " + id, startup, ""},
-		{"resume prompt", "claude -p resume the review --session-id " + id, "", id},
-		{"resume short", "claude -p --output-format json -r " + id, `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"continue short", "claude -c -p hello --session-id " + id, "", ""},
-		{"resume from PR", "claude -p --output-format json --from-pr 12", `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"resume teleport", "claude -p --output-format json --teleport 12", `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"conflicting assistant JSON", "claude -p --output-format json --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, ""},
-		{"plain Claude output", "claude -p hello", `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"Claude JSON array", "claude -p --output-format json hello", `[{"type":"result","session_id":"` + id + `"}]`, id},
-		{"conflicting Claude JSON array", "claude -p --output-format json hello", `[{"type":"system","session_id":"` + id + `"},{"type":"result","session_id":"` + other + `"}]`, ""},
-		{"wrapped Codex banner", "codex exec hello", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\n" + startup, "codex:" + id},
-		{"wrapped Codex JSON", "codex exec --json hello", "Wall time: 1 seconds\nExit code: 0\nOutput:\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
-		{"code mode", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output);`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "codex:" + id},
-		{"code mode session ID", `const r = await tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); text(r.output);`, "", id},
-		{"code mode unrelated output", `const r = await tools.exec_command({cmd: "codex exec hello"}); text("unrelated");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
-		{"code mode uncalled function", `function f() { return tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); } text("done");`, "", ""},
-		{"code mode another call", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output); text("other");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
-		{"function definition", "f() { claude -p --session-id " + id + "; }", "", ""},
-		{"dynamic prompt", `claude -p --session-id ` + id + ` -- "$prompt"`, "", id},
-		{"dynamic option", `claude -p "$option" --session-id ` + id, "", ""},
-		{"duplicate flags", "claude -p --session-id " + id + " --session-id " + other, "", ""},
-		{"unrelated json", "claude -p --output-format json hello", `{"type":"message","session_id":"` + id + `"}`, ""},
-		{"quoted text", `echo 'codex exec hello'`, startup, ""},
-		{"two launches", "claude -p --session-id " + id + "; claude -p --session-id " + other, "", ""},
+	tests := []struct {
+		name, command, output, want string
+		failed                      bool
+	}{
+		{"codex output", "codex exec hello", strings.ReplaceAll(startup, "\n", "\r\n"), "codex:" + id, false},
+		{"option value is not a flag", "claude -p --model --session-id " + id, "", "", false},
+		{"assistant text is not a startup ID", "codex exec hello", "codex\nsession id: " + id, "", false},
+		{"truncated startup", "codex exec hello", "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n", "", false},
+		{"startup ID before child output", "codex exec hello", startup + "codex\nsession id: " + other, "codex:" + id, false},
+		{"conflicting startup banners", "for i in 1 2; do codex exec hello; done", startup + strings.ReplaceAll(startup, id, other), "", false},
+		{"conflicting thread events", "for i in 1 2; do codex exec --json hello; done", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + other + `"}`, "", false},
+		{"repeated same thread event", "codex exec --json hello", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id, false},
+		{"setup before launch", "cd project && codex exec hello", startup, "codex:" + id, false},
+		{"unrelated setup output", "cat old.log && codex exec hello", startup, "", false},
+		{"claude argument", "claude -p --session-id " + id, "", id, false},
+		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", "", false},
+		{"trailing command substitution prompt", `claude -p --session-id ` + id + ` "$(cat p)"`, "", id, false},
+		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"quoted substitution after option value delimiter", `claude --model -- "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"quoted substitution as option value", `claude -p --model "$(cat model)" --session-id ` + id, "", id, false},
+		{"shell JSON prompt mentions tool", `{"command":"claude -p --session-id ` + id + ` 'see tools.exec_command'"}`, "", id, false},
+		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id, false},
+		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, "", false},
+		{"json flag as model", "codex exec --model --json hello", `{"type":"thread.started","thread_id":"` + id + `"}`, "", false},
+		{"powershell", `& 'C:\Program Files\claude.exe' -p --session-id ` + id, "", id, false},
+		{"resume", "codex exec resume " + id, startup, "", false},
+		{"resume prompt", "claude -p resume the review --session-id " + id, "", id, false},
+		{"resume short", "claude -p --output-format json -r " + id, `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"continue short", "claude -c -p hello --session-id " + id, "", "", false},
+		{"resume from PR", "claude -p --output-format json --from-pr 12", `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"resume teleport", "claude -p --output-format json --teleport 12", `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"conflicting assistant JSON", "claude -p --output-format json --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, "", false},
+		{"plain Claude output", "claude -p hello", `{"type":"result","session_id":"` + id + `"}`, "", false},
+		{"Claude JSON array", "claude -p --output-format json hello", `[{"type":"result","session_id":"` + id + `"}]`, id, false},
+		{"conflicting Claude JSON array", "claude -p --output-format json hello", `[{"type":"system","session_id":"` + id + `"},{"type":"result","session_id":"` + other + `"}]`, "", false},
+		{"wrapped Codex banner", "codex exec hello", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\n" + startup, "codex:" + id, false},
+		{"wrapped Codex JSON", "codex exec --json hello", "Wall time: 1 seconds\nExit code: 0\nOutput:\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id, false},
+		{"code mode", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output);`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "codex:" + id, false},
+		{"code mode session ID", `const r = await tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); text(r.output);`, "", id, false},
+		{"code mode unrelated output", `const r = await tools.exec_command({cmd: "codex exec hello"}); text("unrelated");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "", false},
+		{"code mode uncalled function", `function f() { return tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); } text("done");`, "", "", false},
+		{"code mode another call", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output); text("other");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "", false},
+		{"function definition", "f() { claude -p --session-id " + id + "; }", "", "", false},
+		{"dynamic prompt", `claude -p --session-id ` + id + ` -- "$prompt"`, "", id, false},
+		{"dynamic option", `claude -p "$option" --session-id ` + id, "", "", false},
+		{"duplicate flags", "claude -p --session-id " + id + " --session-id " + other, "", "", false},
+		{"unrelated json", "claude -p --output-format json hello", `{"type":"message","session_id":"` + id + `"}`, "", false},
+		{"quoted text", `echo 'codex exec hello'`, startup, "", false},
+		{"two launches", "claude -p --session-id " + id + "; claude -p --session-id " + other, "", "", false},
+		{"failed no output ID", "claude -p --session-id " + id, "failed", "", true},
+		{"failed Codex startup", "codex exec hello", startup, "codex:" + id, true},
+		{"failed Claude system event", "claude -p --output-format json --session-id " + id, `{"type":"system","session_id":"` + id + `"}`, id, true},
+		{"failed plain output matching Claude ID", "claude -p --session-id " + id, `{"type":"result","session_id":"` + id + `"}`, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, launchedRunID(t.Context(), tt.command, tt.output))
+			assert.Equal(t, tt.want, launchedRunID(t.Context(), tt.command, tt.output, tt.failed))
 		})
 	}
 }
 
 func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
-	const other = "abcdefab-1234-1234-1234-123456789abc"
-	startup := "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n--------\nuser\nhello\n"
-	for _, tc := range []struct{ name, input, output, want string }{
-		{"no output ID", `{"command":"claude -p --session-id ` + id + `"}`, "failed", ""},
-		{"Codex startup", `{"command":"codex exec hello"}`, startup, "codex:" + id},
-		{"Claude system event", `{"command":"claude -p --output-format json --session-id ` + id + `"}`, `{"type":"system","session_id":"` + id + `"}`, id},
-		{"unrelated matching Claude output", `{"command":"cat old.log && claude -p --session-id ` + id + `"}`, `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"plain output matching Claude ID", `{"command":"claude -p --session-id ` + id + `"}`, `{"type":"result","session_id":"` + id + `"}`, ""},
-		{"unrelated startup", `{"command":"cat old.log && claude -p --session-id ` + id + `"}`, strings.ReplaceAll(startup, id, other), ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			messages := []ParsedMessage{
-				{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: tc.input}}},
-				{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(tc.output)}}},
-			}
-			require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
-			assert.Equal(t, tc.want, messages[0].ToolCalls[0].SubagentSessionID)
-		})
+	output := `{"type":"system","session_id":"` + id + `"}`
+	messages := []ParsedMessage{
+		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"claude -p --output-format json --session-id ` + id + `"}`}}},
+		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(output)}}},
 	}
+	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+	assert.Equal(t, id, messages[0].ToolCalls[0].SubagentSessionID)
 }
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {
