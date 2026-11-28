@@ -9,6 +9,11 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- Resume a Claude session in a local checkout by installing its original files
+  from configured sources with `agentsview session materialize`.
+
 **Improvements**
 
 - `agentsview archive copy` creates a self-contained copy of a stopped archive

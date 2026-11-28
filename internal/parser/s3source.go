@@ -204,8 +204,13 @@ func parseS3URI(uri string) (bucket, key string) {
 // listS3 lists every object under an s3://bucket/prefix, returning each
 // object's full s3:// URI plus source metadata.
 func listS3(uri string) ([]S3Object, error) {
+	return ListS3ObjectsContext(context.Background(), uri)
+}
+
+// ListS3ObjectsContext lists objects under a prefix for a caller-controlled read.
+func ListS3ObjectsContext(ctx context.Context, uri string) ([]S3Object, error) {
 	bucket, prefix := parseS3URI(uri)
-	cl, err := s3Client(context.Background(), bucket)
+	cl, err := s3Client(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +222,7 @@ func listS3(uri string) ([]S3Object, error) {
 		Bucket: new(bucket), Prefix: new(prefix), EncodingType: types.EncodingTypeUrl,
 	})
 	for pages.HasMorePages() {
-		page, err := pages.NextPage(context.Background())
+		page, err := pages.NextPage(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -252,12 +257,17 @@ func FetchS3Object(uri string) (io.ReadCloser, error) {
 }
 
 func fetchS3ObjectDefault(uri string) (io.ReadCloser, error) {
+	return FetchS3ObjectContext(context.Background(), uri)
+}
+
+// FetchS3ObjectContext opens one object with a caller-controlled context.
+func FetchS3ObjectContext(ctx context.Context, uri string) (io.ReadCloser, error) {
 	bucket, key := parseS3URI(uri)
-	cl, err := s3Client(context.Background(), bucket)
+	cl, err := s3Client(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	obj, err := cl.GetObject(context.Background(), &s3.GetObjectInput{
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: new(bucket), Key: new(key),
 	})
 	if err != nil {
@@ -314,6 +324,11 @@ func s3MachineFromRoot(root, provider string) string {
 		}
 	}
 	return ""
+}
+
+// S3MachineFromRoot returns the machine identity used by S3 discovery.
+func S3MachineFromRoot(root string, agent AgentType) string {
+	return s3MachineFromRoot(root, string(agent))
 }
 
 func pathBase(p string) string {

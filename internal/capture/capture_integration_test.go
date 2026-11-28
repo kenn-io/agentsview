@@ -321,7 +321,7 @@ func TestReportReplaysProducerLaunchFailureWithoutSourceDiscovery(t *testing.T) 
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
 	require.NoError(t, err)
 	transcriptPath := filepath.Join(
-		root, encodeClaudeWorkDir(physicalWorkDir), captured.ProviderSessionID+".jsonl",
+		root, ClaudeProjectDir(physicalWorkDir), captured.ProviderSessionID+".jsonl",
 	)
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o700))
 	require.NoError(t, os.WriteFile(
@@ -387,11 +387,11 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
 	require.NoError(t, err)
 	wantRoot := filepath.ToSlash(filepath.Join(
-		string(ProviderClaude), "projects", encodeClaudeWorkDir(physicalWorkDir),
+		string(ProviderClaude), "projects", ClaudeProjectDir(physicalWorkDir),
 		result.Provider.SessionID+".jsonl",
 	))
 	wantChild := filepath.ToSlash(filepath.Join(
-		string(ProviderClaude), "projects", encodeClaudeWorkDir(physicalWorkDir),
+		string(ProviderClaude), "projects", ClaudeProjectDir(physicalWorkDir),
 		result.Provider.SessionID, "subagents", "agent-abc123.jsonl",
 	))
 	assert.ElementsMatch(t, []string{wantRoot, wantChild}, []string{
@@ -600,7 +600,7 @@ func TestRunRejectsHistoricalClaudeSessionSources(t *testing.T) {
 			require.NoError(t, err)
 			sessionID := "33333333-3333-4333-8333-333333333333"
 			rootPath := filepath.Join(
-				root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
+				root, ClaudeProjectDir(physicalWorkDir), sessionID+".jsonl")
 			if existing == "other project" {
 				rootPath = filepath.Join(
 					root, "different-project", sessionID+".jsonl")
@@ -717,7 +717,7 @@ func TestRunRejectsResultPathInsideProviderRootBeforeStarting(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := "11111111-2222-4333-8444-555555555555"
 	resultPath := filepath.Join(
-		root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
+		root, ClaudeProjectDir(physicalWorkDir), sessionID+".jsonl")
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
 
@@ -1135,7 +1135,7 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	var captured manifest
 	require.NoError(t, json.Unmarshal(manifestData, &captured))
 	sourcePath := filepath.Join(
-		root, encodeClaudeWorkDir(physicalWorkDir), captured.ProviderSessionID+".jsonl")
+		root, ClaudeProjectDir(physicalWorkDir), captured.ProviderSessionID+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o700))
 	require.NoError(t, os.WriteFile(
 		sourcePath, bytes.Repeat([]byte("x"), int(limits.MaxSourceBytes)+1), 0o600))
@@ -1206,7 +1206,7 @@ func TestReportRefusesQuiescentSourceWithoutDurableExecutionCompletion(
 	require.NoError(t, err)
 	state.close()
 	sourcePath := filepath.Join(
-		root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
+		root, ClaudeProjectDir(physicalWorkDir), sessionID+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o700))
 	initial := []byte(strings.Join(
 		claudeHelperLines(sessionID, physicalWorkDir, false), "\n") + "\n")
@@ -1886,7 +1886,7 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(filepath.Join(
-			root, encodeClaudeWorkDir(resolvedWorkDir), sessionID+".jsonl",
+			root, ClaudeProjectDir(resolvedWorkDir), sessionID+".jsonl",
 		))
 		return err == nil
 	}, captureWait, 10*time.Millisecond)
@@ -2025,7 +2025,7 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 	sessionID := captured.ProviderSessionID
 	require.NotEmpty(t, sessionID)
 
-	rootPath := filepath.Join(root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
+	rootPath := filepath.Join(root, ClaudeProjectDir(physicalWorkDir), sessionID+".jsonl")
 	rootData := []byte(strings.Join(
 		claudeHelperLines(sessionID, physicalWorkDir, false), "\n") + "\n")
 	require.NoError(t, os.WriteFile(rootPath, rootData, 0o600))
@@ -2306,7 +2306,7 @@ func captureTestHelper() {
 			cwd, _ = os.Getwd()
 		}
 		cwd, _ = resolveWorkDir(cwd)
-		path := filepath.Join(root, encodeClaudeWorkDir(cwd), sessionID+".jsonl")
+		path := filepath.Join(root, ClaudeProjectDir(cwd), sessionID+".jsonl")
 		_ = os.MkdirAll(filepath.Dir(path), 0o700)
 		lines := claudeHelperLines(sessionID, cwd, mode == "claude-unfinished")
 		if mode == "claude-malformed" {
