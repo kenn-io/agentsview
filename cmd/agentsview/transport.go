@@ -431,12 +431,6 @@ func ensureTransportContext(
 }
 
 func waitForManagedDaemon(ctx context.Context, cfg *config.Config, timeout time.Duration, needWritable bool) (transport, error) {
-	if needWritable {
-		_, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, cfg.DataDir, timeout)
-		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {
-			return transport{}, err
-		}
-	}
 	for ctx.Err() == nil {
 		if cfg.AuthToken == "" {
 			reloaded, err := config.LoadReadOnlyAt(cfg.DataDir)

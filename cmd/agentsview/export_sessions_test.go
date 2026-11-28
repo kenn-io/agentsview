@@ -1059,7 +1059,6 @@ func TestExportDaemonStartupCases(t *testing.T) {
 		cfg := config.Config{DataDir: dir}
 		_, err := startExportDaemon(t.Context(), &cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "service")
 		assert.Contains(t, err.Error(), "if no service manager is in use")
 	})
 	t.Run("startup error", func(t *testing.T) {

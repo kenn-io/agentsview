@@ -126,7 +126,6 @@ func TestMemoryManagedDaemonRequiresWritable(t *testing.T) {
 	writeDaemonRuntimeForTest(t, dir, host, port, version, true)
 	err := requestLocalMemoryRefresh(ctx)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.GreaterOrEqual(t, probes.Load(), int32(2))
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

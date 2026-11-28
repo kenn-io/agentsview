@@ -486,13 +486,11 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 
 func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		intent  transportIntent
-		stalled bool
+		name   string
+		intent transportIntent
 	}{
-		{"read", transportIntentRead, false},
-		{"archive write", transportIntentArchiveWrite, false},
-		{"stalled daemon", transportIntentRead, true},
+		{"read", transportIntentRead},
+		{"archive write", transportIntentArchiveWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -501,28 +499,13 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 			forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
 			cfg, err := config.LoadReadOnlyAt(dir)
 			require.NoError(t, err)
-			if tc.stalled {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-				t.Cleanup(server.Close)
-				host, port := splitTestServerURL(t, server.URL)
-				writeDaemonRuntimeForTest(t, dir, host, port, version, false)
-				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
-				defer cancel()
-				started := time.Now()
-				_, err := ensureTransportContext(ctx, &cfg, tc.intent, time.Second)
-				require.ErrorIs(t, err, context.DeadlineExceeded)
-				assert.Less(t, time.Since(started), 500*time.Millisecond)
-				return
-			}
 			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the read wait.
 			if tc.intent == transportIntentRead {
 				require.ErrorContains(t, err, "daemon autostart is disabled")
 				assert.Contains(t, err.Error(), "no_daemon_autostart")
-				assert.Contains(t, err.Error(), "service")
 				assert.Contains(t, err.Error(), "if no service manager is in use")
 				var diagnostic *cliDiagnosticError
 				require.ErrorAs(t, err, &diagnostic)
-				assert.Contains(t, diagnostic.hint, "service")
 				assert.Contains(t, diagnostic.hint, "if no service manager is in use")
 			} else {
 				require.NoError(t, err)
@@ -546,6 +529,22 @@ func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, starts)
 	})
+}
+
+func TestEnsureTransportStalledDaemonRespectsCallerDeadline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	cfg := config.Config{DataDir: dir}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
+	defer cancel()
+	started := time.Now()
+	_, err := ensureTransportContext(ctx, &cfg, transportIntentRead, time.Second)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
