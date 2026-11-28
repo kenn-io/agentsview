@@ -914,6 +914,50 @@ func TestToolSubstringCursorSurvivesAnotherHandleRebuild(t *testing.T) {
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
 }
 
+func TestToolSubstringConcurrentBuilds(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<20000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'earlyneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	other, err := OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	_, err = d.getWriter().ExecContext(ctx, "DROP TABLE tool_input_trigram_fts")
+	require.NoError(t, err)
+	pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, store := range []*DB{d, other} {
+		go func() {
+			<-start
+			if _, err := prepareToolSubstringIndex(ctx, store.getWriter()); err != nil {
+				errs <- err
+				return
+			}
+			for {
+				done, err := buildToolSubstringBatch(ctx, store.getWriter())
+				if err != nil || done {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	for range 2 {
+		assert.NoError(t, <-errs)
+	}
+	assert.True(t, hasToolSubstringIndex(ctx, d.getReader()))
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
 func TestToolSubstringScopedSearchWithGlobalMatches(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

@@ -143,6 +143,10 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Lock before reading state so concurrent builders cannot stale the snapshot.
+	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
+		return false, err
+	}
 	var count int
 	var state sql.NullString
 	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)`, toolSubstringStateKey).Scan(&count, &state); err != nil {
@@ -150,10 +154,6 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 	}
 	if state.Valid && !strings.HasPrefix(state.String, toolSubstringVersion+":") {
 		return false, tx.Commit()
-	}
-	// Fail a stale snapshot upgrade if another process changes the state.
-	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
-		return false, err
 	}
 	if count == len(toolSubstringFields) && state.Valid && state.String == toolSubstringReady {
 		return false, tx.Commit()
@@ -191,6 +191,11 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Acquire the write lock before reading the cursor, so concurrent builders
+	// wait for the latest committed state instead of upgrading a stale snapshot.
+	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
+		return false, err
+	}
 	var state sql.NullString
 	if err := tx.QueryRowContext(ctx, "SELECT (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)", toolSubstringStateKey).Scan(&state); err != nil {
 		return false, err
@@ -203,11 +208,6 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 	}
 	if state.String == toolSubstringReady {
 		return true, tx.Commit()
-	}
-	// A concurrent rebuild invalidates this read snapshot, so the write
-	// upgrade fails rather than advancing a cursor from old tables.
-	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
-		return false, err
 	}
 	value := state.String
 	var next toolSubstringCursor
