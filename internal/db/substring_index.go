@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 )
 
@@ -472,7 +473,6 @@ func (db *DB) substringCandidates(
 		}
 	}
 	if f.Mode != "regex" && len(strings.Fields(f.Pattern)) == 1 && hasToolSubstringIndex(ctx, db.getReader()) {
-		scopeRows := make(map[string]int64)
 		for _, branch := range []struct {
 			field         toolSubstringField
 			source, alias string
@@ -485,16 +485,7 @@ func (db *DB) substringCandidates(
 			if !hasSource(f, branch.source) {
 				continue
 			}
-			rowCount, ok := scopeRows[branch.field.source]
-			if !ok {
-				if err := db.getReader().QueryRow(ctx, "SELECT count(*) FROM "+branch.field.source+" WHERE "+scope, scopeArgs...).Scan(&rowCount); err != nil {
-					return out, fmt.Errorf("sizing tool substring scope: %w", err)
-				}
-				scopeRows[branch.field.source] = rowCount
-			}
-			// Cap the global list at the scoped share. A larger list scans
-			// the scope without visiting unrelated matches beyond that limit.
-			selective, err := db.substringIndexSelective(ctx, branch.field.index, query, rowCount)
+			selective, err := db.toolSubstringIndexSelective(ctx, branch.field, query, scope, scopeArgs)
 			if err != nil {
 				return out, err
 			}
@@ -505,6 +496,34 @@ func (db *DB) substringCandidates(
 		}
 	}
 	return out, nil
+}
+
+// Grow both counts together so neither traverses a large archive when the
+// other count already decides whether the index is selective.
+func (db *DB) toolSubstringIndexSelective(ctx context.Context, field toolSubstringField, query, scope string, scopeArgs []any) (bool, error) {
+	for limit := int64(2); ; limit *= 2 {
+		var listed int64
+		if err := db.getReader().QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM `+field.index+` WHERE `+field.index+` MATCH ? LIMIT ?)`, query, limit).Scan(&listed); err != nil {
+			return false, fmt.Errorf("counting substring candidates: %w", err)
+		}
+		if listed == 0 {
+			return true, nil
+		}
+		if listed > math.MaxInt64/substringIndexMaxShare {
+			return false, nil
+		}
+		var rows int64
+		args := append(append([]any(nil), scopeArgs...), listed*substringIndexMaxShare)
+		if err := db.getReader().QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM `+field.source+` WHERE `+scope+` LIMIT ?)`, args...).Scan(&rows); err != nil {
+			return false, fmt.Errorf("sizing tool substring scope: %w", err)
+		}
+		if rows < listed*substringIndexMaxShare {
+			return false, nil
+		}
+		if listed < limit {
+			return true, nil
+		}
+	}
 }
 
 // substringScopeMessages sums message_count over the sessions that from,

@@ -94,6 +94,80 @@ type substringHit struct {
 	Ordinal  int
 }
 
+type countedRows struct {
+	steps *atomic.Int64
+	count int64
+}
+
+func (a *countedRows) Step()       { a.steps.Add(1); a.count++ }
+func (a *countedRows) Done() int64 { return a.count }
+
+func TestToolSubstringSelectivityBoundsSizing(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,CASE WHEN i=1 THEN 'needle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+ INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,tool_use_id,source,status,content,content_length,event_index)
+ SELECT 's',0,'','stdout','success',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,6,i FROM n`)
+	require.NoError(t, err)
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var steps atomic.Int64
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(*diagnosticReaderConn).SQLiteConn.RegisterAggregator("count", func() *countedRows { return &countedRows{steps: &steps} }, true)
+	}))
+	require.NoError(t, conn.Close())
+	for _, source := range []string{"tool_input", "tool_result"} {
+		steps.Store(0)
+		f := ContentSearchFilter{Pattern: "needle", Sources: []string{source}}
+		candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+		require.NoError(t, err)
+		if source == "tool_input" {
+			require.NotEmpty(t, candidates.toolInput.sql)
+			assert.LessOrEqual(t, steps.Load(), int64(5))
+		} else {
+			require.NotEmpty(t, candidates.toolResult.sql)
+			require.NotEmpty(t, candidates.toolEvent.sql)
+			assert.LessOrEqual(t, steps.Load(), int64(10))
+		}
+	}
+}
+
+func TestToolSubstringSelectivityThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rows       int
+		wantInput  bool
+		wantResult bool
+	}{
+		{"below quarter", 3, false, false},
+		{"at quarter", 4, true, false},
+		{"below quarter for two matches", 7, true, false},
+		{"at quarter for two matches", 8, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+			_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,CASE WHEN i<=2 THEN 'needle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`, tc.rows)
+			require.NoError(t, err)
+			f := ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input", "tool_result"}}
+			candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInput, candidates.toolInput.sql != "")
+			assert.Equal(t, tc.wantResult, candidates.toolResult.sql != "")
+		})
+	}
+}
+
 func substringHits(t *testing.T, d *DB, f ContentSearchFilter) []substringHit {
 	t.Helper()
 	page, err := d.SearchContent(t.Context(), f)
