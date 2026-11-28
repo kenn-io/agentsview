@@ -1,0 +1,11 @@
+{
+  "version": 192,
+  "digest": "29741c1fb0b4daf61761c45945f2f2a50b708a4c2a6d6d658e70b882cc9206b4",
+  "providers": {
+    "codebuddy": {
+      "projects/-workspace-demo/run-0001.jsonl": "e6504781645d11c4b50cd24953d206824572e273fc83037fc4f2fcad0408475e",
+      "projects/-workspace-demo/run-0001/subagents/agent-review.jsonl": "ff2b6e9b43fdfe4257beee7da8052fbfaa34f42fd7da9ff839c374d153fdda62",
+      "projects/-workspace-demo/run-0001/subagents/agent-team.jsonl": "865b267c34aa4fce68602713b35123c49898afd12b54bcd00575de2177cde765"
+    }
+  }
+}

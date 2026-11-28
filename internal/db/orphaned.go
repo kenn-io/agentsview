@@ -1701,10 +1701,13 @@ func (d *DB) CopySessionMetadataFrom(
 			if err := copyLegacyVSCodePinsTx(ctx, tx); err != nil {
 				return err
 			}
+			if err := copyCodeBuddyPinsTx(ctx, tx); err != nil {
+				return err
+			}
 			// These pins use the same conversion and fallback as local replacement.
 			legacyOnly += ` AND NOT EXISTS (
                 SELECT 1 FROM old_db.sessions old_s JOIN main.sessions new_s ON new_s.id = old_s.id
-                WHERE old_s.id = old_m.session_id AND old_s.agent IN ('vscode-copilot', 'positron')
+                WHERE old_s.id = old_m.session_id AND old_s.agent IN ('vscode-copilot', 'positron', 'codebuddy')
                   AND new_s.agent = old_s.agent)`
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -2831,6 +2834,49 @@ func copySessionDataForIDs(
 
 	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
 		return err
+	}
+	return nil
+}
+
+// copyCodeBuddyPinsTx restores UUID-less CodeBuddy pins through the
+// role-and-time matcher before applying the ordinary legacy-content fallback.
+func copyCodeBuddyPinsTx(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT p.session_id
+  FROM old_db.pinned_messages p
+  JOIN old_db.messages m ON m.id = p.message_id
+  JOIN old_db.sessions old_s ON old_s.id = p.session_id
+  JOIN main.sessions new_s ON new_s.id = old_s.id AND new_s.agent = old_s.agent
+  WHERE old_s.agent = 'codebuddy' AND COALESCE(m.source_uuid, '') = ''`)
+	if err != nil {
+		return fmt.Errorf("listing CodeBuddy pin sessions: %w", err)
+	}
+	sessions, err := scanStrings(rows)
+	if err != nil {
+		return fmt.Errorf("scanning CodeBuddy pin sessions: %w", err)
+	}
+	for _, id := range sessions {
+		pins, err := savePinsFromSchemaTx(tx, "old_db", id, math.MinInt)
+		if err != nil {
+			return err
+		}
+		legacy := pins[:0]
+		for _, pin := range pins {
+			if pin.sourceUUID == "" {
+				legacy = append(legacy, pin)
+			}
+		}
+		old, err := loadCodeBuddyPinAnchorsTx(tx, "old_db", id)
+		if err != nil {
+			return err
+		}
+		incoming, err := loadCodeBuddyPinAnchorsTx(tx, "main", id)
+		if err != nil {
+			return err
+		}
+		identifyCodeBuddyPins(legacy, matchCodeBuddyPinAnchors(old, incoming))
+		if err := restorePinsTx(tx, id, legacy); err != nil {
+			return err
+		}
 	}
 	return nil
 }

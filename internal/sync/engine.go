@@ -6090,7 +6090,7 @@ func (e *Engine) reconciliationMemberRelocated(
 		return false, nil
 	}
 	lowerRanked, err := e.storedSourceRanksHigher(
-		ctx, provider, storedPath, source,
+		ctx, provider, fullSessionID, storedPath, source,
 	)
 	if err != nil {
 		return false, err
@@ -7233,6 +7233,14 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// unchanged transcript during each polling pass.
 	if usesCompositeSidecarFreshness(file.Agent, file.Path) {
 		return parser.ClaudeLayoutCompositeMtime(file.Path)
+	}
+	// A CodeBuddy CLI or IDE 5.x fingerprint records the transcript's own
+	// modification time, which ranks copies of one conversation. A saved
+	// tool output, or the 4.x data a converted conversation reads, changed
+	// after the transcript must still pass the cutoff, so the cutoff also
+	// takes their stat metadata.
+	if file.Agent == parser.AgentCodeBuddy && ingest.RestoresPersistedToolResults(file.Agent, file.Path) {
+		return parser.CodeBuddyCutoffMtime(ctx, file.Path, e.sources().agentDirs[parser.AgentCodeBuddy])
 	}
 	// Watermark-only shared-container sources carry their session-row
 	// watermark from discovery. Consulting the provider Fingerprint instead
@@ -9554,25 +9562,10 @@ func reconciliationMemberIdentity(
 	return reconciliationSourceIdentity(agent, source)
 }
 
-func reconciliationSourceRankLower(
-	candidate, stored parser.ReconciliationSourceRank,
-) bool {
-	if candidate.Class != stored.Class {
-		return candidate.Class < stored.Class
-	}
-	if candidate.Recency != stored.Recency {
-		return candidate.Recency < stored.Recency
-	}
-	if candidate.TieBreak != stored.TieBreak {
-		return candidate.TieBreak < stored.TieBreak
-	}
-	return candidate.Path > stored.Path
-}
-
 func (e *Engine) storedSourceRanksHigher(
 	ctx context.Context,
 	provider parser.Provider,
-	storedPath string,
+	fullSessionID, storedPath string,
 	candidate parser.SourceRef,
 ) (bool, error) {
 	resolver, resolves := provider.(parser.ReconciliationSourceResolver)
@@ -9580,26 +9573,83 @@ func (e *Engine) storedSourceRanksHigher(
 	if !resolves || !ranks || storedPath == "" {
 		return false, nil
 	}
+	// storedPathRanks ranks the stored source by its path layout alone, for
+	// a stored file that is gone or, on a remote sync, a stored location
+	// that cannot be mapped to a local copy. A path carries no modification
+	// time, so the rank takes the one the archive recorded for the session:
+	// only a copy modified after the archived source can then replace it.
+	storedPathRanks := func(path string) (bool, error) {
+		pathRanker, ok := provider.(parser.StoredSourcePathRanker)
+		if !ok {
+			return false, nil
+		}
+		rank, ok := pathRanker.RankStoredSourcePath(path)
+		if !ok {
+			return false, nil
+		}
+		if rank.Recency == 0 {
+			mtime, err := e.archivedSourceMtime(ctx, fullSessionID)
+			if err != nil {
+				return false, err
+			}
+			rank.Recency = mtime
+		}
+		return ranker.ReconciliationSourceRank(candidate).Lower(rank), nil
+	}
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
-			return false, nil
+			return storedPathRanks(storedPath)
 		}
 		resolvedPath, ok := e.storedPathResolver(storedPath)
 		if !ok || resolvedPath == "" {
-			return false, nil
+			return storedPathRanks(storedPath)
 		}
 		storedPath = resolvedPath
 	}
 	stored, found, err := resolver.SourceForReconciliation(
 		ctx, storedPath, candidate.ProjectHint,
 	)
-	if err != nil || !found {
+	if err != nil {
 		return false, err
 	}
-	return reconciliationSourceRankLower(
-		ranker.ReconciliationSourceRank(candidate),
+	if !found {
+		return storedPathRanks(storedPath)
+	}
+	return ranker.ReconciliationSourceRank(candidate).Lower(
 		ranker.ReconciliationSourceRank(stored),
 	), nil
+}
+
+// archivedSourceMtime returns the source modification time the archive
+// recorded for a session, from the database that holds its stored path, or
+// zero when no row records one.
+func (e *Engine) archivedSourceMtime(
+	ctx context.Context, fullSessionID string,
+) (int64, error) {
+	if fullSessionID == "" {
+		return 0, nil
+	}
+	var stores []db.Store
+	if e.db != nil {
+		stores = append(stores, e.db)
+	}
+	if e.archiveStore != nil {
+		// A rebuild writes a fresh database; the session's row is in the
+		// original archive it replaces.
+		stores = append(stores, e.archiveStore)
+	}
+	for _, store := range stores {
+		sess, err := store.GetSessionFull(ctx, fullSessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"read archived source time of %s: %w", fullSessionID, err,
+			)
+		}
+		if sess != nil && sess.FileMtime != nil && *sess.FileMtime != 0 {
+			return *sess.FileMtime, nil
+		}
+	}
+	return 0, nil
 }
 
 func (e *Engine) providerSourceLowerRanked(
@@ -9620,7 +9670,14 @@ func (e *Engine) providerSourceLowerRanked(
 	)
 	fullSessionID = applyIDPrefixToID(e.idPrefix, fullSessionID)
 	storedPath := e.db.GetSessionFilePath(ctx, fullSessionID)
-	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
+	if archive, ok := e.archiveStore.(*db.DB); ok && storedPath == "" {
+		// A rebuild writes a fresh database; the session's preferred source
+		// is recorded in the original archive it replaces.
+		storedPath = archive.GetSessionFilePath(ctx, fullSessionID)
+	}
+	return e.storedSourceRanksHigher(
+		ctx, provider, fullSessionID, storedPath, candidate,
+	)
 }
 
 func (e *Engine) providerSourceForDiscoveredFile(
@@ -10828,6 +10885,12 @@ type pendingWrite struct {
 	verifiedMtime       int64
 	verifiedStateOK     bool
 	unresolvedForkEpoch uint64
+	// sourceToolResults indexes the saved tool outputs archived by the
+	// sessions of this write's CodeBuddy transcript, read before any of them
+	// is rewritten so a rewound branch can restore an output its
+	// conversation archived. Writes from one transcript share one index.
+	// See preloadRelatedSourceArchives.
+	sourceToolResults *ingest.SourceToolResults
 }
 
 type sessionWriteIdentityReader interface {
@@ -10969,6 +11032,9 @@ type writeBatchOutcome struct {
 	// resolved includes actual writes plus user-excluded or trashed sessions.
 	// It stays separate from written so stats and baselines count real writes.
 	resolved []bool
+	// vetoed marks writes the cwd filter or archive preservation left out on
+	// purpose. Only the bulk writer sets it.
+	vetoed []bool
 }
 
 type skipCacheWrite struct {
@@ -11336,6 +11402,11 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		outcome.failedSessions = len(batch)
 		return outcome
 	}
+	if err := e.preloadRelatedSourceArchives(ctx, batch); err != nil {
+		outcome.err = err
+		outcome.failedSessions = len(batch)
+		return outcome
+	}
 	if ctx.Err() != nil {
 		return outcome
 	}
@@ -11343,9 +11414,22 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace)
 	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
+	guardedEnds := archiveGuardedGroupEnds(batch)
+	haltBefore, failedBefore := 0, 0
 	for i, pw := range batch {
 		if ctx.Err() != nil {
 			return outcome
+		}
+		// A failed member leaves the rest of its guarded group unwritten,
+		// so the conversation keeps the outputs its branches still need and
+		// the source stays stale for a retry.
+		if i > 0 && guardedEnds != nil && guardedEnds[i-1] > i &&
+			outcome.failedSessions > failedBefore {
+			haltBefore = guardedEnds[i-1]
+		}
+		failedBefore = outcome.failedSessions
+		if i < haltBefore {
+			continue
 		}
 		claudeSources, err := e.claudeSubagentWriteSources(ctx, pw)
 		if err != nil {
@@ -11598,6 +11682,43 @@ func (e *Engine) writeBatchWithOutcomeContext(
 	return outcome
 }
 
+// archiveGuardedGroupEnds marks the CodeBuddy sources in batch whose writes
+// restore tool outputs or image links that only the archive still holds.
+// For each write of such a source it returns the index just past the
+// source's contiguous writes; other writes get 0. It returns nil when no
+// source needs the guard. The engine writes a transcript's conversation
+// after its branches, so a failed branch save must stop the conversation
+// from replacing the only saved copy of what the branch needs.
+func archiveGuardedGroupEnds(batch []pendingWrite) []int {
+	var ends []int
+	for i := 0; i < len(batch); i++ {
+		pw := batch[i]
+		if pw.sourceWriteCount < 2 || !pw.promoteSourceOnComplete ||
+			pw.sess.Agent != parser.AgentCodeBuddy {
+			continue
+		}
+		end := min(i+pw.sourceWriteCount, len(batch))
+		if end-i < 2 {
+			continue
+		}
+		found := false
+		for j := i; j < end && !found; j++ {
+			found = batch[j].sourceToolResults.Found()
+		}
+		if !found {
+			continue
+		}
+		if ends == nil {
+			ends = make([]int, len(batch))
+		}
+		for j := i; j < end; j++ {
+			ends[j] = end
+		}
+		i = end - 1
+	}
+	return ends
+}
+
 // sessionWriteVerdict says whether prepareSessionWrite produced a
 // writable session and, when it did not, why. The cwd-filter veto is
 // distinguished from archive-preserve vetoes so sync stats can count
@@ -11699,7 +11820,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
-	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
+	history, err := e.reconcileProviderHistory(ctx, candidate, pw.sourceToolResults)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
@@ -11788,9 +11909,9 @@ func (e *Engine) prepareSessionNormalizedContext(
 	return prepared, sessionWriteOK, ctx.Err()
 }
 
-// hasUnresolvedPersistedToolResult reports whether any parsed Claude or
-// iCodeMate tool_result could not resolve a persisted-output side file,
-// over the cheap parser-level carriers, before any store read.
+// hasUnresolvedPersistedToolResult reports whether any parsed Claude,
+// iCodeMate, or CodeBuddy tool_result could not resolve a persisted-output
+// side file, over the cheap parser-level carriers, before any store read.
 func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 	for _, message := range messages {
 		for _, toolResult := range message.ToolResults {
@@ -11800,6 +11921,143 @@ func hasUnresolvedPersistedToolResult(messages []parser.ParsedMessage) bool {
 		}
 	}
 	return false
+}
+
+// preloadRelatedSourceArchives gives the CodeBuddy writes whose saved tool
+// outputs are gone, or whose converted 4.x images no longer read, one shared
+// index per transcript of the outputs and image links its sessions archived.
+// It reads them before the batch rewrites any of them: after a rewind, the
+// conversation's new copy no longer holds the call or image its branch now
+// shows. Each transcript's sessions are read once however many branches need
+// one, and the index keeps only the requested outputs and links.
+// The same conversation can sit under several configured homes, and the
+// archive may hold it from another copy than the one being written, so the
+// index also reads the sessions saved from the copies the batch's sessions
+// were archived from.
+func (e *Engine) preloadRelatedSourceArchives(
+	ctx context.Context, batch []pendingWrite,
+) error {
+	var bySource map[string]*ingest.SourceToolResults
+	var paths []string
+	for i := range batch {
+		pw := &batch[i]
+		images := pw.sess.LegacyCompanionIncomplete && ingest.HasUnavailableImage(pw.msgs)
+		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" ||
+			pw.sourceToolResults != nil ||
+			(!images && !hasUnresolvedPersistedToolResult(pw.msgs)) {
+			continue
+		}
+		path := e.effectiveSourcePath(pw.sess.File.Path)
+		index, ok := bySource[path]
+		if !ok {
+			if bySource == nil {
+				bySource = make(map[string]*ingest.SourceToolResults)
+			}
+			index = &ingest.SourceToolResults{}
+			bySource[path] = index
+			paths = append(paths, path)
+		}
+		index.Want(pw.msgs)
+		if images {
+			index.WantImages(pw.msgs)
+		}
+		pw.sourceToolResults = index
+	}
+	archivedCopies := e.archivedSourceCopies(ctx, batch, bySource)
+	for _, path := range paths {
+		for _, from := range append([]string{path}, archivedCopies[path]...) {
+			if err := e.loadSourceToolResults(
+				ctx, bySource[path], from, parser.AgentCodeBuddy,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// archivedSourceCopies returns, for each transcript path in bySource, the
+// other source paths the archive saved the batch's sessions from. A newer
+// copy of a conversation under another configured home replaces the copy
+// the archive holds, and a rewind in the newer copy moves a call to a branch
+// whose output only the archived copy still holds. A rewound branch also
+// names its conversation, which the batch may not write. Trashed and deleted
+// sessions stay excluded when those paths are read, and a branch restores an
+// output only when every other session agrees on its text.
+func (e *Engine) archivedSourceCopies(
+	ctx context.Context, batch []pendingWrite,
+	bySource map[string]*ingest.SourceToolResults,
+) map[string][]string {
+	if len(bySource) == 0 {
+		return nil
+	}
+	reader, ok := e.historyStore().(interface {
+		GetSessionFilePath(context.Context, string) string
+	})
+	if !ok {
+		return nil
+	}
+	var copies map[string][]string
+	for i := range batch {
+		pw := &batch[i]
+		if pw.sess.Agent != parser.AgentCodeBuddy || pw.sess.File.Path == "" {
+			continue
+		}
+		path := e.effectiveSourcePath(pw.sess.File.Path)
+		if _, ok := bySource[path]; !ok {
+			continue
+		}
+		ids := []string{pw.sess.ID}
+		if pw.sess.RelationshipType == parser.RelFork &&
+			pw.sess.SourceSessionID == "" && pw.sess.ParentSessionID != "" {
+			ids = append(ids, pw.sess.ParentSessionID)
+		}
+		for _, id := range ids {
+			stored := reader.GetSessionFilePath(ctx, applyIDPrefixToID(e.idPrefix, id))
+			if stored == "" || stored == path || slices.Contains(copies[path], stored) {
+				continue
+			}
+			if copies == nil {
+				copies = make(map[string][]string)
+			}
+			copies[path] = append(copies[path], stored)
+		}
+	}
+	return copies
+}
+
+// loadSourceToolResults adds to index the requested tool outputs archived by
+// every session stored from path that the user has not deleted. Sessions
+// whose source is missing still count: a rewind to before the first message
+// leaves the conversation empty, and its archive holds the outputs its
+// branches need. Rows are read one session at a time and dropped after
+// indexing.
+func (e *Engine) loadSourceToolResults(
+	ctx context.Context, index *ingest.SourceToolResults,
+	path string, agent parser.AgentType,
+) error {
+	if !index.Wants() {
+		return nil
+	}
+	store := e.historyStore()
+	lister, ok := store.(interface {
+		ListRetainedSessionIDsByFilePath(context.Context, string, string) ([]string, error)
+	})
+	if !ok {
+		return nil
+	}
+	ids, err := lister.ListRetainedSessionIDsByFilePath(ctx, path, string(agent))
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		messages, err := store.GetAllMessages(ctx, id)
+		if err != nil {
+			return err
+		}
+		index.Add(id, messages)
+	}
+	return nil
 }
 
 // keepCodexCloudUsage copies onto prepared the token counts and plan usage
@@ -11845,6 +12103,17 @@ func (e *Engine) historyStore() db.Store {
 func (e *Engine) reconcileProviderHistoryContext(
 	ctx context.Context, candidate ingest.Candidate,
 ) (ingest.HistoryResult, error) {
+	return e.reconcileProviderHistory(ctx, candidate, nil)
+}
+
+// reconcileProviderHistory applies archive preservation to candidate.
+// sourceResults indexes the saved tool outputs of the sessions from the same
+// source, read before any of them was rewritten; nil reads them now when
+// needed.
+func (e *Engine) reconcileProviderHistory(
+	ctx context.Context, candidate ingest.Candidate,
+	sourceResults *ingest.SourceToolResults,
+) (ingest.HistoryResult, error) {
 	agent := candidate.Parsed.Session.Agent
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
@@ -11862,11 +12131,15 @@ func (e *Engine) reconcileProviderHistoryContext(
 			prior = &ingest.PriorSession{Session: *stored}
 		}
 	}
-	if ingest.IsClaudeFormatTranscript(
+	if ingest.RestoresPersistedToolResults(
 		agent, candidate.Parsed.Session.File.Path,
 	) {
-		if (prior == nil || len(prior.Messages) == 0) &&
-			hasUnresolvedPersistedToolResult(candidate.Parsed.Messages) {
+		unresolved := hasUnresolvedPersistedToolResult(candidate.Parsed.Messages)
+		// A converted CodeBuddy conversation whose 4.x directory no longer
+		// reads in full keeps the archived request totals and images it
+		// read there.
+		companionIncomplete := candidate.Parsed.Session.LegacyCompanionIncomplete
+		if (prior == nil || len(prior.Messages) == 0) && (unresolved || companionIncomplete) {
 			store := e.historyStore()
 			stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
 			if err != nil {
@@ -11884,6 +12157,27 @@ func (e *Engine) reconcileProviderHistoryContext(
 						Session: *stored, Messages: messages,
 					}
 				}
+			}
+		}
+		images := companionIncomplete && ingest.HasUnavailableImage(candidate.Parsed.Messages)
+		if (unresolved || images) && agent == parser.AgentCodeBuddy {
+			if sourceResults == nil && candidate.Session.FilePath != nil {
+				sourceResults = &ingest.SourceToolResults{}
+				sourceResults.Want(candidate.Parsed.Messages)
+				if images {
+					sourceResults.WantImages(candidate.Parsed.Messages)
+				}
+				if err := e.loadSourceToolResults(
+					ctx, sourceResults, *candidate.Session.FilePath, agent,
+				); err != nil {
+					return ingest.HistoryResult{}, err
+				}
+			}
+			if sourceResults.Found() {
+				if prior == nil {
+					prior = &ingest.PriorSession{Session: candidate.Session}
+				}
+				prior.SourceToolResults = sourceResults
 			}
 		}
 	} else {
@@ -12136,9 +12430,78 @@ func (e *Engine) writeBatchBulkWithOutcome(
 func (e *Engine) writeBatchBulkWithOutcomeContext(
 	ctx context.Context, batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
+	guardedEnds := archiveGuardedGroupEnds(batch)
+	if guardedEnds == nil {
+		return e.writeBatchBulkPassContext(ctx, batch, forceReplace)
+	}
+	// Each guarded source's last write, its conversation, waits for a second
+	// transaction that runs only once every other write of the source is
+	// saved. A failure or exit before then leaves the conversation's archive,
+	// and the outputs its branches need, unchanged.
 	outcome := writeBatchOutcome{
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
+		vetoed:   make([]bool, len(batch)),
+	}
+	var first, held []int
+	for i := range batch {
+		if guardedEnds[i] == i+1 {
+			held = append(held, i)
+		} else {
+			first = append(first, i)
+		}
+	}
+	e.writeBulkPassInto(ctx, &outcome, batch, first, forceReplace)
+	ready := held[:0]
+	for _, last := range held {
+		settled := true
+		for j := last - 1; j >= 0 && guardedEnds[j] == guardedEnds[last]; j-- {
+			if !outcome.written[j] && !outcome.resolved[j] && !outcome.vetoed[j] {
+				settled = false
+				break
+			}
+		}
+		if settled {
+			ready = append(ready, last)
+		}
+	}
+	e.writeBulkPassInto(ctx, &outcome, batch, ready, forceReplace)
+	return outcome
+}
+
+// writeBulkPassInto writes the batch entries at indexes in one bulk pass and
+// adds the result to outcome.
+func (e *Engine) writeBulkPassInto(
+	ctx context.Context, outcome *writeBatchOutcome,
+	batch []pendingWrite, indexes []int, forceReplace bool,
+) {
+	if len(indexes) == 0 {
+		return
+	}
+	part := make([]pendingWrite, len(indexes))
+	for k, i := range indexes {
+		part[k] = batch[i]
+	}
+	pass := e.writeBatchBulkPassContext(ctx, part, forceReplace)
+	outcome.err = errors.Join(outcome.err, pass.err)
+	outcome.writtenSessions += pass.writtenSessions
+	outcome.writtenMessages += pass.writtenMessages
+	outcome.failedSessions += pass.failedSessions
+	outcome.cwdFiltered += pass.cwdFiltered
+	for k, i := range indexes {
+		outcome.written[i] = pass.written[k]
+		outcome.resolved[i] = pass.resolved[k]
+		outcome.vetoed[i] = pass.vetoed[k]
+	}
+}
+
+func (e *Engine) writeBatchBulkPassContext(
+	ctx context.Context, batch []pendingWrite, forceReplace bool,
+) writeBatchOutcome {
+	outcome := writeBatchOutcome{
+		written:  make([]bool, len(batch)),
+		resolved: make([]bool, len(batch)),
+		vetoed:   make([]bool, len(batch)),
 	}
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
@@ -12161,6 +12524,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		}
 		e.phaseStats.PrepNanos.Add(int64(time.Since(tPrep)))
 		if verdict != sessionWriteOK {
+			outcome.vetoed[pendingIndex] = true
 			if verdict == sessionWriteCwdFiltered {
 				outcome.cwdFiltered++
 			}
@@ -13664,12 +14028,21 @@ func (e *Engine) processAndWriteSessionFile(
 	resolved := 0
 	writtenIDs := make([]string, 0, len(res.results))
 	markSourceIncomplete := func() {
-		if file.Agent == parser.AgentClaude {
+		if file.Agent == parser.AgentClaude ||
+			(atomicDAG && file.Agent == parser.AgentCodeBuddy) {
 			e.clearProviderSourceFreshness(ctx, res.providerStatHash)
 		}
 	}
 	for _, cause := range res.retryCauses {
 		log.Printf("sync: session needs retry: %s", cause)
+	}
+	relatedWrites := make([]pendingWrite, len(res.results))
+	for i, pr := range res.results {
+		relatedWrites[i] = pendingWrite{sess: pr.Session, msgs: pr.Messages}
+	}
+	if err := e.preloadRelatedSourceArchives(ctx, relatedWrites); err != nil {
+		markSourceIncomplete()
+		return false, sessionsChanged, err
 	}
 	for i, pr := range res.results {
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
@@ -13703,6 +14076,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sourceCwdResolution:    res.sourceCwdResolution,
 			sourceCwdStored:        res.sourceCwdStored,
 			sourceCwdStoredOK:      res.sourceCwdStoredOK,
+			sourceToolResults:      relatedWrites[i].sourceToolResults,
 		}
 		if i == 0 {
 			write.staged = res.staged
@@ -13791,13 +14165,20 @@ func (e *Engine) processAndWriteSessionFile(
 	return preserved, sessionsChanged, nil
 }
 
+// sourceRequiresAtomicDAGCompletion reports a source whose several sessions
+// count as current only together: a Claude-format DAG transcript and its
+// branches, or a CodeBuddy transcript with its rewound branches and side
+// questions. Each session is written stale and promoted once every active
+// one is saved, so a failed save leaves the whole source to retry even when
+// its file does not change again. Sessions the user trashed or excluded
+// count as saved.
 func sourceRequiresAtomicDAGCompletion(
 	agent parser.AgentType, resultCount int,
 ) bool {
 	if resultCount <= 1 {
 		return false
 	}
-	return isClaudeFormatAgent(agent)
+	return isClaudeFormatAgent(agent) || agent == parser.AgentCodeBuddy
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(

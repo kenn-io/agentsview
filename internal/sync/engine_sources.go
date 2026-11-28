@@ -80,6 +80,18 @@ func (e *Engine) sources() *engineSources {
 	return noEngineSources
 }
 
+// providerAssetsDir is where parsers publish attached user images. Archives
+// that keep no message content, and staged rebuild scratch databases without
+// an asset store, receive no directory so parsing writes no asset files.
+// readOnly is set for report-only parse-diff engines: their parses read the
+// images already saved there but never save new ones.
+func (e *Engine) providerAssetsDir() (dir string, readOnly bool) {
+	if e.db == nil || e.db.ArchiveContent().UsageOnly() {
+		return "", false
+	}
+	return e.db.AssetsDir(), e.forceParse
+}
+
 // ReconfigureSources replaces the engine's provider set and session roots.
 // It waits for any in-flight sync operation so a pass never switches
 // providers midway, and it does not sync the new roots; the caller decides

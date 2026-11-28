@@ -10,6 +10,7 @@ import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
 import { SessionsService, type ResumeRequest } from "../api/generated/index";
 import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
+import { codebuddyCanContinue } from "./codebuddy.js";
 import { copyToClipboard } from "./clipboard.js";
 import { reportTelemetry } from "./telemetry.js";
 import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
@@ -239,7 +240,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       },
       c: () => {
         const session = sessions.activeSession;
-        if (session && supportsResume(session.agent)) {
+        if (session && supportsResume(session.agent) && codebuddyCanContinue(session)) {
           // Copy a runnable resume command. Cursor needs the backend cwd
           // applied client-side so the copied command is self-contained.
           SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {

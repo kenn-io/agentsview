@@ -635,12 +635,15 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	machine := e.machineForFile(file)
+	assetsDir, assetsReadOnly := e.providerAssetsDir()
 	providerConfig := parser.ProviderConfig{
 		Roots:                 e.sources().agentDirs[file.Agent],
 		Machine:               e.machine,
 		StableSourceSnapshots: e.stableSourceSnapshots,
 		SourceMachines:        e.sources().sourceMachines[file.Agent],
 		PathRewriter:          e.pathRewriter,
+		AssetsDir:             assetsDir,
+		AssetsReadOnly:        assetsReadOnly,
 	}
 	provider := factory.NewProvider(providerConfig)
 
@@ -1616,7 +1619,8 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	} else if (file.Agent == parser.AgentIcodemate ||
-		file.Agent == parser.AgentCodebuff) && outcome.ForceReplace &&
+		file.Agent == parser.AgentCodebuff ||
+		file.Agent == parser.AgentCodeBuddy) && outcome.ForceReplace &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		if file.Agent == parser.AgentCodebuff {
 			missingMembers, err = e.codebuffSourceMissingMembers(
@@ -1732,6 +1736,9 @@ func (e *Engine) processProviderFile(
 		}
 	}
 	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, e.idPrefix)
+	if file.Agent == parser.AgentCodeBuddy {
+		writeCodeBuddyConversationLast(res.results)
+	}
 	if file.Agent == parser.AgentClaude && cleanCache &&
 		!e.forceParseRequested(file) {
 		res.claudeRowlessFreshnessKey = e.claudeRowlessFreshnessCacheKey(file.Path, fingerprint.Hash)
@@ -1743,6 +1750,26 @@ func (e *Engine) processProviderFile(
 		)
 	}
 	return res, true
+}
+
+// writeCodeBuddyConversationLast moves a CodeBuddy conversation after the
+// branches and side questions that name it as their parent. A branch can
+// restore a saved tool output that only the conversation's archive still
+// holds; writing the conversation last keeps that copy until the branch is
+// saved. The parser emits the conversation first when it has turns.
+func writeCodeBuddyConversationLast(results []parser.ParseResult) {
+	if len(results) < 2 {
+		return
+	}
+	id := results[0].Session.ID
+	for _, result := range results[1:] {
+		if result.Session.ParentSessionID == id {
+			first := results[0]
+			copy(results, results[1:])
+			results[len(results)-1] = first
+			return
+		}
+	}
 }
 
 // dropUnchangedSharedSQLiteResults reproduces the legacy per-session skip the

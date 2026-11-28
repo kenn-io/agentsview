@@ -1,0 +1,2 @@
+{"id": "s1", "type": "message", "role": "user", "timestamp": 1793000000006, "cwd": "/workspace/demo", "content": [{"type": "input_text", "text": "Review the log"}]}
+{"id": "s2", "parentId": "s1", "type": "message", "role": "assistant", "timestamp": 1793000000007, "content": [{"type": "output_text", "text": "The log is clean."}], "providerData": {"agent": "cli", "conversationRequestId": "sub-req", "messageId": "sub-msg", "stepSeq": 1, "model": "glm-5.1", "requestModelId": "glm-5.1", "rawUsage": {"prompt_tokens": 400, "completion_tokens": 10}}}

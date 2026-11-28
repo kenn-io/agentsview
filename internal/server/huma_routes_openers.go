@@ -18,10 +18,10 @@ type openersResponse struct {
 }
 
 func (s *Server) humaListOpeners(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[openersResponse], error) {
-	openers := detectOpeners()
+	openers := detectOpeners(ctx)
 	if openers == nil {
 		openers = []Opener{}
 	}

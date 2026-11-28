@@ -2094,11 +2094,15 @@ func (db *DB) LastClaudeAssistantOrdinal(
 // fallback used for legacy rows and ambiguous source UUIDs: rank
 // follows a message across ordinal shifts that leave the group
 // intact, where a saved ordinal would name a different occurrence.
+// targetOrdinal names the incoming row a matcher chose for a pin whose
+// row has no source UUID of its own.
 type savedPin struct {
 	sourceUUID          string
 	role                string
 	content             string
 	ordinal             int
+	targetOrdinal       int
+	hasTargetOrdinal    bool
 	sourceUUIDCount     int
 	sourceIdentityCount int
 	sourceIdentityRank  int
@@ -2864,6 +2868,9 @@ func savePinsTx(tx transactionQueries, sessionID string, incoming []Message) ([]
 	if err := identifyLegacyVSCodePinsTx(tx, sessionID, pins, incoming); err != nil {
 		return nil, err
 	}
+	if err := identifyCodeBuddyPinsTx(tx, sessionID, pins, incoming); err != nil {
+		return nil, err
+	}
 	return pins, nil
 }
 
@@ -2979,6 +2986,130 @@ func identifyLegacyVSCodePins(pins []savedPin, matches map[int]string) {
 	}
 }
 
+// codebuddyPinAnchor locates a visible CodeBuddy row by role and time. A
+// 4.x row has no source UUID, and IDE 5.x renders the converted row with
+// its reasoning and tool calls, so the time the 4.x client recorded is what
+// both copies share. sourceUUID is set only when it names this row alone.
+type codebuddyPinAnchor struct {
+	ordinal               int
+	role, timestamp, uuid string
+}
+
+func codebuddyPinAnchorsFromMessages(msgs []Message) []codebuddyPinAnchor {
+	uuids := map[string]int{}
+	for _, m := range msgs {
+		if m.SourceUUID != "" {
+			uuids[m.SourceUUID]++
+		}
+	}
+	var anchors []codebuddyPinAnchor
+	for _, m := range msgs {
+		if m.IsSystem {
+			continue
+		}
+		a := codebuddyPinAnchor{ordinal: m.Ordinal, role: m.Role, timestamp: m.Timestamp}
+		if uuids[m.SourceUUID] == 1 {
+			a.uuid = m.SourceUUID
+		}
+		anchors = append(anchors, a)
+	}
+	return anchors
+}
+
+func loadCodeBuddyPinAnchorsTx(tx transactionQueries, schema, sessionID string) ([]codebuddyPinAnchor, error) {
+	rows, err := tx.Query(fmt.Sprintf(`
+  SELECT m.ordinal, m.role, COALESCE(m.timestamp, ''),
+    COALESCE(m.source_uuid, ''), m.is_system
+  FROM %[1]s.messages m
+  JOIN %[1]s.sessions s ON s.id = m.session_id
+  WHERE m.session_id = ? AND s.agent = 'codebuddy'`, schema), sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("reading CodeBuddy pin anchors: %w", err)
+	}
+	defer rows.Close()
+	var msgs []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.Ordinal, &m.Role, &m.Timestamp, &m.SourceUUID, &m.IsSystem); err != nil {
+			return nil, fmt.Errorf("scanning CodeBuddy pin anchor: %w", err)
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating CodeBuddy pin anchors: %w", err)
+	}
+	return codebuddyPinAnchorsFromMessages(msgs), nil
+}
+
+// matchCodeBuddyPinAnchors maps an old row's ordinal to the incoming row
+// with the same role and time, when that role and time name one row on each
+// side.
+func matchCodeBuddyPinAnchors(old, incoming []codebuddyPinAnchor) map[int]codebuddyPinAnchor {
+	type anchorKey struct {
+		role string
+		at   time.Time
+	}
+	keyFor := func(a codebuddyPinAnchor) (anchorKey, bool) {
+		at, err := time.Parse(time.RFC3339Nano, a.timestamp)
+		return anchorKey{a.role, at.UTC()}, err == nil && !at.IsZero()
+	}
+	type found struct {
+		anchor codebuddyPinAnchor
+		count  int
+	}
+	incomingByKey := map[anchorKey]found{}
+	for _, a := range incoming {
+		if key, ok := keyFor(a); ok {
+			f := incomingByKey[key]
+			f.anchor, f.count = a, f.count+1
+			incomingByKey[key] = f
+		}
+	}
+	oldCounts := map[anchorKey]int{}
+	for _, a := range old {
+		if key, ok := keyFor(a); ok {
+			oldCounts[key]++
+		}
+	}
+	matches := map[int]codebuddyPinAnchor{}
+	for _, a := range old {
+		key, ok := keyFor(a)
+		if f := incomingByKey[key]; ok && oldCounts[key] == 1 && f.count == 1 {
+			matches[a.ordinal] = f.anchor
+		}
+	}
+	return matches
+}
+
+func identifyCodeBuddyPinsTx(tx transactionQueries, sessionID string, pins []savedPin, incoming []Message) error {
+	if !slices.ContainsFunc(pins, func(p savedPin) bool { return p.sourceUUID == "" && p.messageFound != 0 }) {
+		return nil
+	}
+	old, err := loadCodeBuddyPinAnchorsTx(tx, "main", sessionID)
+	if err != nil || len(old) == 0 {
+		return err
+	}
+	identifyCodeBuddyPins(pins, matchCodeBuddyPinAnchors(old, codebuddyPinAnchorsFromMessages(incoming)))
+	return nil
+}
+
+// identifyCodeBuddyPins points each UUID-less pin at its matched incoming
+// row: by the row's source UUID when that names it alone, else by ordinal.
+func identifyCodeBuddyPins(pins []savedPin, matches map[int]codebuddyPinAnchor) {
+	for i := range pins {
+		pin := &pins[i]
+		match, ok := matches[pin.ordinal]
+		if !ok || pin.sourceUUID != "" || pin.messageFound == 0 {
+			continue
+		}
+		if match.uuid != "" {
+			pin.sourceUUID, pin.sourceUUIDCount = match.uuid, 1
+		} else {
+			pin.targetOrdinal, pin.hasTargetOrdinal = match.ordinal, true
+		}
+	}
+}
+
 // savePinsFromTx saves the pins whose message sits at or after
 // fromOrdinal, the rows a ranged replacement deletes.
 func savePinsFromTx(
@@ -3088,9 +3219,12 @@ func restorePinsTx(
 			continue
 		}
 		var err error
-		if sp.sourceUUID != "" {
+		switch {
+		case sp.sourceUUID != "":
 			err = restorePinBySourceUUIDTx(tx, sessionID, sp)
-		} else {
+		case sp.hasTargetOrdinal:
+			err = restorePinByTargetOrdinalTx(tx, sessionID, sp)
+		default:
 			err = restoreLegacyPinByRankTx(tx, sessionID, sp)
 		}
 		if err != nil {
@@ -3176,6 +3310,33 @@ func restorePinBySourceUUIDTx(
 		return fmt.Errorf(
 			"restoring ambiguous pin uuid=%s ord=%d: %w",
 			sp.sourceUUID, sp.ordinal, err,
+		)
+	}
+	return nil
+}
+
+// restorePinByTargetOrdinalTx re-attaches a pin to the visible row a matcher
+// chose, provided that ordinal names one row of the pin's role.
+func restorePinByTargetOrdinalTx(
+	tx transactionQueries, sessionID string, sp savedPin,
+) error {
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO pinned_messages
+			(session_id, message_id, ordinal, note, created_at)
+		SELECT ?, m.id, m.ordinal, ?, ?
+		FROM messages m
+		WHERE m.session_id = ? AND m.ordinal = ?
+			AND m.role = ? AND m.is_system = 0
+			AND (
+				SELECT COUNT(*) FROM messages same_ordinal
+				WHERE same_ordinal.session_id = m.session_id
+					AND same_ordinal.ordinal = m.ordinal
+			) = 1`,
+		sessionID, sp.note, sp.createdAt,
+		sessionID, sp.targetOrdinal, sp.role,
+	); err != nil {
+		return fmt.Errorf(
+			"restoring matched pin ord=%d: %w", sp.targetOrdinal, err,
 		)
 	}
 	return nil

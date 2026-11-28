@@ -4409,11 +4409,24 @@ func (db *DB) GetFileHashByAgentPath(ctx context.Context,
 // and agent. Used by parsers whose canonical session ID can change while the
 // underlying source file remains the same.
 func (db *DB) ListSessionIDsByFilePath(ctx context.Context, path, agent string) ([]string, error) {
+	return db.listSessionIDsByFilePath(ctx, path, agent,
+		" AND source_missing_at IS NULL")
+}
+
+// ListRetainedSessionIDsByFilePath returns the IDs of a source path's
+// sessions that the user has not deleted, including sessions whose source
+// is missing: their archived rows are still the saved history.
+func (db *DB) ListRetainedSessionIDsByFilePath(ctx context.Context, path, agent string) ([]string, error) {
+	return db.listSessionIDsByFilePath(ctx, path, agent, "")
+}
+
+func (db *DB) listSessionIDsByFilePath(
+	ctx context.Context, path, agent, filter string,
+) ([]string, error) {
 	rows, err := db.getReader().Query(ctx,
 		"SELECT id FROM sessions"+
 			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
-			" AND source_missing_at IS NULL"+
-			" ORDER BY id",
+			filter+" ORDER BY id",
 		path, agent,
 	)
 	if err != nil {

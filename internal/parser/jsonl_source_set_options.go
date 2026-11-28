@@ -110,6 +110,13 @@ func WithSessionIDFromPath(fn func(root, path string) string) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.SessionIDFromPath = fn }
 }
 
+// WithSessionReconciliationIdentity names the raw session ID each source
+// holds, for path-keyed sources that compete with another source family for
+// the same session.
+func WithSessionReconciliationIdentity(fn func(root, path string) string) JSONLOption {
+	return func(o *JSONLSourceSetOptions) { o.ReconciliationIdentity = fn }
+}
+
 // --- lookup ---
 
 // WithLookupIDValid overrides the IsValidSessionID gate for the FindSource

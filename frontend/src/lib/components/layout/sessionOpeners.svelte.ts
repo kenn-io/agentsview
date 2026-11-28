@@ -1,3 +1,4 @@
+import { showFlash } from "@kenn-io/kit-ui";
 import type { Session } from "../../api/types.js";
 import {
   OpenersService,
@@ -10,6 +11,7 @@ import { m } from "../../i18n/index.js";
 import { messages as messagesStore } from "../../stores/messages.svelte.js";
 import { claudeCodeLink } from "../../utils/claude.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
+import { CODEBUDDY_IDE_OPENER_IDS, codebuddyCanContinue } from "../../utils/codebuddy.js";
 import { codexDesktopLink } from "../../utils/codex.js";
 import { LatestRead } from "../../utils/latest-read.js";
 import {
@@ -60,7 +62,9 @@ export class SessionOpeners {
   readonly isLocal = $derived(!this.session?.id.includes("~"));
 
   readonly canLaunch = $derived(
-    this.session ? supportsResume(this.session.agent) && this.isLocal : false,
+    this.session
+      ? supportsResume(this.session.agent) && this.isLocal && codebuddyCanContinue(this.session)
+      : false,
   );
 
   readonly codexLink = $derived(
@@ -71,7 +75,9 @@ export class SessionOpeners {
     this.session?.agent === "claude" && this.isLocal ? claudeCodeLink(this.sessionDir) : null,
   );
 
-  readonly canCopyCommand = $derived(this.session ? supportsResume(this.session.agent) : false);
+  readonly canCopyCommand = $derived(
+    this.session ? supportsResume(this.session.agent) && codebuddyCanContinue(this.session) : false,
+  );
 
   readonly terminalOpeners = $derived(this.openers.filter((o) => o.kind === "terminal"));
 
@@ -79,6 +85,12 @@ export class SessionOpeners {
     this.session?.agent === "claude"
       ? (this.openers.find((o) => o.id === "claude-desktop") ?? null)
       : null,
+  );
+
+  readonly codebuddyIDEOpeners = $derived(
+    this.session?.agent === "codebuddy"
+      ? this.openers.filter((o) => CODEBUDDY_IDE_OPENER_IDS.has(o.id))
+      : [],
   );
 
   readonly editorOpeners = $derived(this.openers.filter((o) => o.kind === "editor"));
@@ -171,6 +183,9 @@ export class SessionOpeners {
     const session = this.getSession();
     if (!session) return;
     this.menuOpen = false;
+    // A CodeBuddy IDE opens its own record of the conversation. When it
+    // cannot, a copied CLI command would hide why, so explain instead.
+    const ide = CODEBUDDY_IDE_OPENER_IDS.has(opener.id);
     try {
       const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
         opener_id: opener.id,
@@ -181,6 +196,10 @@ export class SessionOpeners {
             target: resp.terminal ?? opener.name,
           }),
         );
+        return;
+      }
+      if (ide) {
+        this.showIDEFailure(opener.name, resp.error);
         return;
       }
       // Launch failed — fall back to clipboard copy.
@@ -194,9 +213,23 @@ export class SessionOpeners {
         return;
       }
     } catch {
+      if (ide) {
+        this.showIDEFailure(opener.name);
+        return;
+      }
       // Fall back to local command build.
     }
     await this.copyLocalResumeCommand(session);
+  }
+
+  private showIDEFailure(app: string, code?: string) {
+    this.showFeedback(m.session_breadcrumb_failed_to_open(), "error");
+    showFlash(
+      code === "ide_conversation_unavailable"
+        ? m.session_breadcrumb_codebuddy_ide_no_conversation({ app })
+        : m.session_breadcrumb_codebuddy_ide_launch_failed({ app }),
+      { tone: "danger", durationMs: 8000 },
+    );
   }
 
   async copyResumeCommand() {

@@ -27,6 +27,8 @@ RESUME_AGENTS["opencode"] = (id) => `opencode --session ${shellQuote(id)}`;
 RESUME_AGENTS["amp"] = (id) => `amp --resume ${shellQuote(id)}`;
 RESUME_AGENTS["kiro"] = (id) => `kiro-cli chat --resume-id ${shellQuote(id)}`;
 RESUME_AGENTS["pi"] = (id) => `pi --session ${shellQuote(id)}`;
+// CodeBuddy resumes its CLI runtime session, which only the server knows.
+RESUME_AGENTS["codebuddy"] = (id) => `codebuddy --resume ${shellQuote(id)}`;
 
 /**
  * Agents whose resume commands require server-resolved parameters
@@ -34,7 +36,7 @@ RESUME_AGENTS["pi"] = (id) => `pi --session ${shellQuote(id)}`;
  * buildResumeCommand returns null for these agents so callers
  * don't produce incomplete fallback commands.
  */
-const SERVER_ONLY_RESUME = new Set(["cursor", "pi"]);
+const SERVER_ONLY_RESUME = new Set(["cursor", "pi", "codebuddy"]);
 
 /** Flags available for Claude Code resume. */
 export interface ClaudeResumeFlags {

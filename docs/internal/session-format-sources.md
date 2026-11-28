@@ -5748,44 +5748,232 @@ schemas keep their existing ordering behavior.
 
 ## CodeBuddy (`codebuddy`)
 
-- **Format:** Hierarchical session manifest (`index.json`) and individual
-  message files (`messages/*.json`). Workspace metadata lives in the parent
-  `index.json`. Message and `extra` envelopes accept JSON objects or encoded
-  JSON strings. Source text blocks are concatenated; working directories are
-  extracted independently from the user envelope. Explicit `thinking` and
-  `reasoning` content blocks are retained as thinking text.
+- **Format:** One provider reads two storage families.
+  - CLI and IDE 5.x write one CBC JSONL transcript per conversation at
+    `<home>/projects/<project>/<session>.jsonl`, with subagents at
+    `<session>/subagents/agent-*.jsonl` and large tool outputs at
+    `<session>/tool-results/`. Items are `message`, `reasoning`,
+    `function_call`, and `function_call_result` linked by `parentId`, plus
+    producer custom items (titles, `resend-fork-notice`, `model-usage`,
+    `context-usage`, terminal state). `<home>/codebuddy.db` is the IDE catalog:
+    `conversations` (titles, `fork_source_id`, remote `workspace_authority`),
+    `conversation_runtime_sources`, `btw_entries`, and `discussion_threads`.
+    On a host the IDE reaches over SSH, the IDE's remote server writes the
+    same file without `conversations` or `conversation_runtime_sources`;
+    its `btw_entries` and `discussion_threads` rows are keyed by the
+    runtime session id the transcript records.
+    User images are `image_blob_ref` blocks naming
+    `<home>/blobs/<first two hex>/<sha256>.<ext>`; converted 4.x images are
+    `codebuddy-asset://assets/<name>` in the 4.x conversation directory.
+  - IDE 4.x keeps a hierarchical session manifest (`index.json`) and individual
+    message files (`messages/*.json`). Workspace metadata lives in the parent
+    `index.json`. Message and `extra` envelopes accept JSON objects or encoded
+    JSON strings. Source text blocks are concatenated; working directories are
+    extracted independently from the user envelope. Explicit `thinking` and
+    `reasoning` content blocks are retained as thinking text.
 - **Evidence:** `no-public-source`.
-- **Upstream:** Tencent CodeBuddy's product site and public repositories were
-  searched 2026-09-17; no authoritative persistence producer or versioned
-  schema is publicly published. Storage format and accounting semantics were
-  verified against local Tencent CodeBuddy IDE and CodeBuddyExtension session
-  data under `CodeBuddyExtension/Data/history`.
-- **Usage and cost:** The parser interprets `lastStepInputTokens` as inclusive
-  input, subtracts `lastStepCachedInputTokens` for uncached input (floored at
-  zero), and preserves `lastStepOutputTokens` and
-  `statsSnapshot.thinkingTokens` separately. Missing, null, or negative
-  counters do not establish known usage; explicit zero does. Cache-only
-  records do not establish a complete context size. Monetary cost is
-  catalog-derived.
-- **Verification boundary:** Parser behavior was reverified on 2026-09-17 with
-  synthetic regression fixtures in `internal/parser/codebuddy_test.go`,
-  including thinking-only and usage-only messages, composite fingerprints,
-  workspace metadata changes, and deleted message events. Sync regression
-  fixtures in `internal/sync/codebuddy_integration_test.go` also verify that
-  equal-size rewrites with restored modification times invalidate both stored
-  freshness and warm skip caches through the composite content hash. Valid
-  manifests with no readable messages produce an empty session replacement,
-  clearing previously stored messages. Invalid JSON or a missing/non-array
-  `messages` field is a parse error and preserves the archive. Integration
-  fixtures cover empty manifests, deleted or invalid message files, and
-  invalid manifests after an initial import. These fixtures do not
-  independently establish producer counter semantics. The original local
-  artifact observation above has no pinned producer version; whether thinking
+- **Upstream:** Tencent publishes no schema or persistence producer source; its
+  product site and public repositories were searched 2026-09-17. The 4.x layout
+  was verified against local CodeBuddyExtension session data under
+  `CodeBuddyExtension/Data/history`. The 4.x data root per platform follows
+  the bundled genie extension 3.10.0 (`extensionDataRoot` in
+  `out/extension/index.js`, and `sharedDataPath` in `ide-cli/shared-auth.mjs`,
+  sha256 `7fbd402e08a670068b81f565bf36506c99ab5328d6f2516f3a0ab5dea35461d5`):
+  Linux and other non-macOS, non-Windows hosts use
+  `~/.local/share/CodeBuddyExtension`. On 2026-11-26 a Linux host had
+  `~/.local/share/CodeBuddyExtension/Data` with user, `default`, and `Public`
+  directories and no `~/.config/CodeBuddyExtension`; AgentsView still checks
+  `.config` because earlier releases defaulted to it. The CBC semantics were
+  read on 2026-11-25 from installed producer bundles: CodeBuddy Code CLI 2.184.0
+  (`dist/codebuddy.js`, sha256
+  `a2a1ed21a22ac1d48e8e38c56708c61f01c89442c135db25ffe0cd9a06fa0904`), CodeBuddy
+  CN 1.122.1 (`out/main.js`, sha256
+  `132a5d92621577a6a5104563c0a4b60011f03fe4e4075df28fc4b18d1950ee0e`), CodeBuddy
+  CN Insiders 1.122.1 (`out/main.js`, sha256
+  `de37c273536963cb6a69ab13565ccae5b79d7a1ebb49cdd7fb21678c50bf871b`), and the
+  bundled genie extension 3.10.0 (`out/extension/index.js`, sha256
+  `b67cb4014b1cd0a9aa5e71ce31eadf7383e18889201bd3fc7be59c771affa5ff`). The
+  remote-server layout was read on 2026-11-25 from the Linux x64 CodeBuddy CN
+  1.122.1 server (`out/vs/code/node/codebuddyNativeChatWorker/index.js`,
+  sha256 `d4526698fd8e6d6250e1f4c8600e4d119a6407e998f5bbb9c01eaffb6b7a254c`),
+  which opens `codebuddy.db` and creates each side-question table on first
+  use, and from a server-written catalog whose `btw_entries` key matched a
+  transcript stem.
+  - CBC replay follows the CLI's `resolveReplayHistory` and `getActiveHistory`:
+    a trailing `resend-fork-notice` ends history at the notice's parent;
+    otherwise a file with parent links and a resend or content filter walks back
+    from the cold-start target, using `logicalParentId` across compaction. Items
+    off the path become fork sessions; the content-filter notice that replaced a
+    turn is not a branch. Standalone `model-usage` items follow their parent
+    onto a path.
+  - Archive ids use the transcript stem; the CLI resumes the transcript's
+    `sessionId` (stored as `source_session_id`). Catalog rows are keyed by
+    that recorded `sessionId`, which AgentsView reads from the start of the
+    transcript and falls back to the stem without one. A fork's
+    `fork_source_id` names the parent conversation; AgentsView links the fork
+    to the stem of the transcript that records the parent's runtime session
+    id, so the link holds when that stem differs from the id. Both freshness
+    checks include that resolved parent id, so a branch imported before its
+    parent links to the parent on the next ordinary sync. The quick-sync
+    cutoff also counts the times of the parent's transcript, so a quick sync
+    repairs the link too. The IDE opens
+    `<scheme>://codebuddy-ide/conversation/open?id=<conversation id>`, with the
+    id matching `^[A-Za-z0-9_-]{1,128}$` (IDE `codebuddyConversationDeepLink`).
+    On Linux, AgentsView opens it with `xdg-open`, so
+    `internal/server/openers.go` lists an IDE only when `xdg-mime query default
+    x-scheme-handler/<scheme>` names a desktop file. A Linux host the IDE
+    reaches over SSH was checked on 2026-11-26: `buddycn` and
+    `buddycn-insiders` were the remote server's CLI scripts on `PATH`, and
+    neither scheme had a handler.
+    Catalog rows with a `workspace_authority` belong to another machine and are
+    ignored. Discussion entries follow genie's `sanitizeDiscussionEntry` and
+    `isValidAnchor`.
+  - A converted transcript with at least one turn outranks the 4.x manifest of
+    the same id. The rank follows the archived transcript path after the file
+    is deleted (`RankStoredSourcePath`), so the 4.x copy cannot replace the
+    archived turns; reconciliation marks the session source-missing instead.
+  - A converted transcript's fingerprint covers its 4.x conversation
+    directory: whether it exists under the configured 4.x roots, its
+    `index.json`, `messages/` and each message file, and `assets/`. A
+    4.x change event under `history/<ws>/<id>/` also selects the transcript
+    named `<id>`. The warm stat digest returns 0 for converted transcripts,
+    because the engine computes it without the configured 4.x roots, so the
+    full fingerprint decides their freshness.
+  - When a converted transcript's 4.x directory does not read in full, sync
+    keeps what the archived copy read there: each `cb4:` request total the
+    parse lacks, and each saved image link that the parse shows as
+    unavailable, matched by message source UUID and image position. A total
+    the archive stored on a visible reply goes back onto the parsed reply with
+    the same timestamp that has no usage or source UUID, with content breaking
+    a tie, so the reply keeps its `cb4:` identity and its pins and notes. A
+    total with no single matching reply, or one the archive stored as a hidden
+    usage row, stays as a hidden usage row. The directory does not read in
+    full when it is missing, its `index.json` is missing or is not an object
+    with a `messages` array (the check the 4.x reader applies), an assistant
+    message file it lists is missing or invalid, a message file listed
+    without a role is missing or invalid, or a `codebuddy-asset://` image
+    cannot be read. A message listed without a role takes the role its file
+    records, as the 4.x reader does.
+    Totals and images the directory still reads, including explicit zeros,
+    replace the archived ones. A request whose reply the transcript lacks
+    keeps its hidden usage row and `cb4:` identity even when both counts are
+    zero, so the zero still replaces an archived total; so does a converted
+    reply with no text whose copied total is zero. The fingerprint names the
+    4.x directory by its workspace and conversation, so the same history
+    extracted under another root, as each remote sync does, fingerprints
+    alike; its directories count by presence, because extraction keeps file
+    times but not directory times. A branch that a rewind
+    just created has no archive of its own, so its image links come from the
+    other retained sessions of the same transcript, and only when every
+    archived copy of that message lists the same links; request totals come
+    only from the session's own archive.
+  - A transcript's fingerprint covers the contents of its saved tool outputs
+    and, for each `image_blob_ref`, whether `<home>/blobs/<prefix>/<sha>.<ext>`
+    exists and its size. The warm stat digest covers the same blob paths,
+    present or not. A blob-store change event selects no transcript, so an
+    image restored after the first import appears on the next ordinary sync.
+    A quick sync looks at a transcript again when any of these inputs, the
+    IDE catalog, or a converted conversation's 4.x files has a modification
+    or change time after its cutoff; copies still rank by the transcript's
+    own modification time.
+    A saved-output folder that cannot be listed does not block the import:
+    its outputs keep their placeholders or the text the archive saved, and
+    both freshness checks and the cutoff record the folder, so restoring its
+    permissions reparses the conversation.
+  - A blob's name is the SHA-256 of its bytes (every one of 926 blobs in a
+    local home checked on 2026-11-27), which is also the asset store's object
+    name. When the original is deleted, the reparse links the stored copy an
+    earlier import saved, after checking its digest; an image never saved
+    stays a placeholder. An image the asset store fails to save marks the
+    parse for retry, so an ordinary sync saves it once the store is writable.
+    A report-only `parse-diff` run computes the same links and reads saved
+    copies, but saves no images.
+  - Subagent names follow the CLI's `resolveSubAgentDisplayName`: the team
+    member name, otherwise the subagent preset name. The CLI writes that name
+    to each subagent item's `providerData.agent`; main transcripts carry
+    `cli`, `craft`, or `codebuddy-ide-4.x` there instead. Only some older
+    transcripts also keep `session-meta` `meta.teamContext.memberName`, which
+    wins when present. A team subagent's first user item holds a
+    `<system-reminder data-role="team-context">` block followed by the lead's
+    task, wrapped by `formatTeammateMessage` as `<teammate-message
+    teammate_id="team-lead" summary="Initial task assignment for <member>">`.
+    AgentsView keeps the reminder as a system row and treats that first
+    teammate message as the subagent's prompt: its body without the wrapper is
+    the first message and fallback title. Every later teammate message, and
+    every teammate message in a main transcript, stays a peer message.
+- **Usage and cost:** Monetary cost is catalog-derived for both families.
+  - CBC: `rawUsage` wins over normalized `usage`. `prompt_tokens` includes cache
+    reads (`prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`,
+    `cache_read_input_tokens`) and cache writes (`cache_creation_input_tokens`,
+    `prompt_cache_write_tokens`); uncached input is the remainder.
+    `prompt_cache_miss_tokens` is uncached input, not a cache write. Reasoning
+    (`completion_thinking_tokens` or
+    `completion_tokens_details.reasoning_tokens`) is a subset of output.
+    Explicit zeros stay known. Each response's billing identity is
+    `cb:<conversationRequestId>:<messageId>:<stepSeq>`, stored as the message
+    source UUID so forks that repeat inherited responses count them once.
+    `context-usage` snapshots and `credit` values are not spend. A converted 4.x
+    conversation adds each 4.x request's final `statsSnapshot` once, as
+    `cb4:<requestId>:<messageId>`, because older converters drop those totals.
+    Newer converters copy the same totals into the transcript under that
+    identity, so the copy and the 4.x record count once. A converted record
+    uses `lastStepInputTokens` as its context size, because its prompt total
+    sums every step of the request; a record without it has no known context
+    size. Such a total can pass the two-million
+    per-request token bound that every backend applies to one message. The
+    parser then splits it: the reply, or its hidden usage row, keeps the first
+    part with up to two million of each counter, its identity, and its context
+    size. Each further part is a hidden usage row right after it, named
+    `<identity>#<n>` from 2, with no context size. The parts sum to the
+    request total, and each part's own identity lets branches and archive
+    copies count it once. CLI and IDE 5.x per-call usage is not split, and a
+    counter that would need more than 64 parts is left whole for the backends
+    to cap. A usage row that names no model, in the conversation or in a
+    rewound branch, takes the model of the response before it; a branch
+    whose own turns name none takes the model of the turns it shares with
+    the conversation.
+  - IDE 4.x: the parser interprets `lastStepInputTokens` as inclusive input,
+    subtracts `lastStepCachedInputTokens` for uncached input (floored at zero),
+    and preserves `lastStepOutputTokens` and `statsSnapshot.thinkingTokens`
+    separately. Missing, null, or negative counters do not establish known
+    usage; explicit zero does. Cache-only records do not establish a complete
+    context size.
+- **Verification boundary:** CBC behavior was verified on 2026-11-25 with
+  synthetic fixtures in `internal/parser/codebuddy_cbc_test.go` (replay,
+  branches, classification, team subagent names and task assignments, images,
+  persisted outputs, titles, catalog metadata, side questions, converted
+  sessions, catalog change selection),
+  including a remote-server catalog without `conversations`,
+  `internal/sync/codebuddy_cbc_integration_test.go` (usage deduplication across
+  forks, converted sessions, deleted converted transcripts across sync, forced
+  sync, and full resync, catalog renames, late and removed side files, source
+  deletion), and `internal/remotesync/codebuddy_test.go` (remote targets,
+  including a home that also holds 4.x history, a CLI home with no
+  conversations yet, which sends nothing, a 4.x data root, which is sent whole
+  only when it holds a conversation, unreadable project folders, and import). A
+  local corpus of 1,961 sources (903 CBC) parsed with no
+  failures. A headless Linux host with CLI 2.146.0 and a remote-server catalog
+  synced 210 sessions with no failures, and its `/btw` entries attached to
+  their transcript. Some `/btw` entries record only an image count; those images were
+  never stored. Subagent naming was rechecked on 2026-11-26 against the same
+  local corpus: 433 of 435 CBC subagents carry a name, and all 435 have a first
+  message; the two unnamed ones are converted 4.x subagents, whose items carry
+  only `codebuddy-ide-4.x`. IDE 4.x behavior was reverified on 2026-09-17 with
+  `internal/parser/codebuddy_test.go` and
+  `internal/sync/codebuddy_integration_test.go`: equal-size rewrites with
+  restored modification times invalidate stored freshness and warm skip caches;
+  valid manifests with no readable messages replace the session with an empty
+  one; invalid JSON or a missing or non-array `messages` field preserves the
+  archive. The 4.x observation has no pinned producer version; whether thinking
   snapshots are cumulative and which releases include cached input in the input
-  counter remain unverified. Do not treat this as audited billing parity.
-- **Agentsview:** `internal/parser/codebuddy.go` and
-  `internal/parser/codebuddy_provider.go`; counter semantics are
-  implementation evidence.
+  counter remain unverified. Do not treat either family as audited billing
+  parity.
+- **Agentsview:** `internal/parser/codebuddy_provider.go` routes roots;
+  `internal/parser/codebuddy_cbc_*.go`, `internal/parser/codebuddy_catalog.go`,
+  and `internal/parser/codebuddy_side_questions.go` read CBC;
+  `internal/parser/codebuddy.go` and
+  `internal/parser/codebuddy_legacy_source.go` read IDE 4.x. Counter semantics
+  are implementation evidence.
 
 ## Zencoder (`zencoder`)
 

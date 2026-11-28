@@ -95,6 +95,20 @@ func IsClaudeFormatTranscript(agent parser.AgentType, path string) bool {
 	return name != ".jsonl" && strings.HasSuffix(name, ".jsonl")
 }
 
+// RestoresPersistedToolResults reports transcripts whose parser flags a tool
+// result when its persisted-output side file could not be read, so archive
+// reconciliation restores the text saved earlier: Claude-format transcripts
+// and CodeBuddy CLI and IDE 5.x transcripts, which share the side-file
+// layout.
+func RestoresPersistedToolResults(agent parser.AgentType, path string) bool {
+	if IsClaudeFormatTranscript(agent, path) {
+		return true
+	}
+	name := filepath.Base(path)
+	return agent == parser.AgentCodeBuddy && name != ".jsonl" &&
+		strings.HasSuffix(name, ".jsonl")
+}
+
 // IsClaudeFormatAgent reports agents that use the shared Claude DAG parser.
 func IsClaudeFormatAgent(agent parser.AgentType) bool {
 	return agent == parser.AgentClaude || agent == parser.AgentIcodemate

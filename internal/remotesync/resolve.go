@@ -2,7 +2,9 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -160,6 +162,21 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 					files[def.Type] = append(files[def.Type], targetFiles...)
 				}
 				continue
+			}
+			if def.Type == parser.AgentCodeBuddy {
+				cbcDirs, cbcFiles, wholeRoot, err := resolveCodeBuddyTargets(ctx, dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				dirs[def.Type] = append(dirs[def.Type], cbcDirs...)
+				for _, file := range cbcFiles {
+					if !slices.Contains(providerExtraFiles[def.Type], file) {
+						providerExtraFiles[def.Type] = append(providerExtraFiles[def.Type], file)
+					}
+				}
+				if !wholeRoot {
+					continue
+				}
 			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
@@ -862,6 +879,84 @@ func curatedFileOrMissing(root, path string) (bool, error) {
 		return false, fmt.Errorf("stat remote sync target %q: %w", path, err)
 	}
 	return info.Mode().IsRegular(), nil
+}
+
+// resolveCodeBuddyTargets narrows a CodeBuddy root to what its parsers read.
+// A CLI and IDE 5.x home sends its projects directory, the IDE catalog, and
+// only the blob-store images its transcripts reference; the rest of the home
+// holds settings and caches. A home that also holds IDE 4.x history sends
+// its history directory beside them. wholeRoot reports a 4.x data root,
+// which is sent whole. Any other root, such as a CLI home that has not
+// written a conversation yet, sends nothing, so its settings and caches stay
+// home.
+func resolveCodeBuddyTargets(ctx context.Context, root string) (dirs, files []string, wholeRoot bool, err error) {
+	clean := filepath.Clean(root)
+	cbc := parser.CodeBuddyCBCProjectsRoots(clean)
+	if len(cbc) == 0 {
+		return resolveCodeBuddyLegacyRoot(ctx, clean)
+	}
+	for _, projects := range cbc {
+		if info, statErr := os.Stat(projects); statErr != nil || !info.IsDir() {
+			continue
+		}
+		// An unreadable projects folder fails resolution like any other
+		// unreadable root; only unreadable folders inside it narrow the
+		// image list below.
+		if openErr := checkReadableDir(projects); openErr != nil {
+			return nil, nil, false, fmt.Errorf("read CodeBuddy projects %s: %w", projects, openErr)
+		}
+		dirs = append(dirs, projects)
+		if catalog := parser.CodeBuddyCatalogForProjects(projects); catalog != "" {
+			files = append(files, catalog, catalog+"-wal", catalog+"-shm", catalog+"-journal")
+		}
+		// The archive skips project folders it cannot read, so the images
+		// found in the readable ones still travel with their transcripts.
+		blobs, blobErr := parser.CodeBuddyReferencedBlobs(ctx, projects)
+		if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](blobErr); blobErr != nil &&
+			(!incomplete || ctx.Err() != nil) {
+			return nil, nil, false, fmt.Errorf("list CodeBuddy images under %s: %w", projects, blobErr)
+		}
+		files = append(files, blobs...)
+	}
+	// The receiver reads the mirrored history directory as a 4.x root.
+	history := filepath.Join(clean, "history")
+	if info, statErr := os.Stat(history); statErr == nil && info.IsDir() &&
+		filepath.Base(clean) != "projects" {
+		dirs = append(dirs, history)
+	}
+	return dirs, files, false, nil
+}
+
+// resolveCodeBuddyLegacyRoot reports whether a root with no CLI or IDE 5.x
+// data is a 4.x data root that holds at least one conversation. An
+// unreadable root fails resolution, so the receiver does not evict its copy
+// of every 4.x conversation over a read error.
+func resolveCodeBuddyLegacyRoot(ctx context.Context, root string) (dirs, files []string, wholeRoot bool, err error) {
+	ok, err := statCuratedDir(root)
+	if err != nil || !ok {
+		return nil, nil, false, err
+	}
+	if openErr := checkReadableDir(root); openErr != nil {
+		return nil, nil, false, fmt.Errorf("read CodeBuddy root %s: %w", root, openErr)
+	}
+	has := parser.CodeBuddyHasLegacyConversations(ctx, root)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, false, ctxErr
+	}
+	return nil, nil, has, nil
+}
+
+// checkReadableDir reports whether dir can be listed.
+func checkReadableDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to
