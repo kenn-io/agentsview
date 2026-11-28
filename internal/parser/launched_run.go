@@ -111,6 +111,24 @@ func quotedSubstitution(word *syntax.Word) bool {
 	return ok
 }
 
+func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) bool {
+	for j := 1; j < i; j++ {
+		if !literal[j] {
+			continue
+		}
+		if words[j] == "--" {
+			return true
+		}
+		if j == i-1 && agent == "claude" && (words[j] == "-p" || words[j] == "--print") {
+			return true
+		}
+		if launchedFlagTakesValue(agent, words[j]) {
+			j++
+		}
+	}
+	return false
+}
+
 // launchedRunID returns the one run ID a starting shell call shows.
 func launchedRunID(ctx context.Context, input, output string) string {
 	if command, ok := codeModeCommand(input); ok {
@@ -167,16 +185,15 @@ func launchedRunID(ctx context.Context, input, output string) string {
 				if literal[i] {
 					if launchedFlagTakesValue(name, words[i]) && i+1 < len(words) {
 						i++
-						if !literal[i] && !quotedValue(args[i]) {
+						if !literal[i] && !quotedValue(args[i]) && !quotedSubstitution(args[i]) {
 							unsafeOutput = true
 							return false
 						}
 					}
 					continue
 				}
-				// Only a quoted argument after -- cannot change option roles.
-				// A quoted command substitution stays one argument and is not run here.
-				if !quotedSubstitution(args[i]) && (!quotedValue(args[i]) || i == 0 || words[i-1] != "--") {
+				// Quoted substitutions must occupy a fixed argument role.
+				if (!quotedSubstitution(args[i]) || !fixedSubstitutionRole(name, words, literal, i)) && (!quotedValue(args[i]) || words[i-1] != "--") {
 					unsafeOutput = true
 					return false
 				}
