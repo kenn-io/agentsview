@@ -130,11 +130,34 @@ func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) 
 	return i == len(words)-1
 }
 
+// launchedArgsFixed reports whether every dynamic argument sits where it
+// cannot change which run starts or what it prints.
+func launchedArgsFixed(name string, args []*syntax.Word, words []string, literal []bool) bool {
+	for i := 1; i < len(words); i++ {
+		if literal[i] {
+			if launchedFlagTakesValue(name, words[i]) && i+1 < len(words) {
+				i++
+				if !literal[i] && !quotedValue(args[i]) && !quotedSubstitution(args[i]) {
+					return false
+				}
+			}
+			continue
+		}
+		// Quoted substitutions must occupy a fixed argument role.
+		if (!quotedSubstitution(args[i]) || !fixedSubstitutionRole(name, words, literal, i)) && (!quotedValue(args[i]) || words[i-1] != "--") {
+			return false
+		}
+	}
+	return true
+}
+
 // launchedRunID returns the one run ID a starting shell call shows.
 func launchedRunID(ctx context.Context, input, output string) string {
 	return launchedRunIDConfirmed(ctx, input, output, false)
 }
 
+// launchedRunIDConfirmed is launchedRunID that can also require the ID to come
+// from the call's output.
 func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOutput bool) string {
 	if command, ok := codeModeCommand(input); ok {
 		input = command
@@ -149,7 +172,7 @@ func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOu
 	output = launchedRunOutput(output)
 	ids := map[string]bool{}
 	launches, prefix := 0, ""
-	unsafeOutput, jsonOutput := false, false
+	unsafeOutput, jsonOutput, fromOutput := false, false, false
 	var scan func(string, int)
 	scan = func(command string, depth int) {
 		if depth > 8 || ctx.Err() != nil {
@@ -186,22 +209,9 @@ func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOu
 				}
 				return false
 			}
-			for i := 1; i < len(words); i++ {
-				if literal[i] {
-					if launchedFlagTakesValue(name, words[i]) && i+1 < len(words) {
-						i++
-						if !literal[i] && !quotedValue(args[i]) && !quotedSubstitution(args[i]) {
-							unsafeOutput = true
-							return false
-						}
-					}
-					continue
-				}
-				// Quoted substitutions must occupy a fixed argument role.
-				if (!quotedSubstitution(args[i]) || !fixedSubstitutionRole(name, words, literal, i)) && (!quotedValue(args[i]) || words[i-1] != "--") {
-					unsafeOutput = true
-					return false
-				}
+			if !launchedArgsFixed(name, args, words, literal) {
+				unsafeOutput = true
+				return false
 			}
 			explicit, jsonEvents, resumed := launchedRunArgs(name, words)
 			if resumed {
@@ -225,17 +235,15 @@ func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOu
 	if launches != 1 {
 		return ""
 	}
-	confirmed := map[string]bool{}
 	if !unsafeOutput && (jsonOutput || prefix != "" && launchedOutputID.MatchString(output)) {
 		for _, id := range launchedOutputIDs(output) {
 			if strings.HasPrefix(id, "codex:") == (prefix != "") {
-				ids[id] = true
-				confirmed[id] = true
+				ids[id], fromOutput = true, true
 			}
 		}
 	}
 	for id := range ids {
-		if len(ids) == 1 && (!requireOutput || confirmed[id]) {
+		if len(ids) == 1 && (!requireOutput || fromOutput) {
 			return id
 		}
 	}
