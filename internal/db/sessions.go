@@ -2373,13 +2373,13 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 }
 
 // clearDanglingSubagentParentQuery repairs captured former children with no
-// surviving spawn edge. Restore the parser parent, even when it has not
-// arrived yet, or clear an edge-derived parent when no parser parent exists.
-// The subagent classification survives for a later edge.
+// surviving spawn edge. An edge-derived parent gives way to the parser parent,
+// including one not yet ingested. Other dangling parents clear unless the
+// parser parent exists. The subagent classification survives for a later edge.
 func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
-	SET parent_session_id = NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id),
+	SET parent_session_id = (` + parserParentSQL + `),
 	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
@@ -2389,12 +2389,14 @@ func clearDanglingSubagentParentQuery(ph string) string {
 		SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id
 		AND tc.session_id IS NOT tc.subagent_session_id
 	)
-	AND (
-		(s.spawn_linked = 1 AND s.parent_session_id IS NOT NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id))
-		OR (COALESCE(s.parser_parent_session_id, '') = ''
-			AND NOT EXISTS (SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id))
-	)`
+	AND s.parent_session_id IS NOT (` + parserParentSQL + `)
+	AND (s.spawn_linked = 1 OR NOT EXISTS (
+		SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id
+	))`
 }
+
+const parserParentSQL = `SELECT IIF(s.spawn_linked = 1, NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id),
+	(SELECT p.id FROM sessions p WHERE p.id = s.parser_parent_session_id AND p.id IS NOT s.id))`
 
 // LinkSubagentSessionsForSessions is LinkSubagentSessions scoped to the
 // sessions written by one sync batch: only children reachable from a batch

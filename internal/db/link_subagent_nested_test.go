@@ -1165,10 +1165,10 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 	})
 	insertSession(t, d, "kid", "p", func(s *Session) {
 		s.MessageCount = 1
+		s.ParentSessionID = Ptr("spawner")
+		s.RelationshipType = "subagent"
 	})
 	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
-	require.NoError(t, err)
 
 	// The spawner is parser-excluded: the delete cascades its messages
 	// and with them the only edge claiming the kid.
@@ -1508,13 +1508,18 @@ func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		spawnerPresent bool
+		parserPresent  bool
 	}{
-		{"spawner remains", true},
-		{"spawner removed", false},
+		{"spawner remains", true, true},
+		{"spawner removed", false, true},
+		{"parser parent unresolved", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "spawner", "p")
+			if tc.parserPresent {
+				insertSession(t, d, "parser-parent", "p")
+			}
 			insertSession(t, d, "kid", "p", func(s *Session) {
 				s.ParentSessionID = Ptr("parser-parent")
 				s.RelationshipType = "subagent"
@@ -1534,15 +1539,4 @@ func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
 			assert.Equal(t, "parser-parent", parentOfSession(t, d, "kid"))
 		})
 	}
-}
-
-func TestQueuedSubagentCleanupKeepsUnresolvedParserParent(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "kid", "p", func(s *Session) {
-		s.ParentSessionID = Ptr("parser-parent")
-		s.RelationshipType = "subagent"
-	})
-	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
-	require.NoError(t, d.RepairQueuedSubagentParents())
-	assert.Equal(t, "parser-parent", parentOfSession(t, d, "kid"))
 }
