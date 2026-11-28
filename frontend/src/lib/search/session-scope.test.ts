@@ -54,6 +54,19 @@ function filtered(visible: BlockType[]) {
 }
 
 describe("session search scope", () => {
+  it("reveals a linked system message without revealing other system messages", () => {
+    const prompt = message(0, "prompt", { role: "user" });
+    const target = message(1, "linked system message", { is_system: true, role: "user" });
+    const other = message(2, "other system message", { is_system: true, role: "user" });
+    const answer = message(3, "answer");
+    const result = scope([prompt, target, other, answer], { revealOrdinal: 1 });
+    expect(result.revealedOrdinal).toBe(1);
+    expect(result.items.flatMap((item) => item.ordinals)).toContain(1);
+    expect(result.items.flatMap((item) => item.ordinals)).not.toContain(2);
+    expect(result.allowsBlock(target, "text")).toBe(true);
+    expect(result.allowsBlock(other, "text")).toBe(false);
+  });
+
   it("reveals a linked answer when thinking keeps its row visible", () => {
     const answer = message(1, "[Thinking]\nplan\n[/Thinking]\nlinked answer", {
       has_thinking: true,

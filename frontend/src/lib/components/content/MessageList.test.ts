@@ -1313,6 +1313,22 @@ describe("MessageList follow cancellation", () => {
     expect(element.scrollTop).toBe(100);
   });
 
+  it("renders only the linked system message", async () => {
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [
+      makeMessage(0),
+      { ...makeMessage(1), role: "user", is_system: true, content: "linked system message" },
+      { ...makeMessage(2), role: "user", is_system: true, content: "other system message" },
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("linked system message");
+    expect(document.body.textContent).not.toContain("other system message");
+  });
+
   it("selects the neighboring message when leaving a revealed target", async () => {
     ui.setBlockVisible("assistant", false);
     ui.linkedMessage = { sessionId: "s1", ordinal: 1 };

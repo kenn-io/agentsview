@@ -149,7 +149,7 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const revealed =
     input.revealOrdinal === undefined
       ? undefined
-      : baseMessages.find((message) => message.ordinal === input.revealOrdinal);
+      : input.messages.find((message) => message.ordinal === input.revealOrdinal);
   const revealBlocks =
     !!revealed &&
     (!normalItems.some((item) => item.ordinals.includes(revealed.ordinal)) ||
