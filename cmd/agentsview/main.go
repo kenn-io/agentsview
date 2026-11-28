@@ -1931,6 +1931,7 @@ func openDBWithOpener(ctx context.Context, cfg config.Config, open func(context.
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
 	database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
+	database.SetConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings)
 	if cfg.InstallationID != "" {
 		unowned, err := database.EnsureInstallationIdentity(ctx, cfg.InstallationID)
 		if err != nil {
@@ -1960,6 +1961,7 @@ func openReadOnlyDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 		return nil, schemaUpgradeHint(err)
 	}
 	database.SetArchiveContent(cfg.ArchiveContent)
+	database.SetConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings)
 	if database.NeedsResync() {
 		database.Close()
 		return nil, appendDaemonRestartUpgradeHint(

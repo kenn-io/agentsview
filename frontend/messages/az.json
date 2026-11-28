@@ -2246,6 +2246,8 @@
   "worktree_layout": "Düzülüş",
   "worktree_layout_explicit": "Birbaşa",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "Qovluq adının ilk nöqtədən əvvəlki hissəsi layihə adıdır.",
   "worktree_parent_directory": "Üst qovluq",
   "worktree_parent_directory_hint": "Tərkibində repo.worktrees qovluqları olan qovluğu daxil edin.",
   "worktree_project_required": "Birbaşa uyğunlaşdırmalar üçün tələb olunur.",

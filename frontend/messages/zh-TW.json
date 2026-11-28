@@ -2157,6 +2157,8 @@
   "worktree_layout": "版面",
   "worktree_layout_explicit": "顯式",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "專案名稱取目錄名稱中第一個點之前的部分。",
   "worktree_parent_directory": "父目錄",
   "worktree_parent_directory_hint": "輸入包含 repo.worktrees 資料夾的目錄。",
   "worktree_project_required": "顯式映射需要專案名稱。",

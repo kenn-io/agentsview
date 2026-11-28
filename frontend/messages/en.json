@@ -2257,6 +2257,8 @@
   "worktree_layout": "Layout",
   "worktree_layout_explicit": "Explicit",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "The project is the part of the folder name before the first dot.",
   "worktree_parent_directory": "Parent directory",
   "worktree_parent_directory_hint": "Enter the directory that contains the repo.worktrees folders.",
   "worktree_project_required": "Required for explicit mappings.",

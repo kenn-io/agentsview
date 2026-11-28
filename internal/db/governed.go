@@ -41,7 +41,7 @@ type GovernedEvaluation struct {
 	// SessionsByRule counts, per winning rule, the rows it governs.
 	SessionsByRule map[GovernedRuleKey]int
 	// DynamicLabelRules maps a resolved project label to the set of
-	// repo_dot_worktrees rules currently resolving >=1 row to it.
+	// dynamic rules currently resolving at least one row to it.
 	DynamicLabelRules map[string]map[GovernedRuleKey]struct{}
 }
 
@@ -171,7 +171,7 @@ func recordGovernedRow(
 		PathPrefix:      winner.PathPrefix,
 	}
 	result.SessionsByRule[ruleKey]++
-	if winner.Layout == WorktreeMappingLayoutRepoDotWorktrees {
+	if isDynamicWorktreeLayout(winner.Layout) {
 		labels := result.DynamicLabelRules[project]
 		if labels == nil {
 			labels = map[GovernedRuleKey]struct{}{}

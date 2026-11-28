@@ -523,7 +523,7 @@ func (db *DB) writeOneSessionBatchTx(
 			transcriptMessagesGainSourceIDs(stored, write.Messages)
 	}
 
-	if err := writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult); err != nil {
+	if err := db.writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult); err != nil {
 		return 0, err
 	}
 
@@ -934,7 +934,7 @@ func (db *DB) upsertSessionBatchTx(ctx context.Context, tx *sql.Tx, write Sessio
 	return upsertResult, nil
 }
 
-func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transactionQueries, write SessionBatchWrite, upsertResult sessionUpsertResult) error {
+func (db *DB) writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transactionQueries, write SessionBatchWrite, upsertResult sessionUpsertResult) error {
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
 			write.IdentityObservation,
@@ -956,11 +956,11 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 	if write.IdentityObservation.Project != "" {
 		var err error
 		if write.IdentitySnapshotProject == nil {
-			err = upsertProjectIdentityObservationTxContext(
+			err = db.upsertProjectIdentityObservationTxContext(
 				ctx, tx, write.IdentityObservation,
 			)
 		} else {
-			err = upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+			err = db.upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 				ctx, tx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
 				upsertResult.inserted, true, write.Session.RecordedProject,

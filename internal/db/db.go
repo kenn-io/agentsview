@@ -1007,6 +1007,8 @@ type DB struct {
 	assetsDir        string
 	// archiveContent indexes archiveContentRanks; see SetArchiveContent.
 	archiveContent atomic.Int32
+	// The immutable configuration snapshot is separate from archive rules.
+	configuredWorktrees atomic.Pointer[configuredWorktreeMappings]
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
 	messageFTSRepairPending  atomic.Bool

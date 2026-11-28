@@ -315,7 +315,7 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 			}
 			continue
 		}
-		if err := upsertProjectIdentityObservationTxContext(ctx, tx, observation); err != nil {
+		if err := db.upsertProjectIdentityObservationTxContext(ctx, tx, observation); err != nil {
 			return fmt.Errorf("applying project identity backfill batch: %w", err)
 		}
 	}

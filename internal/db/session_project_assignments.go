@@ -184,7 +184,7 @@ func (db *DB) ClearSessionProjectAssignment(
 		)
 	}
 
-	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
+	mappings, err := db.loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
 		return ClearedSessionProjectAssignment{}, fmt.Errorf(
 			"loading active worktree mappings: %w", err,
@@ -206,7 +206,7 @@ func (db *DB) ClearSessionProjectAssignment(
 		}
 		effectiveProject = update.nextProject
 	}
-	if err := applyRecordedRepositoryProjectTx(ctx, tx, sessionID); err != nil {
+	if err := db.applyRecordedRepositoryProjectTx(ctx, tx, sessionID); err != nil {
 		return ClearedSessionProjectAssignment{}, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id = ?`, sessionID).Scan(&effectiveProject); err != nil {

@@ -2157,6 +2157,8 @@
   "worktree_layout": "布局",
   "worktree_layout_explicit": "显式",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "项目名取目录名中第一个点之前的部分。",
   "worktree_parent_directory": "父目录",
   "worktree_parent_directory_hint": "输入包含 repo.worktrees 文件夹的目录。",
   "worktree_project_required": "显式映射需要项目名。",

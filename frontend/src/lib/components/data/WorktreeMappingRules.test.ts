@@ -393,6 +393,30 @@ describe("WorktreeMappingRules", () => {
     });
   });
 
+  it("saves a dot-suffix rule without the previous explicit project", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host"));
+    settingsService.postApiV1SettingsWorktreeMappings.mockResolvedValue({});
+    component = mountRules();
+    await flush();
+
+    await fireEvent.input(screen.getByRole("textbox", { name: "Project" }), {
+      target: { value: "unused-project" },
+    });
+    await fireEvent.click(screen.getByRole("radio", { name: "repo.suffix" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: "Parent directory" }), {
+      target: { value: "/code" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
+
+    expect(settingsService.postApiV1SettingsWorktreeMappings).toHaveBeenCalledWith({
+      machine: "remote-host",
+      path_prefix: "/code",
+      layout: "repo_dot_suffix",
+      project: "",
+      enabled: true,
+    });
+  });
+
   it("does not let a completed save overwrite the newly selected machine", async () => {
     const save = deferred<unknown>();
     dataService.getApiV1DataProjectRules

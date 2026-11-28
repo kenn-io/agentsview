@@ -2261,6 +2261,8 @@
   "worktree_layout": "Estructura",
   "worktree_layout_explicit": "Explícita",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "El proyecto es la parte del nombre de la carpeta anterior al primer punto.",
   "worktree_parent_directory": "Directorio principal",
   "worktree_parent_directory_hint": "Introduce el directorio que contiene las carpetas repo.worktrees.",
   "worktree_project_required": "Obligatorio para asignaciones explícitas.",

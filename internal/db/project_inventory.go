@@ -237,6 +237,7 @@ func (db *DB) projectInventoryGovernance(
 			"resolving archive id for project inventory: %w", err)
 	}
 
+	mappings = db.mergeConfiguredWorktreeMappings("", mappings)
 	machines := governedCandidateMachines(mappings)
 	candidates, err := db.projectInventoryCandidateRows(ctx, archiveID, machines)
 	if err != nil {
@@ -334,7 +335,7 @@ func projectInventoryCandidateQuery(machineList []string) (string, []any) {
 // Static attribution counts every enabled explicit-layout rule whose
 // target project resolves to a row's key, regardless of whether
 // that rule currently governs any session. Dynamic attribution adds, per
-// project key, the number of distinct repo_dot_worktrees rules the evaluator
+// project key, the number of distinct dynamic rules the evaluator
 // found currently resolving at least one row to it (eval.DynamicLabelRules).
 // RecordedAsOriginal scans every mapping, including disabled ones, since
 // original_project is the historical display label the user renamed away
@@ -359,7 +360,7 @@ func AnnotateProjectInventoryRows(
 	}
 
 	for _, m := range mappings {
-		if m.Enabled && m.Layout != WorktreeMappingLayoutRepoDotWorktrees && m.Project != "" {
+		if m.Enabled && !isDynamicWorktreeLayout(m.Layout) && m.Project != "" {
 			if row := rowForProject(m.Project); row != nil {
 				row.EnabledRulesTargeting++
 			}

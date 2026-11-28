@@ -358,6 +358,7 @@ syncing while idle, set `sync_idle_after` to `"0"` and restart the server.
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
 | `[agents.claude-ai]`                | Organizations Claude.ai Sync imports — see [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports) |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
+| `[[worktree_mappings]]`             | Local project rules declared in config.toml — see [Worktree Project Mappings](#declare-rules-in-configtoml)                                                                                                                                                                                                                                                                                                                                                                      |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
 | `[model_aliases]`                   | Model names mapped to display groups. See [Model aliases](/docs/token-usage/#model-aliases).                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -2055,7 +2056,10 @@ project's observed session folders:
     the rule. The `repo_dot_worktrees` layout takes the project from the first
     path segment under the prefix when it is named `<repo>.worktrees`, so a path
     such as `/code/agentsview.worktrees/feature/frontend` resolves to project
-    `agentsview`.
+    `agentsview`. The `repo_dot_suffix` layout takes the part before the first
+    dot in the first path segment: `/code/sample-app.dev.2/packages/ui` resolves
+    to `sample_app`. Both sides of the first dot must be nonempty. Plain and
+    hidden directories do not match the suffix layout.
 - Rules created from the **Data** mapping editor record the mislabeled project
     they replaced as the rule's **original label**. That value is informational
     and set once; to revert a reclassification manually, edit the rule's target
@@ -2066,8 +2070,45 @@ project's observed session folders:
     classification.
 - Excluded, trashed, and skipped session files are left alone.
 
-Mappings change only the session's `project` field, and the rest of the session
-record stays intact through the bulk-resync rebuild-and-copy path.
+Mappings change the session's project without rewriting its transcript.
+
+#### Declare rules in config.toml
+
+Add `[[worktree_mappings]]` entries to keep local rules in configuration. This
+works even when the ingest host can read the transcripts but cannot see their
+checkouts, for example in a container running `agentsview pg push --watch`.
+Set `path_prefix` to the path as recorded in the session's working directory;
+it does not have to exist on the ingest host.
+
+```toml
+[[worktree_mappings]]
+path_prefix = "~/code/sample-app/.claude/worktrees"
+project = "sample-app"
+
+[[worktree_mappings]]
+path_prefix = "/code"
+layout = "repo_dot_suffix"
+```
+
+- `path_prefix` is required. `~/` expands to the home directory of the process
+  loading the config. You can declare each normalized prefix only once.
+- `layout` defaults to `explicit`, which requires `project`. Leave `project`
+  unset or empty for `repo_dot_suffix` and `repo_dot_worktrees`.
+- Config rules are enabled and scoped to the local installation's machine key.
+  The longest matching prefix wins. An enabled archive rule owns its exact
+  prefix and replaces any config rule at that prefix. Per-session project
+  assignments take precedence over both.
+- The Data rules editor and its settings API list only rules stored in the
+  archive. Config rules stay in the file, so edit them there. PostgreSQL and
+  ClickHouse receive the resulting session project names; their rule tables
+  contain only published archive rules.
+
+Restart a running daemon or push watcher after editing the file. Incremental
+sync applies the rules to sessions it writes. To apply current rules to
+already-imported sessions without reparsing, click **Apply** on the Data page.
+To also remove labels from rules that no longer match, run
+`agentsview sync --full`. Sessions whose transcripts are unavailable retain
+their archived classifications unless a current rule matches.
 
 ## Automated Session Detection
 

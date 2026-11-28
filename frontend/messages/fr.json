@@ -2258,6 +2258,8 @@
   "worktree_layout": "Disposition",
   "worktree_layout_explicit": "Explicite",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "Le projet correspond à la partie du nom du dossier avant le premier point.",
   "worktree_parent_directory": "Répertoire parent",
   "worktree_parent_directory_hint": "Saisissez le répertoire qui contient les dossiers repo.worktrees.",
   "worktree_project_required": "Requis pour les mappages explicites.",

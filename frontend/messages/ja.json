@@ -2228,6 +2228,8 @@
   "worktree_layout": "レイアウト",
   "worktree_layout_explicit": "明示的な",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "フォルダー名の最初のドットより前の部分がプロジェクトになります。",
   "worktree_parent_directory": "親ディレクトリ",
   "worktree_parent_directory_hint": "repo.worktrees フォルダーが含まれるディレクトリを入力します。",
   "worktree_project_required": "明示的なマッピングに必要です。",

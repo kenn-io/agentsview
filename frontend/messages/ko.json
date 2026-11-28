@@ -2159,6 +2159,8 @@
   "worktree_layout": "레이아웃",
   "worktree_layout_explicit": "명시적",
   "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_layout_repo_dot_suffix": "{repo}.{suffix}",
+  "worktree_project_derived_dot_suffix": "폴더 이름에서 첫 번째 점 앞의 부분이 프로젝트 이름이 됩니다.",
   "worktree_parent_directory": "상위 디렉터리",
   "worktree_parent_directory_hint": "repo.worktrees 폴더를 포함하는 디렉터리를 입력하세요.",
   "worktree_project_required": "명시적 매핑에는 프로젝트가 필요합니다.",
