@@ -1177,7 +1177,7 @@ func claudeParseSessionFrom(
 	); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
-	if err := annotateClaudeLaunchedRuns(ctx, msgs); err != nil {
+	if err := annotateClaudeLaunchedRuns(ctx, msgs, false); err != nil {
 		return nil, nil, time.Time{}, 0, err
 	}
 	if len(attachments) > 0 {
@@ -1660,7 +1660,7 @@ func parseLinear(
 	if err := annotateSubagentSessionsContext(ctx, messages, subagentMap); err != nil {
 		return nil, err
 	}
-	if err := annotateClaudeLaunchedRunsIfNative(ctx, messages, meta.foreign); err != nil {
+	if err := annotateClaudeLaunchedRuns(ctx, messages, meta.foreign); err != nil {
 		return nil, err
 	}
 
@@ -1887,7 +1887,7 @@ func parseDAG(
 		); err != nil {
 			return nil, nil, err
 		}
-		if err := annotateClaudeLaunchedRunsIfNative(ctx, messages, meta.foreign); err != nil {
+		if err := annotateClaudeLaunchedRuns(ctx, messages, meta.foreign); err != nil {
 			return nil, nil, err
 		}
 

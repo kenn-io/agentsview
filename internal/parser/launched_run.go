@@ -99,6 +99,12 @@ func launchedRunArgs(agent string, words []string) (ids map[string]bool, jsonEve
 
 // launchedRunID returns the one run ID a starting shell call shows.
 func launchedRunID(ctx context.Context, input, output string) string {
+	if command, ok := codeModeCommand(input); ok {
+		input = command
+		output = codeModeOutput(output)
+	} else if strings.Contains(input, "tools.exec_command") {
+		return ""
+	}
 	commands, ok := ShellInputCommands(input)
 	if !ok {
 		return ""
@@ -285,18 +291,15 @@ func launchedOutputIDs(text string) []string {
 }
 
 func hasLaunchedOutputID(text string) bool {
-	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(text))) > 0
-}
-
-func annotateClaudeLaunchedRunsIfNative(ctx context.Context, messages []ParsedMessage, compatible bool) error {
-	if compatible {
-		return nil
-	}
-	return annotateClaudeLaunchedRuns(ctx, messages)
+	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
 // annotateClaudeLaunchedRuns associates a Bash call with its own results.
-func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage) error {
+// Other agents that reuse Claude's transcript format skip it.
+func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, foreign bool) error {
+	if foreign {
+		return nil
+	}
 	calls := make(map[string]*ParsedToolCall)
 	outputs := make(map[string]string)
 	for i := range messages {

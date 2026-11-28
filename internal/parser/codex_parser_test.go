@@ -3600,6 +3600,29 @@ func TestParseCodexSessionFrom_CollabAgentSpawnEndRequiresFullParse(t *testing.T
 	assert.Contains(t, err.Error(), "full parse")
 }
 
+func TestParseCodexCodeModeLaunchedRun(t *testing.T) {
+	const child = "12345678-1234-1234-1234-123456789abc"
+	input := `const r = await tools.exec_command({cmd: "codex exec review"}); text(r.output);`
+	output := "Script completed\nWall time 1 seconds\nOutput:\nOpenAI Codex v0.1.0\n--------\nsession id: " + child + "\n--------\n"
+	call := testjsonl.CodexFunctionCallWithCallIDJSON("exec", "call_exec", input, tsEarlyS5)
+	call = strings.Replace(call, `"type":"function_call"`, `"type":"custom_tool_call"`, 1)
+	call = strings.Replace(call, `"arguments":`, `"input":`, 1)
+	result := testjsonl.CodexFunctionCallOutputJSON("call_exec", []map[string]any{{"type": "input_text", "text": output}}, tsLate)
+	result = strings.Replace(result, `"type":"function_call_output"`, `"type":"custom_tool_call_output"`, 1)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("parent", "/workspace", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
+		call,
+		result,
+	)
+	path := createTestFile(t, "code-mode-launch.jsonl", content)
+	_, msgs, err := parseCodexTestSession(t, path, "local", false)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "codex:"+child, msgs[1].ToolCalls[0].SubagentSessionID)
+}
+
 func TestParseCodexSessionFrom_CodeModeWaitStaysIncremental(t *testing.T) {
 	t.Parallel()
 

@@ -39,6 +39,11 @@ func TestLaunchedRunID(t *testing.T) {
 		{"conflicting Claude JSON array", "claude -p --output-format json hello", `[{"type":"system","session_id":"` + id + `"},{"type":"result","session_id":"` + other + `"}]`, ""},
 		{"wrapped Codex banner", "codex exec hello", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\n" + startup, "codex:" + id},
 		{"wrapped Codex JSON", "codex exec --json hello", "Wall time: 1 seconds\nExit code: 0\nOutput:\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
+		{"code mode", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output);`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "codex:" + id},
+		{"code mode encoded", `{"code":"const r = await tools.exec_command({cmd: 'claude -p --session-id ` + id + `'}); text(r.output);"}`, "", id},
+		{"code mode unrelated output", `const r = await tools.exec_command({cmd: "codex exec hello"}); text("unrelated");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
+		{"code mode uncalled function", `function f() { return tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); } text("done");`, "", ""},
+		{"code mode another call", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output); text("other");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
 		{"function definition", "f() { claude -p --session-id " + id + "; }", "", ""},
 		{"dynamic resume", "codex exec $mode " + id, startup, ""},
 		{"dynamic prompt", `claude -p --session-id ` + id + ` -- "$prompt"`, "", id},
@@ -58,4 +63,5 @@ func TestLaunchedRunID(t *testing.T) {
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {
 	assert.True(t, hasLaunchedOutputID(`[{"type":"result","session_id":"12345678-1234-1234-1234-123456789abc"}]`))
+	assert.True(t, hasLaunchedOutputID(`[{"type":"input_text","text":"Script completed\nWall time 1 seconds\nOutput:\n"},{"type":"input_text","text":"OpenAI Codex v0.1.0\n--------\nsession id: 12345678-1234-1234-1234-123456789abc\n--------\n"}]`))
 }
