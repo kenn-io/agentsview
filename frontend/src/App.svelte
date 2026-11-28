@@ -145,11 +145,8 @@
       }
     | undefined = $state(undefined);
 
-  // Load active session's messages when selection changes.
-  // Only track activeSessionId and activeSessionLoadVersion (bumped
-  // when a not-found session recovers, so the same id reloads) —
-  // untrack the rest to prevent reactive loops from
-  // messages.loading / messages.messages.
+  // Reload messages when the route, selection, recovery version, or remote live availability changes.
+  // Untrack message state to prevent reactive loops.
   let lastMessageLoadSessionId: string | null = null;
   let lastMessageLoadRoute: typeof router.route | null = null;
   let lastMessageLoadVersion: number | null = null;
