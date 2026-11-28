@@ -20,12 +20,20 @@ func TestClearHostSourcesPreservesCachedUsage(t *testing.T) {
 		SessionID: "session", Source: "test", Model: "model", InputTokens: 42,
 		OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "event",
 	}}))
+	insertSession(t, d, "second", "/other/project")
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "second", []UsageEvent{{
+		SessionID: "second", Source: "test", Model: "model", InputTokens: 17,
+		OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "event",
+	}}))
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET file_mtime=4102444800000000000 WHERE id='session'`)
 	require.NoError(t, err)
 	filter := UsageFilter{Timezone: "UTC", Breakdowns: true}
 	before, err := d.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
-	require.Equal(t, 42, before.Totals.InputTokens)
+	require.Equal(t, 59, before.Totals.InputTokens)
+	filter.Timezone = "America/New_York"
+	_, err = d.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
 	id, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
 	require.NoError(t, d.ClearHostSources(ctx))
@@ -33,7 +41,7 @@ func TestClearHostSourcesPreservesCachedUsage(t *testing.T) {
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT file_mtime FROM sessions WHERE id='session'`).Scan(&mtime))
 	assert.False(t, mtime.Valid)
 	require.NoError(t, d.Close())
-	require.NoError(t, ClearCopiedUsageRollups(ctx, usageCacheGenerationPath(path, usageCacheFormatVersion, id), id))
+	require.NoError(t, RelabelCopiedUsageRollups(ctx, usageCacheGenerationPath(path, usageCacheFormatVersion, id), path))
 	d, err = Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
@@ -41,14 +49,29 @@ func TestClearHostSourcesPreservesCachedUsage(t *testing.T) {
 	require.NoError(t, err)
 	var extracted []usageSourceVersion
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) { extracted = append(extracted, versions...) }
-	after, err := d.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	assert.Empty(t, extracted)
-	assert.Equal(t, before.Totals, after.Totals)
-	require.Len(t, after.Projects, 1)
-	for _, project := range after.Projects {
-		assert.Equal(t, CopiedProjectLabel("/work/project"), project.DisplayLabel)
+	var installed int
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) { installed += len(builds) }
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		filter.Timezone = zone
+		after, err := d.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, before.Totals, after.Totals)
+		require.Len(t, after.Projects, 2)
+		labels := make([]string, 0, len(after.Projects))
+		for _, project := range after.Projects {
+			labels = append(labels, project.DisplayLabel)
+		}
+		assert.ElementsMatch(t, []string{CopiedProjectLabel("/work/project"), CopiedProjectLabel("/other/project")}, labels)
+		for project, tokens := range map[string]int{"/work/project": 42, "/other/project": 17} {
+			filter.Project = CopiedProjectLabel(project)
+			result, err := d.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, tokens, result.Totals.InputTokens)
+		}
+		filter.Project = ""
 	}
+	assert.Empty(t, extracted)
+	assert.Zero(t, installed)
 }
 
 func TestClearHostSources(t *testing.T) {

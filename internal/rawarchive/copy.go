@@ -91,15 +91,34 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		target := filepath.Join(stage, filepath.Base(cache))
-		if err == nil {
-			err = rawcapture.SnapshotSQLite(ctx, cache, target, info)
+		if err != nil {
+			return err
 		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("usage cache %s must be a regular file", cache)
+		}
+		usable, err := db.UsableCopiedUsageCache(ctx, cache, databaseID)
+		if err != nil {
+			return err
+		}
+		if !usable {
+			continue
+		}
+		target := filepath.Join(stage, filepath.Base(cache))
+		err = rawcapture.SnapshotSQLite(ctx, cache, target, info)
+		unusable := db.UnusableCopiedUsageCacheError(err, false)
 		if err == nil {
-			err = db.ClearCopiedUsageRollups(ctx, target, databaseID)
+			err = db.RelabelCopiedUsageRollups(ctx, target, filepath.Join(stage, "sessions.db"))
+			unusable = db.UnusableCopiedUsageCacheError(err, true)
+		}
+		if unusable {
+			if removeErr := os.Remove(target); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return removeErr
+			}
+			continue
 		}
 		if err != nil {
-			return fmt.Errorf("copying usage cache %s: %w; check the cache or move it aside and retry", cache, err)
+			return fmt.Errorf("copying usage cache %s: %w", cache, err)
 		}
 		break
 	}

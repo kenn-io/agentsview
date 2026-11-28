@@ -508,23 +508,63 @@ func UsageCacheFiles(archivePath, databaseID string) []string {
 	return paths
 }
 
-// ClearCopiedUsageRollups drops a copied cache's rollups, which hold host project
-// labels, so the copy rebuilds them from its facts under the aliased labels.
-func ClearCopiedUsageRollups(ctx context.Context, path, databaseID string) (retErr error) {
+// UsableCopiedUsageCache reports whether a cache can seed the copied archive.
+func UsableCopiedUsageCache(ctx context.Context, path, databaseID string) (bool, error) {
 	probe := probeUsageCache(ctx, path)
 	if probe.Err != nil {
-		return probe.Err
+		if unusableUsageCache(probe.Err, false) {
+			return false, nil
+		}
+		return false, probe.Err
 	}
 	if !probe.Recognized || probe.SourceDatabaseID != databaseID || probe.FormatVersion < usageCacheUpgradeFrom || probe.FormatVersion > usageCacheFormatVersion || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion || filepath.Base(path) != filepath.Base(usageCacheGenerationPath(path, probe.FormatVersion, databaseID)) || (probe.FormatVersion == usageCacheFormatVersion && !probe.Compatible) {
-		return errors.New("usage cache is incompatible with the archive")
+		return false, nil
 	}
+	return true, nil
+}
+
+// UnusableCopiedUsageCacheError identifies corruption or an incomplete cache schema.
+func UnusableCopiedUsageCacheError(err error, conversion bool) bool {
+	return unusableUsageCache(err, conversion)
+}
+
+// RelabelCopiedUsageRollups keeps cached summaries under the detached archive's labels.
+func RelabelCopiedUsageRollups(ctx context.Context, path, archivePath string) (retErr error) {
 	database, err := openUsageCacheDatabase(ctx, path)
 	if err != nil {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, database.Close()) }()
-	_, err = database.ExecContext(ctx, `DELETE FROM usage_rollup_timezones`)
-	return err
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, conn.Close()) }()
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS copied_archive`, makeDSN(archivePath, true)); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, query := range []string{
+		`DELETE FROM usage_rollup_installs WHERE session_id != ? AND session_id NOT IN (SELECT id FROM copied_archive.sessions)`,
+		`CREATE TEMP TABLE copied_daily_rollups AS SELECT d.* FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id JOIN copied_archive.sessions s ON s.id=i.session_id WHERE i.project != s.project`,
+		`DELETE FROM usage_daily_rollups WHERE rollup_install_id IN (SELECT i.id FROM usage_rollup_installs i JOIN copied_archive.sessions s ON s.id=i.session_id WHERE i.project != s.project)`,
+		`UPDATE usage_rollup_installs SET project=(SELECT project FROM copied_archive.sessions WHERE id=usage_rollup_installs.session_id) WHERE session_id IN (SELECT id FROM copied_archive.sessions)`,
+		`INSERT INTO usage_daily_rollups SELECT * FROM copied_daily_rollups`,
+		`DROP TABLE copied_daily_rollups`,
+	} {
+		var args []any
+		if strings.Contains(query, "session_id != ?") {
+			args = append(args, usageRollupCursorSessionID)
+		}
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (m *usageCacheManager) Generation(

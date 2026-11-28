@@ -320,10 +320,10 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 	}
 }
 
-func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
+func TestRelabelCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 	for _, format := range []int{21, 23} {
 		t.Run(strconv.Itoa(format), func(t *testing.T) {
-			_, cachePath, id := copyUsageFixture(t, format)
+			archivePath, cachePath, id := copyUsageFixture(t, format)
 			raw := openRawUsageCacheTestDB(t, cachePath)
 			var facts int
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
@@ -335,15 +335,18 @@ func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&installs))
 			require.Positive(t, installs)
 			require.NoError(t, raw.Close())
-			require.NoError(t, ClearCopiedUsageRollups(t.Context(), cachePath, id))
+			usable, err := UsableCopiedUsageCache(t.Context(), cachePath, id)
+			require.NoError(t, err)
+			require.True(t, usable)
+			require.NoError(t, RelabelCopiedUsageRollups(t.Context(), cachePath, archivePath))
 			raw = openRawUsageCacheTestDB(t, cachePath)
 			var kept int
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&kept))
 			assert.Equal(t, facts, kept)
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&kept))
-			assert.Zero(t, kept)
+			assert.Equal(t, zones, kept)
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&kept))
-			assert.Zero(t, kept)
+			assert.Equal(t, installs, kept)
 			require.NoError(t, raw.Close())
 		})
 	}
@@ -372,7 +375,9 @@ func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
-			require.Error(t, ClearCopiedUsageRollups(t.Context(), cachePath, id))
+			usable, err := UsableCopiedUsageCache(t.Context(), cachePath, id)
+			require.NoError(t, err)
+			assert.False(t, usable)
 		})
 	}
 }

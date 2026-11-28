@@ -124,6 +124,8 @@ func TestCopyUsageCache(t *testing.T) {
 		require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: "session", Role: "assistant", Timestamp: started, Model: "model-a", TokenUsage: []byte(`{"input_tokens":330,"output_tokens":100}`)}}))
 		_, err = database.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
 		require.NoError(t, err)
+		_, err = database.GetDailyUsage(ctx, db.UsageFilter{Timezone: "America/New_York"})
+		require.NoError(t, err)
 		id, err := database.GetDatabaseID(ctx)
 		require.NoError(t, err)
 		require.NoError(t, database.Close())
@@ -145,7 +147,10 @@ func TestCopyUsageCache(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, cache.Close()) })
 		require.NoError(t, cache.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones`).Scan(&rollups))
-		assert.Zero(t, rollups)
+		assert.Equal(t, 2, rollups)
+		var project string
+		require.NoError(t, cache.QueryRowContext(ctx, `SELECT project FROM usage_rollup_installs WHERE session_id='session' LIMIT 1`).Scan(&project))
+		assert.Equal(t, db.CopiedProjectLabel("/work/api"), project)
 	})
 
 	t.Run("current corrupt cache", func(t *testing.T) {
@@ -161,12 +166,11 @@ func TestCopyUsageCache(t *testing.T) {
 		cache := caches[len(caches)-1]
 		require.NoError(t, os.WriteFile(cache, []byte("corrupt cache"), 0o600))
 		destination := filepath.Join(t.TempDir(), "copy")
-		err = Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}})
-		require.ErrorContains(t, err, cache)
-		require.ErrorContains(t, err, "usage cache")
-		require.ErrorContains(t, err, "move")
-		assert.NoDirExists(t, destination)
-		require.NoError(t, os.Rename(cache, cache+".bad"))
 		require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}}))
+		contents, err := os.ReadFile(cache)
+		require.NoError(t, err)
+		assert.Equal(t, "corrupt cache", string(contents))
+		assert.NoFileExists(t, filepath.Join(destination, filepath.Base(cache)))
+		assert.FileExists(t, filepath.Join(destination, "sessions.db"))
 	})
 }
