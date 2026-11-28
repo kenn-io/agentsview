@@ -998,3 +998,239 @@ func TestClaudeLineageSniffGivesUpAfterBoundedPreamble(t *testing.T) {
 	assert.Empty(t, results[0].Session.ParentSessionID)
 	assert.Equal(t, "first question", firstMessageContent(results[0].Messages))
 }
+
+// lineageDerivedFromLine mirrors the derived-from record Claude Code
+// writes ahead of a forked transcript's replayed chain. Each link is a
+// "via:id" pair; earlier links are inherited from the original.
+func lineageDerivedFromLine(sessionID string, links ...string) string {
+	var sessions []string
+	for _, link := range links {
+		via, id, _ := strings.Cut(link, ":")
+		sessions = append(sessions, fmt.Sprintf(
+			`{"type":"claude_code_session","id":%q,"via":%q}`, id, via))
+	}
+	return fmt.Sprintf(
+		`{"type":"derived-from","v":1,"sessionId":%q,"sessions":[%s]}`,
+		sessionID, strings.Join(sessions, ","),
+	)
+}
+
+// compactedOriginalContent is an original whose conversation was
+// compacted: the chain restarts at a new root c1 that carries no
+// parentUuid, after the pre-compaction turns.
+func compactedOriginalContent() string {
+	return strings.Join([]string{
+		lineageUserLine("u1", "", "2026-01-01T10:00:00Z", "orig-1111", "", "first question"),
+		lineageAssistantLine("a1", "u1", "2026-01-01T10:00:05Z", "orig-1111", "", "msg_01", "first answer", 20),
+		lineageUserLine("c1", "", "2026-01-01T10:30:00Z", "orig-1111", "", "compacted summary"),
+		lineageAssistantLine("a2", "c1", "2026-01-01T10:30:05Z", "orig-1111", "", "msg_02", "post-compaction answer", 5),
+		lineageUserLine("u9", "a2", "2026-01-01T12:00:00Z", "orig-1111", "", "original kept going"),
+	}, "\n") + "\n"
+}
+
+// compactedForkContent backgrounds the compacted original after a2:
+// the fork replays the post-compaction chain, whose root c1 is not the
+// original's root, so sibling election finds no ancestor.
+func compactedForkContent(derivedFrom ...string) string {
+	lines := append([]string(nil), derivedFrom...)
+	lines = append(lines,
+		lineageUserLine("c1", "", "2026-01-01T10:30:00Z", "fork-2222", "bg", "compacted summary"),
+		lineageAssistantLine("a2", "c1", "2026-01-01T10:30:05Z", "fork-2222", "bg", "msg_02", "post-compaction answer", 5),
+		lineageUserLine("u3", "a2", "2026-01-01T11:00:00Z", "fork-2222", "bg", "fork question"),
+		lineageAssistantLine("a3", "u3", "2026-01-01T11:00:05Z", "fork-2222", "bg", "msg_03", "fork answer", 7),
+	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func TestClaudeRecordedForkAfterCompactionTrimsAndLinksParent(t *testing.T) {
+	t.Parallel()
+	_, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", compactedOriginalContent(),
+		"fork-2222.jsonl", compactedForkContent(
+			lineageDerivedFromLine("fork-2222", "fork:orig-1111"),
+		),
+	)
+
+	results, excluded, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, excluded)
+	sess := results[0].Session
+	assert.Equal(t, "orig-1111", sess.ParentSessionID)
+	assert.Equal(t, RelContinuation, sess.RelationshipType)
+	msgs := results[0].Messages
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "fork question", msgs[0].Content)
+	assert.Equal(t, "fork answer", msgs[1].Content)
+}
+
+func TestClaudeRecordedForkWithoutBackgroundStampLinksNearestParent(t *testing.T) {
+	t.Parallel()
+	// A non-bg fork carries no stamp for sibling election to anchor on,
+	// and inherits its original's own fork link ahead of the new one.
+	fork := strings.ReplaceAll(lineageForkContent(), `"sessionKind":"bg",`, "")
+	fork = lineageDerivedFromLine("fork-2222",
+		"subprocess:launcher-0000", "fork:grand-0000", "fork:orig-1111",
+		"subprocess:launcher-0000",
+	) + "\n" + fork
+	_, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"fork-2222.jsonl", fork,
+	)
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	assert.Equal(t, RelContinuation, results[0].Session.RelationshipType)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "continued question", results[0].Messages[0].Content)
+}
+
+func TestClaudeRecordedForkWithoutParentTranscriptLinksUntrimmed(t *testing.T) {
+	t.Parallel()
+	// Without the parent transcript the replayed turns exist nowhere
+	// else in the archive, so they stay; the recorded link still holds.
+	dir := t.TempDir()
+	forkPath := filepath.Join(dir, "fork-2222.jsonl")
+	fork := lineageDerivedFromLine("fork-2222", "fork:orig-1111") + "\n" + lineageForkContent()
+	require.NoError(t, os.WriteFile(forkPath, []byte(fork), 0o644))
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	assert.Equal(t, RelContinuation, results[0].Session.RelationshipType)
+	assert.Len(t, results[0].Messages, 4)
+}
+
+func TestClaudeDerivedFromWithoutForkLinkKeepsSiblingBehavior(t *testing.T) {
+	t.Parallel()
+	newer := strings.Replace(
+		lineageDerivedFromLine("fork-2222", "fork:other-9999"), `"v":1`, `"v":2`, 1)
+	for name, record := range map[string]string{
+		"subprocess":    lineageDerivedFromLine("fork-2222", "subprocess:other-9999"),
+		"compact":       lineageDerivedFromLine("fork-2222", "compact:fork-2222"),
+		"resume":        lineageDerivedFromLine("fork-2222", "resume:fork-2222"),
+		"newer version": newer,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, forkPath := writeLineageFixture(t,
+				"orig-1111.jsonl", compactedOriginalContent(),
+				"fork-2222.jsonl", compactedForkContent(record),
+			)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(filepath.Dir(forkPath), "other-9999.jsonl"),
+				[]byte(compactedOriginalContent()), 0o644))
+
+			results, _, err := claudeParseFile(t.Context(),
+				forkPath, "my_app", "local",
+				claudeParseOptions{siblingLineage: true},
+			)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Empty(t, results[0].Session.ParentSessionID)
+			assert.Len(t, results[0].Messages, 4)
+		})
+	}
+}
+
+func TestClaudeRecordedForkFindsParentInAnotherProjectDir(t *testing.T) {
+	t.Parallel()
+	// A fork started from a worktree lands in that worktree's project
+	// directory, apart from the original's.
+	root := t.TempDir()
+	origDir := filepath.Join(root, "-home-user-proj")
+	forkDir := filepath.Join(root, "-home-user-proj-worktree")
+	require.NoError(t, os.MkdirAll(origDir, 0o755))
+	require.NoError(t, os.MkdirAll(forkDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(origDir, "orig-1111.jsonl"),
+		[]byte(compactedOriginalContent()), 0o644))
+	forkPath := filepath.Join(forkDir, "fork-2222.jsonl")
+	require.NoError(t, os.WriteFile(forkPath, []byte(compactedForkContent(
+		lineageDerivedFromLine("fork-2222", "fork:orig-1111"),
+	)), 0o644))
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "fork question", results[0].Messages[0].Content)
+}
+
+func TestClaudeDerivedFromClearAfterForkIsUnrelated(t *testing.T) {
+	t.Parallel()
+	// /clear in a forked session starts unrelated work that inherits
+	// the fork's provenance; it must not join the original's chain.
+	cleared := strings.Join([]string{
+		lineageDerivedFromLine("clear-3333",
+			"fork:orig-1111", "subprocess:launcher-0000", "clear:fork-2222"),
+		lineageUserLine("n1", "", "2026-01-01T12:00:00Z", "clear-3333", "", "new topic"),
+		lineageAssistantLine("n2", "n1", "2026-01-01T12:00:05Z", "clear-3333", "", "msg_n", "new answer", 3),
+	}, "\n") + "\n"
+	_, clearedPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"clear-3333.jsonl", cleared,
+	)
+
+	results, _, err := claudeParseFile(t.Context(),
+		clearedPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	assert.Len(t, results[0].Messages, 2)
+}
+
+func TestClaudeBackgroundForkIgnoresRecordedDescendant(t *testing.T) {
+	t.Parallel()
+	// An older background fork carries no record; newer forks of it,
+	// and forks of those, record their parents and hold all of its
+	// entries. Electing a descendant would drop the background fork's
+	// turns from both.
+	origPath, forkPath := writeLineageFixture(t,
+		"orig-1111.jsonl", lineageOriginalContent(),
+		"fork-2222.jsonl", lineageForkContent(),
+	)
+	child := strings.ReplaceAll(lineageForkContent(), "fork-2222", "child-3333")
+	child = strings.ReplaceAll(child, `"sessionKind":"bg",`, "")
+	child = lineageDerivedFromLine("child-3333", "fork:fork-2222") + "\n" + child +
+		lineageUserLine("u3", "a2", "2026-01-01T12:00:00Z", "child-3333", "", "child question") + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(origPath), "child-3333.jsonl"), []byte(child), 0o644))
+	grandchild := strings.ReplaceAll(child, "child-3333", "grand-4444")
+	grandchild = strings.Replace(grandchild,
+		lineageDerivedFromLine("grand-4444", "fork:fork-2222"),
+		lineageDerivedFromLine("grand-4444", "fork:fork-2222", "fork:child-3333"), 1)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(origPath), "grand-4444.jsonl"), []byte(grandchild), 0o644))
+
+	results, _, err := claudeParseFile(t.Context(),
+		forkPath, "my_app", "local",
+		claudeParseOptions{siblingLineage: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "continued question", results[0].Messages[0].Content)
+
+	siblings, err := claudeLineageCaptureSiblings(t.Context(), forkPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{origPath}, siblings)
+}

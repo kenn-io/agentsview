@@ -719,7 +719,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // subagent runs linked to the session named by their requester field.
 // Re-parse Muse Personal sources in place; source and session identities are
 // unchanged.)
-const dataVersion = 193
+// (194: link Claude Code forks to the session their derived-from record
+// names and trim the replayed prefix. Re-parse Claude sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 194
 
 const archiveOnlyVersionBase = 1 << 20
 

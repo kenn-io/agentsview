@@ -379,6 +379,64 @@ func TestGrokUpgradePreservesParserRelationship(t *testing.T) {
 	assert.Equal(t, "subagent", relationship)
 }
 
+func TestClaudeRecordedForkUpgradeLinksParentInPlace(t *testing.T) {
+	assert.Equal(t, []parser.AgentType{parser.AgentClaude}, db.ScopedDataVersionProviders(193, 194))
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(193, 194)}))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const origID = "c0000000-0000-4000-8000-000000000193"
+	const forkID = "c0000000-0000-4000-8000-000000001193"
+	line := func(kind, uuid, parent, text string) string {
+		return testjsonl.ClaudeEntryJSON(kind, text, "2026-11-27T12:00:00Z", uuid, parent, "/work")
+	}
+	// The fork replays the original's post-compaction chain from c1,
+	// which is not the original's root.
+	orig := line("user", "u1", "", "first") + "\n" +
+		line("assistant", "a1", "u1", "first answer") + "\n" +
+		line("user", "c1", "", "summary") + "\n" +
+		line("assistant", "a2", "c1", "summary answer") + "\n"
+	fork := `{"type":"derived-from","v":1,"sessionId":"` + forkID + `","sessions":[{"type":"claude_code_session","id":"` + origID + `","via":"fork"}]}` + "\n" +
+		line("user", "c1", "", "summary") + "\n" +
+		line("assistant", "a2", "c1", "summary answer") + "\n" +
+		line("user", "f1", "a2", "fork question") + "\n" +
+		line("assistant", "f2", "f1", "fork answer") + "\n"
+	forkSource := filepath.Join(root, "project", forkID+".jsonl")
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", origID+".jsonl"), []byte(orig))
+	dbtest.WriteTestFile(t, forkSource, []byte(fork))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	engine := sync.NewEngine(t.Context(), database, cfg)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	engine.Close()
+	// Model the archive the previous parser wrote: the fork unlinked.
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), "UPDATE sessions SET parent_session_id=NULL, relationship_type='' WHERE id=?", forkID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+	engine = sync.NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	session, err := database.GetSessionFull(t.Context(), forkID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.ParentSessionID)
+	assert.Equal(t, origID, *session.ParentSessionID)
+	assert.Equal(t, "continuation", session.RelationshipType)
+	assert.Equal(t, forkSource, database.GetSessionFilePath(t.Context(), forkID))
+	var count int
+	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+	assert.Equal(t, 2, count)
+}
+
 func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(

@@ -82,6 +82,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	191:                         {}, // Native title reconciliation backfills Antigravity CLI titles without reparsing.
 	192:                         {parser.AgentCodex},
 	193:                         {parser.AgentMusePersonal},
+	194:                         {parser.AgentClaude},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

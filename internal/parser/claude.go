@@ -119,12 +119,12 @@ func claudeParseFile(
 
 	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 
-	// Background-fork lineage: when the transcript is a bg-marked fork
-	// that replays a non-bg sibling, drop the replayed prefix and link
-	// the fork to its parent. Whether the fork is still an exact copy
-	// of the parent is decided after parsing: uuid-less fork-own
-	// records (a prompt queued at handoff) can carry the fork's only
-	// message.
+	// Background-fork lineage: when the transcript records the session
+	// it forked from, or is a bg-marked fork that replays a sibling,
+	// drop the replayed prefix and link the fork to its parent.
+	// Whether the fork is still an exact copy of the parent is decided
+	// after parsing: uuid-less fork-own records (a prompt queued at
+	// handoff) can carry the fork's only message.
 	var lineage *claudeLineagePlan
 	if opts.siblingLineage {
 		lineage, err = claudeResolveSiblingLineage(ctx, path)
