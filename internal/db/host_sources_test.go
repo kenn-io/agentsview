@@ -2,12 +2,54 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClearHostSourcesPreservesCachedUsage(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	insertSession(t, d, "session", "/work/project")
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "session", []UsageEvent{{
+		SessionID: "session", Source: "test", Model: "model", InputTokens: 42,
+		OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "event",
+	}}))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET file_mtime=4102444800000000000 WHERE id='session'`)
+	require.NoError(t, err)
+	filter := UsageFilter{Timezone: "UTC", Breakdowns: true}
+	before, err := d.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 42, before.Totals.InputTokens)
+	id, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	require.NoError(t, d.ClearHostSources(ctx))
+	var mtime sql.NullInt64
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT file_mtime FROM sessions WHERE id='session'`).Scan(&mtime))
+	assert.False(t, mtime.Valid)
+	require.NoError(t, d.Close())
+	require.NoError(t, ClearCopiedUsageRollups(ctx, usageCacheGenerationPath(path, usageCacheFormatVersion, id), id))
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	cache, err := d.usageCache.Generation(ctx, id)
+	require.NoError(t, err)
+	var extracted []usageSourceVersion
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) { extracted = append(extracted, versions...) }
+	after, err := d.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Empty(t, extracted)
+	assert.Equal(t, before.Totals, after.Totals)
+	require.Len(t, after.Projects, 1)
+	for _, project := range after.Projects {
+		assert.Equal(t, CopiedProjectLabel("/work/project"), project.DisplayLabel)
+	}
+}
 
 func TestClearHostSources(t *testing.T) {
 	d := testDB(t)

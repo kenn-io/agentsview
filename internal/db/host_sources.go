@@ -33,8 +33,13 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 		if err := retainCodexCloudAccounts(ctx, tx); err != nil {
 			return err
 		}
+		// Clearing file_mtime fires the sync marker trigger, but leaves usage unchanged.
 		for _, statement := range []string{
+			`CREATE TEMP TABLE copied_session_markers(id TEXT PRIMARY KEY, marker TEXT) WITHOUT ROWID`,
+			`INSERT INTO copied_session_markers SELECT id, sync_marker FROM sessions`,
 			`UPDATE sessions SET file_path=NULL, file_size=NULL, file_mtime=NULL, file_inode=NULL, file_device=NULL, file_hash=NULL, cwd=''`,
+			`UPDATE sessions SET sync_marker=(SELECT marker FROM copied_session_markers WHERE id=sessions.id)`,
+			`DROP TABLE copied_session_markers`,
 			`UPDATE recall_entries SET cwd=''`,
 			`UPDATE excluded_sessions SET file_path=NULL`,
 			`UPDATE commit_links SET repository=''`,
