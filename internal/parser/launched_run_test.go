@@ -21,6 +21,7 @@ func TestLaunchedRunID(t *testing.T) {
 		{"setup before launch", "cd project && codex exec hello", startup, "codex:" + id},
 		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
+		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", id},
 		{"shell JSON prompt mentions tool", `{"command":"claude -p --session-id ` + id + ` 'see tools.exec_command'"}`, "", id},
 		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
@@ -56,6 +57,16 @@ func TestLaunchedRunID(t *testing.T) {
 			assert.Equal(t, tt.want, launchedRunID(t.Context(), tt.command, tt.output))
 		})
 	}
+}
+
+func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	messages := []ParsedMessage{
+		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"claude -p --session-id ` + id + `"}`}}},
+		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: `"failed"`}}},
+	}
+	assert.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
 }
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {
