@@ -488,6 +488,42 @@
     };
   }
 
+  // The overlay scrollbar mounts in the outer `.find-viewport` host beside
+  // `.message-list-scroll`, and its thumb/track pointerdown handlers call
+  // `stopPropagation()`. Capture scrollbar interactions on the host before
+  // kit-ui handles them so dragging or clicking the scrollbar cancels Follow
+  // latest just like scrolling directly inside `.message-list-scroll`.
+  $effect(() => {
+    const host = findViewportRef;
+    if (!host) return;
+    const isScrollbarTarget = (target: EventTarget | null): boolean =>
+      target instanceof Element && target.closest("[data-kit-scrollbar]") !== null;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button === 0 && isScrollbarTarget(event.target)) {
+        handleManualScrollIntent();
+      }
+    };
+    const onScrollbarScrollInput = (event: Event) => {
+      if (isScrollbarTarget(event.target)) {
+        handleManualScrollIntent();
+      }
+    };
+    host.addEventListener("pointerdown", onPointerDown, true);
+    host.addEventListener("wheel", onScrollbarScrollInput, {
+      capture: true,
+      passive: true,
+    });
+    host.addEventListener("touchmove", onScrollbarScrollInput, {
+      capture: true,
+      passive: true,
+    });
+    return () => {
+      host.removeEventListener("pointerdown", onPointerDown, true);
+      host.removeEventListener("wheel", onScrollbarScrollInput, true);
+      host.removeEventListener("touchmove", onScrollbarScrollInput, true);
+    };
+  });
+
   onDestroy(() => {
     destroyed = true;
     endScrollOwnership();

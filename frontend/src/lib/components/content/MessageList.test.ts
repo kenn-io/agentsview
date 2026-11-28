@@ -1575,6 +1575,192 @@ describe("MessageList follow cancellation", () => {
 
     expect(readProgress.get("s1")?.token).toBe("current");
   });
+
+  it("cancels follow latest and keeps the chosen position when dragging the overlay scrollbar thumb", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    messages.messages = Array.from({ length: 20 }, (_, index) => makeMessage(index));
+    messages.messageCount = 20;
+    messages.hasOlder = false;
+    ui.followLatest = true;
+    ui.followLatestRequest = 1;
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const scroller = document.querySelector<HTMLElement>(".message-list-scroll")!;
+    const host = document.querySelector<HTMLElement>(".find-viewport")!;
+    const track = host.querySelector<HTMLElement>('[data-kit-scrollbar="y"]')!;
+    const thumb = host.querySelector<HTMLElement>('[data-kit-scrollbar-thumb="y"]')!;
+    expect(track).not.toBeNull();
+    expect(thumb).not.toBeNull();
+
+    // Give the scroller real overflowing geometry so overlayScrollbars computes
+    // thumb metrics and maps pointer drags to scrollTop offsets.
+    scroller.style.overflowY = "auto";
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, value: 800 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 200,
+      width: 800,
+      height: 200,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 200,
+      width: 800,
+      height: 200,
+      toJSON: () => ({}),
+    });
+
+    // Let the follow-latest settle loop snap to the bottom and keep following
+    // through programmatic scroll updates.
+    vi.advanceTimersByTime(150);
+    await tick();
+    expect(ui.followLatest).toBe(true);
+    expect(scroller.scrollTop).toBe(2000);
+    // Clamp scrollTop to real maxScroll (1800) as a browser would, then trigger
+    // overlayScrollbars measurement so the thumb reflects the bottom offset.
+    scroller.scrollTop = 1800;
+    scroller.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersByTime(20);
+
+    // Drag the overlay thumb upward by 100px from the bottom.
+    const PointerEventCtor = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    thumb.dispatchEvent(
+      new PointerEventCtor("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: 180,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEventCtor("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: 80,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEventCtor("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: 80,
+      }),
+    );
+
+    const draggedScrollTop = scroller.scrollTop;
+    expect(draggedScrollTop).toBeLessThan(1800);
+
+    // Advance past several 100ms follow-settle ticks; the dragged position must hold.
+    vi.advanceTimersByTime(350);
+    await tick();
+    expect(ui.followLatest).toBe(false);
+    expect(scroller.scrollTop).toBe(draggedScrollTop);
+  });
+
+  it("cancels follow latest when clicking the overlay scrollbar track", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    messages.messages = Array.from({ length: 20 }, (_, index) => makeMessage(index));
+    messages.messageCount = 20;
+    messages.hasOlder = false;
+    ui.followLatest = true;
+    ui.followLatestRequest = 1;
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const scroller = document.querySelector<HTMLElement>(".message-list-scroll")!;
+    const host = document.querySelector<HTMLElement>(".find-viewport")!;
+    const track = host.querySelector<HTMLElement>('[data-kit-scrollbar="y"]')!;
+    expect(track).not.toBeNull();
+
+    scroller.style.overflowY = "auto";
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, value: 800 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 200,
+      width: 800,
+      height: 200,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 200,
+      width: 800,
+      height: 200,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({
+      x: 790,
+      y: 2,
+      top: 2,
+      left: 790,
+      right: 800,
+      bottom: 198,
+      width: 10,
+      height: 196,
+      toJSON: () => ({}),
+    });
+
+    vi.advanceTimersByTime(150);
+    await tick();
+    expect(ui.followLatest).toBe(true);
+    scroller.scrollTop = 1800;
+    scroller.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersByTime(20);
+
+    const PointerEventCtor = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    track.dispatchEvent(
+      new PointerEventCtor("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: 20,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEventCtor("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: 20,
+      }),
+    );
+
+    const jumpedScrollTop = scroller.scrollTop;
+    expect(jumpedScrollTop).toBeLessThan(1800);
+
+    vi.advanceTimersByTime(350);
+    await tick();
+    expect(ui.followLatest).toBe(false);
+    expect(scroller.scrollTop).toBe(jumpedScrollTop);
+  });
 });
 
 const docbankLookup = vi.hoisted(() => vi.fn());
