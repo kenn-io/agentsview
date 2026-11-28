@@ -103,14 +103,24 @@ func TestCommitLinksAppendWithoutCandidatesSkipsInputScan(t *testing.T) {
 			var sqlite *sqlite3.SQLiteConn
 			require.NoError(t, conn.Raw(func(raw any) error {
 				sqlite = raw.(*sqlite3.SQLiteConn)
+				// The index trigger reads NEW.input_json during an insert, while scans use SELECT.
+				inSelect := false
 				sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-					if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
+					if op == sqlite3.SQLITE_SELECT {
+						inSelect = true
+					} else if op == sqlite3.SQLITE_INSERT || op == sqlite3.SQLITE_UPDATE || op == sqlite3.SQLITE_DELETE {
+						inSelect = false
+					}
+					if inSelect && op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
 						return sqlite3.SQLITE_DENY
 					}
 					return sqlite3.SQLITE_OK
 				})
 				return nil
 			}))
+			var storedInput string
+			err = conn.QueryRowContext(t.Context(), `SELECT input_json FROM tool_calls LIMIT 1`).Scan(&storedInput)
+			require.Error(t, err)
 			require.NoError(t, conn.Close())
 			defer sqlite.RegisterAuthorizer(nil)
 			message := commitMessages("candidate", input, "")[2]
