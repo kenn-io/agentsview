@@ -92,7 +92,11 @@ describe("TranscriptViewMenu", () => {
     await open();
     const group = document.querySelector('[role="group"][aria-label="Reading width"]')!;
     const choices = Array.from(group.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
-    expect(choices.map((choice) => choice.textContent?.trim())).toEqual(["Default", "Wider", "Full"]);
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
+      "Default",
+      "Wider",
+      "Full",
+    ]);
     expect(choices[2]!.getAttribute("aria-checked")).toBe("true");
     choices[1]!.click();
     await tick();
