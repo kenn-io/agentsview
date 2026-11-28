@@ -43,7 +43,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.60.0
 
       - run: make frontend
 
