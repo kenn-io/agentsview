@@ -380,9 +380,9 @@ func TestGrokUpgradePreservesParserRelationship(t *testing.T) {
 }
 
 func TestClaudeRecordedForkUpgradeLinksParentInPlace(t *testing.T) {
-	assert.Equal(t, []parser.AgentType{parser.AgentClaude}, db.ScopedDataVersionProviders(192, 193))
+	assert.Equal(t, []parser.AgentType{parser.AgentClaude}, db.ScopedDataVersionProviders(193, 194))
 	version := db.CurrentDataVersion()
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(192, 193)}))
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(193, 194)}))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const origID = "c0000000-0000-4000-8000-000000000193"
@@ -1941,7 +1941,7 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 }
 
 func TestMusePersonalRunCategoryUpgradeReparsesInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(192, 193)
+	scope := db.ScopedDataVersionProviders(193, 194)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentMusePersonal}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
