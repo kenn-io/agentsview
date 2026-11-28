@@ -165,6 +165,8 @@
   }
   .group-member { position: relative; }
   .member-link { position: absolute; right: 100%; top: 0; }
+  /* Leave room for the tool input copy button and its margin. */
+  :global(.layout-skim) .member-link { right: 34px; }
   .read-progress-divider {
     display: flex;
     align-items: center;

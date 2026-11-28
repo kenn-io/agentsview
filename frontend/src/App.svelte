@@ -151,15 +151,22 @@
   // untrack the rest to prevent reactive loops from
   // messages.loading / messages.messages.
   let lastMessageLoadSessionId: string | null = null;
+  let lastMessageLoadRoute: typeof router.route | null = null;
+  let lastMessageLoadVersion: number | null = null;
+  let lastMessageLoadLiveAllowed: boolean | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
     const liveAllowed = remoteLiveAllowed;
-    void sessions.activeSessionLoadVersion;
+    const loadVersion = sessions.activeSessionLoadVersion;
     let current = true;
     untrack(() => {
       const idChanged = id !== lastMessageLoadSessionId;
+      const liveOnly = !idChanged && route === lastMessageLoadRoute && loadVersion === lastMessageLoadVersion && liveAllowed !== lastMessageLoadLiveAllowed;
       lastMessageLoadSessionId = id;
+      lastMessageLoadRoute = route;
+      lastMessageLoadVersion = loadVersion;
+      lastMessageLoadLiveAllowed = liveAllowed;
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
@@ -184,7 +191,7 @@
         (ui.pendingScrollSession === null ||
           ui.pendingScrollSession === id ||
           (!idChanged && ui.pendingScrollSession === router.sessionId));
-      if (!pendingMatchesSession) {
+      if (!pendingMatchesSession && !liveOnly) {
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
         ui.pendingScrollSession = null;
