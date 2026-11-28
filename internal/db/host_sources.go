@@ -30,6 +30,8 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`UPDATE excluded_sessions SET file_path=NULL`,
 			`UPDATE commit_links SET repository=''`,
 			`UPDATE commit_trailers SET repository=''`,
+			`DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`,
+			`DELETE FROM codex_cloud_accounts`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
 			`DELETE FROM provider_freshness`, `DELETE FROM skipped_files`, `DELETE FROM source_failures`,
 			`DELETE FROM local_session_source_baselines`, `DELETE FROM claude_subagent_sources`,
 			`DELETE FROM remote_skipped_files`, `DELETE FROM parser_checkpoint_blobs`, `DELETE FROM parser_checkpoints`,

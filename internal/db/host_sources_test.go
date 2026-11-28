@@ -18,10 +18,30 @@ func TestClearHostSources(t *testing.T) {
 	require.NoError(t, d.SetSyncState(ctx, "replica-position", "123"))
 	require.NoError(t, d.EnableArchiveOnly(ctx))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO sessions(id, project, cwd, file_path) VALUES('a', ?, ?, ?)`, path, path, path)
-		return err
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id, project, cwd, file_path) VALUES('a', ?, ?, ?)`, path, path, path); err != nil {
+			return err
+		}
+		for _, query := range []string{
+			`INSERT INTO git_cache VALUES('cache', 'log', '{"repo":"/host/repo"}', '2026-01-01')`,
+			`INSERT INTO friction_issue_links VALUES('fp', 'instance', 'project', 'issue', 'id', 'https://example.com', 'local', '2026-01-01')`,
+			`INSERT INTO friction_filing_state(fingerprint,state,last_error,updated_at) VALUES('other', 'failed', '/host/repo', '2026-01-01')`,
+			`INSERT INTO codex_cloud_accounts VALUES('a', 'account-key')`,
+			`INSERT INTO cursor_account_polls VALUES('account-id', 1, '2026-01-01')`,
+			`INSERT INTO artifact_imported_sessions(origin,gid,manifest_hash,imported_session_id) VALUES('peer', 'gid', 'hash', 'a')`,
+		} {
+			if _, err := tx.ExecContext(ctx, query); err != nil {
+				return err
+			}
+		}
+		return nil
 	}))
 	require.NoError(t, d.ClearHostSources(ctx))
+	for _, table := range []string{"git_cache", "friction_issue_links", "friction_filing_state", "codex_cloud_accounts", "cursor_account_polls", "artifact_imported_sessions"} {
+		var count int
+		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
+		assert.Zero(t, count, table)
+	}
+
 	var project, cwd string
 	var filePath sql.NullString
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT project, cwd, file_path FROM sessions WHERE id='a'`).Scan(&project, &cwd, &filePath))
