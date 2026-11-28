@@ -4360,6 +4360,9 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 					embeddings[key] = value
 				}
 			}
+		} else if oldModel != model && model == "gemini-embedding-2" {
+			embeddings["query_prefix"] = "task: search result | query: "
+			embeddings["document_prefix"] = "title: none | text: "
 		}
 		section["embeddings"] = embeddings
 	})

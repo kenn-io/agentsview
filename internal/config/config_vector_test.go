@@ -579,6 +579,35 @@ timeout = '1s'
 		})
 	}
 
+	t.Run("new Gemini model gets role prefixes", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\nquery_prefix = 'old: '\n")
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "gemini-embedding-2", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "gemini-embedding-2", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			assert.Equal(t, "gemini-embedding-2", got.Model)
+			assert.Equal(t, 768, got.Dimension)
+			assert.Equal(t, "task: search result | query: ", got.QueryPrefix)
+			assert.Equal(t, "title: none | text: ", got.DocumentPrefix)
+		}
+	})
+
+	t.Run("same Gemini model keeps recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'gemini-embedding-2'\ndimension = 768\nquery_prefix = 'custom: '\ndocument_prefix = ''\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "gemini-embedding-2", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "gemini-embedding-2", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			assert.Equal(t, "custom: ", got.QueryPrefix)
+			assert.Empty(t, got.DocumentPrefix)
+			assert.Equal(t, "suffix", got.InputSuffix)
+		}
+	})
+
 	t.Run("same alias keeps generic defaults", func(t *testing.T) {
 		f := newConfigFixture(t)
 		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-ai/nomic-embed-text-v1.5'\ndimension = 768\n")
