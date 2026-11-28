@@ -14,17 +14,63 @@ beforeEach(() => {
   settings.authToken = "";
   settings.host = "127.0.0.1";
   settings.port = 8080;
+  settings.restartSupported = true;
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   localStorage.clear();
   settings.requireAuth = false;
   settings.authToken = "";
 });
 
 describe("RemoteSettings", () => {
+  it.each([
+    { apiVersion: 27, warningExpected: true },
+    { apiVersion: 28, warningExpected: null },
+  ])(
+    "reports API $apiVersion when testing the connection",
+    async ({ apiVersion, warningExpected }) => {
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ api_version: apiVersion, version: "test" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const { getByRole, getByLabelText, findByText, queryByText } = render(RemoteSettings);
+      await fireEvent.input(getByLabelText("Server URL"), {
+        target: { value: "https://remote.example.test" },
+      });
+      await fireEvent.click(getByRole("button", { name: "Test connection" }));
+      const connected = await findByText("Connected (vtest)");
+      expect(connected.classList.contains("success")).toBe(true);
+      const warning = queryByText(
+        "Sessions won't update live: this server runs API 27. Upgrade it to API 28, or reload to see new messages.",
+      );
+      expect(warning?.classList.contains("warning") ?? null).toBe(warningExpected);
+    },
+  );
+
+  it("offers a restart beside the auth notice before any save", async () => {
+    const restart = vi.spyOn(settings, "restartDaemon").mockResolvedValue();
+    const { getByRole } = render(RemoteSettings);
+
+    expect(getByRole("status").textContent).toContain("Auth changes take effect immediately.");
+    await fireEvent.click(getByRole("button", { name: "Restart now" }));
+
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("shows only the auth notice when the server can't restart itself", () => {
+    settings.restartSupported = false;
+    const { getByRole, queryByRole } = render(RemoteSettings);
+
+    expect(getByRole("status").textContent?.trim()).toBe("Auth changes take effect immediately.");
+    expect(queryByRole("button", { name: /Restart/ })).toBeNull();
+  });
+
   it("shows the requested authentication state while saving", async () => {
     let releaseSave!: () => void;
     const saveSpy = vi.spyOn(settings, "save").mockImplementation(async (patch) => {

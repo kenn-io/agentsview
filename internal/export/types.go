@@ -11,7 +11,7 @@ import (
 
 const (
 	UsageDailySchemaVersion     = 6
-	ActivityReportSchemaVersion = 8
+	ActivityReportSchemaVersion = 9
 	SessionSummarySchemaVersion = 7
 )
 

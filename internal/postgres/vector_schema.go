@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"go.kenn.io/agentsview/internal/storage"
+	"golang.org/x/mod/semver"
 )
 
 // vectorBaseDDL creates the backend-agnostic vector tables. Chunk tables
@@ -89,11 +90,24 @@ SELECT EXISTS (
 	return hasHalfvec, version, nil
 }
 
+func vectorUnavailableReason(hasHalfvec bool, version string) string {
+	if version == "" {
+		return "pgvector extension unavailable"
+	}
+	if !hasHalfvec {
+		return fmt.Sprintf("pgvector %s lacks the halfvec type; upgrade to pgvector 0.8.0+", version)
+	}
+	if !semver.IsValid("v"+version) || semver.Compare("v"+version, "v0.8.0") < 0 {
+		return fmt.Sprintf("pgvector %s lacks iterative scan; upgrade to pgvector 0.8.0+", version)
+	}
+	return ""
+}
+
 // ensureVectorBaseSchemaPG best-effort-installs pgvector and creates the
 // base vector tables. A non-empty reason (with nil error) means vectors are
 // unavailable on this server: like createContentSearchIndexesPG it never
 // fails schema setup — CockroachDB, a missing package, a role without CREATE
-// privilege, or a pgvector too old for halfvec leave semantic search
+// privilege, or an unsupported pgvector version leave semantic search
 // unavailable with a one-line notice.
 func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	if _, err := pg.ExecContext(ctx,
@@ -111,7 +125,7 @@ func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !hasHalfvec {
+	if vectorUnavailableReason(hasHalfvec, version) != "" {
 		// CREATE EXTENSION IF NOT EXISTS never upgrades an existing
 		// extension object, so a server whose pgvector package was upgraded
 		// in place can still run an old extension version. ALTER EXTENSION
@@ -123,10 +137,7 @@ func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 			return "", err
 		}
 	}
-	if !hasHalfvec {
-		reason := fmt.Sprintf(
-			"pgvector %s lacks the halfvec type; upgrade the server to pgvector 0.7.0+",
-			version)
+	if reason := vectorUnavailableReason(hasHalfvec, version); reason != "" {
 		log.Printf("pg schema: %s; semantic search disabled", reason)
 		return reason, nil
 	}
@@ -152,7 +163,7 @@ func vectorChunkTable(genID int64) string {
 // halfvec_cosine_ops must be schema-qualified with it, or every schema
 // besides the one that happened to install the extension fails to resolve
 // them.
-func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
+func vectorExtensionSchema(ctx context.Context, pg pgProjectIdentityExecer) (string, error) {
 	var extSchema string
 	if err := pg.QueryRowContext(ctx,
 		`SELECT n.nspname FROM pg_extension e
@@ -172,7 +183,7 @@ func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
 // cosine index. halfvec stays under HNSW's dimension limits (covers
 // 2560-dim models plain vector cannot index) and halves storage.
 func ensureVectorChunkTable(
-	ctx context.Context, pg *sql.DB, genID int64, dimension int,
+	ctx context.Context, pg pgProjectIdentityExecer, genID int64, dimension int,
 ) error {
 	extSchema, err := vectorExtensionSchema(ctx, pg)
 	if err != nil {
@@ -216,7 +227,7 @@ func ensureVectorRecipeColumn(ctx context.Context, pg *sql.DB) error {
 // row has none. Stored params are never overwritten: a fingerprint names
 // one immutable recipe.
 func publishVectorRecipe(
-	ctx context.Context, pg *sql.DB, fingerprint string, params map[string]string,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint string, params map[string]string,
 ) error {
 	encoded, err := json.Marshal(params, json.Deterministic(true))
 	if err != nil {
@@ -234,7 +245,7 @@ WHERE fingerprint = $1 AND params IS NULL`,
 // ensureVectorGeneration registers fingerprint's generation, returning its
 // id. Machines with matching embedding configs share one generation.
 func ensureVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint, model string, dimension int,
 ) (int64, error) {
 	if _, err := pg.ExecContext(ctx, `
 INSERT INTO vector_generations (fingerprint, model, dimension)
@@ -258,7 +269,7 @@ VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
 // treated as a clean not-found, not an error, so pg serve degrades to a
 // plain "semantic search unavailable" notice instead of failing startup.
 func LookupVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint string,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint string,
 ) (int64, int, bool, error) {
 	var id int64
 	var dim int

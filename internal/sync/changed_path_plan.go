@@ -20,9 +20,10 @@ type ChangedPathPlan struct {
 }
 
 type changedPathAttribution struct {
-	files             []parser.DiscoveredFile
-	fallbackProviders []parser.AgentType
-	provenIrrelevant  bool
+	files               []parser.DiscoveredFile
+	fallbackProviders   []parser.AgentType
+	failedSummaryStores []string
+	provenIrrelevant    bool
 }
 
 // ChangedPathPruneScope is the cache-invalidation projection of a plan.
@@ -120,9 +121,26 @@ func (e *Engine) planOneChangedPath(
 			)
 			continue
 		}
-		if agent == parser.AgentAntigravity &&
-			strings.TrimSuffix(filepath.Base(path), "-wal") == parser.AntigravitySummariesDBName {
-			// The title store holds no transcripts; titles reconcile after the plan runs.
+		if isAntigravitySummariesEventPath(agent, path) {
+			// Titles reconcile after the plan runs, while workspace or parent
+			// changes in conversation_summaries.db select only the sessions
+			// whose stored summary fingerprint digest no longer matches.
+			files, summaryReadErr, fallbackErr, summaryErr := e.classifyAntigravitySummariesPath(
+				ctx, agent, provider, roots, path,
+			)
+			if summaryErr != nil {
+				return changedPathAttribution{}, false, summaryErr
+			}
+			attribution.files = append(attribution.files, files...)
+			if summaryReadErr != nil {
+				store := strings.TrimSuffix(filepath.Clean(path), "-wal")
+				attribution.failedSummaryStores = watchAppendUniqueString(
+					attribution.failedSummaryStores, store,
+				)
+			}
+			if fallbackErr != nil {
+				attribution.addFallback(agent)
+			}
 			continue
 		}
 		matchingWatchRoots := matchingChangedPathRoots(path, watchRoots)
@@ -486,6 +504,18 @@ func (plan *ChangedPathPlan) rebuildAggregates() {
 		return strings.Compare(string(a), string(b))
 	})
 	plan.FallbackProviders = slices.Compact(providers)
+}
+
+func (plan *ChangedPathPlan) failedSummaryStores() []string {
+	var stores []string
+	for _, attribution := range plan.attribution {
+		stores = append(stores, attribution.failedSummaryStores...)
+	}
+	if len(stores) == 0 {
+		return nil
+	}
+	slices.Sort(stores)
+	return slices.Compact(stores)
 }
 
 func sortAndDedupeChangedPathFiles(files []parser.DiscoveredFile) []parser.DiscoveredFile {

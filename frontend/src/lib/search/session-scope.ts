@@ -11,7 +11,7 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { hasVisibleSegments } from "../utils/content-parser.js";
 import { buildDisplayItems, type DisplayItem } from "../utils/display-items.js";
-import { isSystemMessage } from "../utils/messages.js";
+import { isSkillInvocationMessage, isSystemMessage } from "../utils/messages.js";
 import { filterDisplayItemsByTranscriptMode } from "../utils/transcript-mode.js";
 import type { SearchBlockKind } from "./block-text.js";
 
@@ -25,11 +25,15 @@ export interface SessionScopeInput {
   hasBlockFilters?: boolean;
   /** Provider rule that keeps an answer before its trailing tool calls. */
   keepAnswerBeforeTrailingTools?: boolean;
+  /** Linked message to keep in the transcript even when filters hide it. */
+  revealOrdinal?: number;
 }
 
 export interface SessionScope {
   /** Display items the current transcript mode and filters render. */
   items: DisplayItem[];
+  /** Ordinal of a row added because the link target was hidden. */
+  revealedOrdinal?: number;
   /** Display items normal mode renders under the same block filters. */
   normalItems: DisplayItem[];
   /** Messages reachable through `items`, in transcript order and deduplicated. */
@@ -93,7 +97,22 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>
     source.flatMap((item): DisplayItem[] => {
       if (item.kind === "tool-group") return [item];
-      if (item.kind === "message") return messageVisible(item.message) ? [item] : [];
+      if (item.kind === "message") {
+        const skill = item.skill;
+        if (skill !== undefined) {
+          // The skill disclosure and its prompt are filtered independently:
+          // split them back apart when only one block type is shown.
+          const skillShown = messageVisible(skill);
+          const promptShown = messageVisible(item.message);
+          if (skillShown && promptShown) return [item];
+          if (skillShown) return [{ kind: "message", message: skill, ordinals: [skill.ordinal] }];
+          if (promptShown) {
+            return [{ kind: "message", message: item.message, ordinals: [item.message.ordinal] }];
+          }
+          return [];
+        }
+        return messageVisible(item.message) ? [item] : [];
+      }
       const members = item.messages.filter(messageVisible);
       const [first] = members;
       if (first === undefined) return [];
@@ -124,6 +143,32 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     );
   }
 
+  // A linked message the filters hide gets its own unfiltered row, so the link
+  // still lands on it. A tool-only message becomes a tool group, which renders
+  // its calls whatever the tool filter says.
+  const revealed =
+    input.revealOrdinal === undefined
+      ? undefined
+      : input.messages.find((message) => message.ordinal === input.revealOrdinal);
+  const revealBlocks =
+    !!revealed &&
+    (!normalItems.some((item) => item.ordinals.includes(revealed.ordinal)) ||
+      !isVisible(revealed.role === "user" ? "user" : "assistant"));
+  let revealedItem: DisplayItem | undefined;
+  if (revealed && !items.some((item) => item.ordinals.includes(revealed.ordinal))) {
+    revealedItem = buildDisplayItems([revealed])[0]!;
+    const at = items.findIndex((item) => item.ordinals[0]! > revealed.ordinal);
+    items =
+      at < 0 ? [...items, revealedItem] : [...items.slice(0, at), revealedItem, ...items.slice(at)];
+  }
+  // The linked message's own row renders every block; a tool group renders its calls.
+  const linkedItem = revealed && items.find((item) => item.ordinals.includes(revealed.ordinal));
+  const revealedVisible = (message: Message, type: BlockType): boolean =>
+    revealBlocks &&
+    message === revealed &&
+    ((linkedItem?.kind === "message" && linkedItem.message === revealed) ||
+      (type === "tool" && linkedItem?.kind === "tool-group"));
+
   const messages: Message[] = [];
   const included = new Set<Message>();
   for (const item of items) {
@@ -137,9 +182,14 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
 
   return {
     items,
+    revealedOrdinal: revealBlocks ? revealed?.ordinal : undefined,
     normalItems,
     messages,
+    // Skill expansions are never searchable, whether they render on their own
+    // row or attached to the prompt that follows them.
     allowsBlock: (message, kind) =>
-      included.has(message) && kindVisible(isVisible, message.role, kind),
+      !isSkillInvocationMessage(message) &&
+      included.has(message) &&
+      kindVisible((type) => isVisible(type) || revealedVisible(message, type), message.role, kind),
   };
 }

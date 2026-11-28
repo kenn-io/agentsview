@@ -22,7 +22,7 @@ func ensureStoreSchema(t *testing.T, pgURL string) {
 	defer pg.Close()
 
 	ctx := t.Context()
-	if !takeFreshStoreDatabase(t, pgURL) {
+	if !takeFreshSchemaCopy(t, pgURL, testSchema) {
 		_, err = pg.ExecContext(ctx, `
 			DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 		`)
@@ -68,7 +68,7 @@ func ensureAnalyticsTokenStoreSchema(
 	defer pg.Close()
 
 	ctx := t.Context()
-	if !takeFreshStoreDatabase(t, pgURL) {
+	if !takeFreshSchemaCopy(t, pgURL, testSchema) {
 		_, err = pg.ExecContext(ctx, `
 			DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 		`)
@@ -608,6 +608,10 @@ func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 		s.userMessageCount = 1
 		s.isAutomated = true
 	})
+	_, err := store.DB().ExecContext(t.Context(), `
+		UPDATE sessions SET parser_parent_session_id = $1 WHERE id = $2
+	`, rootID, "automated-child")
+	require.NoError(t, err)
 
 	index, err := store.GetSidebarSessionIndex(
 		t.Context(),
@@ -1424,7 +1428,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	// A reversed session (ended_at < started_at) still accumulates
 	// positive message-gap active duration, so without an eligibility
 	// guard it would rank into the duration list ordered by active
-	// duration. PostgreSQL must reject it, matching SQLite and DuckDB.
+	// duration. PostgreSQL must reject it, matching SQLite.
 	// (Empty-string timestamps are not representable in timestamptz
 	// columns, so only the reversed case applies on this backend.)
 	_, err = store.DB().ExecContext(t.Context(), `

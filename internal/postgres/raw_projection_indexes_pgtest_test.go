@@ -75,6 +75,19 @@ func TestRawProjectionProofLookupsStayBounded(t *testing.T) {
 	}
 }
 
+func TestRawLookupPlanPreservesWriteFixture(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES ('lookup-write','synthetic','fixture','codex')`)
+	require.NoError(t, err)
+	plan := rawLookupPlan(t, f.runtime, "force_custom_plan", `DELETE FROM sessions WHERE id=$1 RETURNING id`, "lookup-write", false)
+	// The measured delete must still find the row after the warm-up delete.
+	assert.Equal(t, float64(1), plan["Actual Rows"])
+	var remaining int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id='lookup-write'`).Scan(&remaining))
+	assert.Equal(t, 1, remaining, "plan measurement must leave the fixture intact")
+}
+
 func rawLookupPlan(t *testing.T, pg *sql.DB, mode, query, arg string, small bool) map[string]any {
 	t.Helper()
 	conn, err := pg.Conn(t.Context())
@@ -93,8 +106,17 @@ func rawLookupPlan(t *testing.T, pg *sql.DB, mode, query, arg string, small bool
 	}
 	_, err = tx.ExecContext(t.Context(), `PREPARE raw_lookup(text) AS `+query)
 	require.NoError(t, err)
+	explain := `EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE raw_lookup('` + strings.ReplaceAll(arg, "'", "''") + `')`
+	// First execution can read system catalogs while initializing sort support.
+	// Warm that session cache before measuring accesses to the fixture's data.
+	// Some callers measure writes, so undo their effects before the measured run.
+	_, err = tx.ExecContext(t.Context(), `SAVEPOINT warm_lookup`)
+	require.NoError(t, err)
 	var data []byte
-	require.NoError(t, tx.QueryRowContext(t.Context(), `EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE raw_lookup('`+strings.ReplaceAll(arg, "'", "''")+`')`).Scan(&data))
+	require.NoError(t, tx.QueryRowContext(t.Context(), explain).Scan(&data))
+	_, err = tx.ExecContext(t.Context(), `ROLLBACK TO SAVEPOINT warm_lookup`)
+	require.NoError(t, err)
+	require.NoError(t, tx.QueryRowContext(t.Context(), explain).Scan(&data))
 	_, err = tx.ExecContext(t.Context(), `DEALLOCATE raw_lookup`)
 	require.NoError(t, err)
 	var result []struct{ Plan map[string]any }

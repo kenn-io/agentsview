@@ -248,15 +248,37 @@ func newTestArtifactStore(t *testing.T) *docbankStore {
 	return store
 }
 
-// newProtocolTestStore opens a real isolated Docbank store at root without
-// registering test cleanup. Callers use it for explicit close/reopen protocol
-// and transport scenarios.
-func newProtocolTestStore(root string) (*docbankStore, error) {
-	vault, err := docbank.New(context.Background(), docbank.Config{Root: root})
+// newProtocolTestStore opens a real isolated Docbank store at root for
+// close/reopen protocol and transport scenarios. Callers may close it early;
+// the cleanup close also runs when an assertion stops the test, before
+// t.TempDir removes root. A vault left open past that removal keeps Docbank's
+// per-user processing lock on the freed directory inode, and any later vault
+// whose upload directory reuses the inode fails to open, in this or another
+// test process.
+func newProtocolTestStore(t *testing.T, root string) (*docbankStore, error) {
+	t.Helper()
+	vault, err := docbank.New(t.Context(), docbank.Config{Root: root})
 	if err != nil {
 		return nil, err
 	}
-	return newDocbankContent(vault), nil
+	store := newDocbankContent(vault)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store, nil
+}
+
+func TestProtocolTestStoreReleasesVaultWhenTestStopsEarly(t *testing.T) {
+	// Serial: the subtest's cleanups must finish before the root reopens.
+	root := t.TempDir()
+	t.Run("stops before closing", func(t *testing.T) {
+		_, err := newProtocolTestStore(t, root)
+		require.NoError(t, err)
+		// Skip leaves through runtime.Goexit, the same path a failed require
+		// takes, so no explicit close after this point runs.
+		t.Skip("stops early, as a failed assertion would")
+	})
+
+	_, err := newProtocolTestStore(t, root)
+	require.NoError(t, err, "a test that stops early must still release its vault")
 }
 
 func walkDocbankTestEntries(

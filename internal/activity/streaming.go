@@ -316,6 +316,7 @@ func buildIntervalArtifacts(
 		membership: make(map[string]BucketMembership),
 		buckets:    make([]minuteSum, len(windows)),
 	}
+	ownEnd := make(map[string]time.Time)
 	var previousStart time.Time
 	err := each(func(iv interval) error {
 		if !previousStart.IsZero() && iv.start.Before(previousStart) {
@@ -327,15 +328,34 @@ func buildIntervalArtifacts(
 		}
 		previousStart = iv.start
 		state.advance(iv.start)
-		if previousEnd, ok := state.sessionEnds[iv.sessionID]; ok {
-			if !iv.end.After(previousEnd) {
+		sweep := func(part interval) {
+			if end, ok := state.sessionEnds[part.sessionID]; ok {
+				if part.end.After(end) {
+					part.start = end
+					state.extend(part)
+				}
+			} else {
+				state.open(part)
+			}
+		}
+		if !p.Evidence[iv.sessionID] {
+			sweep(iv)
+		}
+		if id := p.Waiting[iv.sessionID]; id != "" {
+			part := iv
+			part.sessionID = id
+			sweep(part)
+		}
+		if p.Evidence[iv.sessionID] {
+			return nil
+		}
+		if end := ownEnd[iv.sessionID]; end.After(iv.start) {
+			if !iv.end.After(end) {
 				return nil
 			}
-			iv.start = previousEnd
-			state.extend(iv)
-		} else {
-			state.open(iv)
+			iv.start = end
 		}
+		ownEnd[iv.sessionID] = iv.end
 		if iv.tail.Before(iv.start) {
 			iv.tail = iv.start
 		}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
@@ -10,10 +10,13 @@ import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
+import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
 import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
+import { sidebarIndexRowToSession } from "./lib/stores/sessionRows.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { events } from "./lib/stores/events.svelte.js";
 import { codexCloudStatus } from "./lib/stores/codexCloud.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
@@ -51,6 +54,82 @@ async function selectRelativeRange(days: number) {
   await flushEffects();
 }
 
+it("opens a copied message link with its target hidden by saved filters", async () => {
+  stubAppDependencies();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+    sessions.activeSessionId = id;
+  });
+  onTestFinished(() => {
+    ui.showAllBlocks();
+    ui.setTranscriptMode("normal");
+  });
+  const makeMessage = (ordinal: number, role: string): Message => ({
+    id: ordinal + 1,
+    session_id: "session-1",
+    ordinal,
+    role,
+    content: `msg ${ordinal}`,
+    content_length: 5,
+    timestamp: "2026-01-01T00:00:00Z",
+    has_thinking: false,
+    thinking_text: "",
+    has_tool_use: false,
+    model: "",
+    context_tokens: 0,
+    output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
+    is_system: false,
+  });
+  const linked = makeMessage(1, "assistant");
+  ui.setBlockVisible("assistant", false);
+  ui.setBlockVisible("thinking", false);
+  ui.setTranscriptMode("focused");
+  sessions.activeSessionId = "session-1";
+  router.route = "sessions";
+  router.sessionId = "session-1";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  messages.loading = true;
+  window.history.replaceState(null, "", "/sessions/session-1?msg=1");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  await flushEffects();
+  sessions.activeSessionId = "session-1";
+  messages.sessionId = "session-1";
+  messages.messages = [makeMessage(0, "user"), linked, makeMessage(2, "user")];
+  messages.loading = false;
+  await vi.waitFor(() => expect(ui.selectedOrdinal).toBe(1));
+  expect(ui.linkedMessage).toEqual({ sessionId: "session-1", ordinal: 1 });
+  expect(ui.isBlockVisible("assistant")).toBe(false);
+  expect(ui.isBlockVisible("thinking")).toBe(false);
+  expect(ui.transcriptMode).toBe("focused");
+  expect(router.params.msg).toBe("1");
+  ui.toggleBlock("assistant");
+  expect(ui.linkedMessage).toBeNull();
+  const scroll = vi.spyOn(ui, "scrollToOrdinal");
+  router.replaceParams({ ...router.params, project: "other" });
+  await flushEffects();
+  expect(ui.linkedMessage).toBeNull();
+  expect(scroll).not.toHaveBeenCalled();
+  router.replaceParams({ ...router.params, call: "0", tool_use_id: "call-1" });
+  await flushEffects();
+  expect(scroll).toHaveBeenCalledWith(1, "session-1", { index: 0, toolUseId: "call-1" });
+});
+
+it("ignores a malformed message ordinal", async () => {
+  stubAppDependencies();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  router.route = "sessions";
+  router.sessionId = "session-1";
+  router.params = { msg: "3abc" };
+  sessions.activeSessionId = "session-1";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  expect(ui.linkedMessage).toBeNull();
+  expect(ui.pendingScrollOrdinal).toBeNull();
+});
+
 function stubAppDependencies() {
   vi.stubGlobal(
     "ResizeObserver",
@@ -72,8 +151,8 @@ function stubAppDependencies() {
   vi.spyOn(sessions, "loadProjects").mockResolvedValue();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-  vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-  vi.spyOn(messages, "loadSession").mockResolvedValue();
+  vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+  vi.spyOn(messages, "loadSession").mockResolvedValue(true);
   vi.spyOn(sessionTiming, "load").mockResolvedValue();
   vi.spyOn(pins, "loadForSession").mockResolvedValue();
   vi.spyOn(analytics, "fetchAll").mockResolvedValue();
@@ -87,6 +166,9 @@ afterEach(() => {
     unmount(component);
     component = undefined;
   }
+  sync.serverVersion = null;
+  sessions.sessions = [];
+  events.setAvailable(false);
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -230,7 +312,170 @@ describe("App Recall availability", () => {
   });
 });
 
+describe("saved remote API version", () => {
+  it("keeps a linked reveal when the remote version arrives after the scroll", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    localStorage.setItem("agentsview-server-url", "https://example.org");
+    ui.showAllBlocks();
+    ui.setBlockVisible("assistant", false);
+    onTestFinished(() => ui.showAllBlocks());
+    const makeMessage = (ordinal: number, role: string): Message => ({
+      id: ordinal + 1,
+      session_id: "session-1",
+      ordinal,
+      role,
+      content: `msg ${ordinal}`,
+      content_length: 5,
+      timestamp: "2026-01-01T00:00:00Z",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: false,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      has_context_tokens: false,
+      has_output_tokens: false,
+      is_system: false,
+    });
+    sync.serverVersion = null;
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    router.params = { msg: "1" };
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    messages.sessionId = "session-1";
+    messages.messages = [
+      makeMessage(0, "user"),
+      makeMessage(1, "assistant"),
+      makeMessage(2, "user"),
+    ];
+    messages.loading = false;
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBe(1));
+    expect(ui.linkedMessage).toEqual({ sessionId: "session-1", ordinal: 1 });
+    await vi.waitFor(() => expect(ui.pendingScrollOrdinal).toBeNull());
+    sync.serverVersion = {
+      api_version: 28,
+      build_date: "",
+      version: "test",
+      commit: "",
+      data_version: 1,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      session_stats_available: false,
+    };
+    await flushEffects();
+    expect(ui.linkedMessage).toEqual({ sessionId: "session-1", ordinal: 1 });
+    expect(ui.selectedOrdinal).toBe(1);
+  });
+
+  function mountRemoteSession(apiVersion: number) {
+    stubAppDependencies();
+    vi.mocked(sync.watchSession).mockRestore();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    sessions.sessions = [
+      {
+        id: "session-1",
+        project: "proj-a",
+        machine: "local",
+        agent: "claude",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 2,
+        user_message_count: 1,
+        created_at: "2026-02-20T12:30:00Z",
+      } as unknown as (typeof sessions.sessions)[number],
+    ];
+    const requests: unknown[] = [];
+    vi.stubGlobal(
+      "SharedWorker",
+      class {
+        port = {
+          onmessage: null,
+          postMessage: (value: unknown) => requests.push(value),
+          start() {},
+        };
+      },
+    );
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response("[]", { headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    localStorage.setItem("agentsview-server-url", "https://remote.example.test");
+    sync.serverVersion = {
+      api_version: apiVersion,
+      build_date: "",
+      version: "test",
+      commit: "test",
+      data_version: 1,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      session_stats_available: false,
+    };
+    events.setAvailable(true);
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    return { requests, fetchSpy };
+  }
+
+  const notice =
+    "Sessions won't update live: this server runs API 27. Upgrade it to API 28, or reload to see new messages.";
+
+  it("keeps the archive live on API 27 and warns that the session won't update", async () => {
+    const { requests } = mountRemoteSession(27);
+    await vi.waitFor(() =>
+      expect(document.querySelector(".session-live-notice")?.textContent?.trim()).toBe(notice),
+    );
+    expect(requests).toContainEqual(expect.objectContaining({ session: undefined }));
+    expect(requests).not.toContainEqual(expect.objectContaining({ session: "session-1" }));
+  });
+
+  it("watches the selected session on API 28 without the notice", async () => {
+    const { requests } = mountRemoteSession(28);
+    try {
+      await vi.waitFor(() =>
+        expect(requests).toContainEqual(expect.objectContaining({ session: "session-1" })),
+      );
+      expect(document.querySelector(".session-live-notice")).toBeNull();
+    } finally {
+      sync.unwatchSession();
+    }
+  });
+});
+
 describe("App session URL date state", () => {
+  it("does not acknowledge a failed activity refresh", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(messages, "reload").mockResolvedValue(true);
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    const activityReload = vi
+      .spyOn(sessionActivity, "reload")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    router.route = "sessions";
+    router.isRootPath = false;
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    ui.vitalsOpen = true;
+    const refresh = vi.mocked(sync.watchSession).mock.calls[0]![1];
+    expect(await refresh()).toBe(false);
+    expect(await refresh()).toBe(true);
+    expect(activityReload).toHaveBeenCalledTimes(2);
+    ui.vitalsOpen = false;
+  });
+
   it.each(["selection change", "selection cleared", "route exit", "unmount"])(
     "ignores an old watch's children fallback after %s",
     async (change) => {
@@ -278,34 +523,38 @@ describe("App session URL date state", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
-    vi.spyOn(messages, "reload").mockResolvedValue();
-    let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const watch = vi.spyOn(SessionsService, "getApiV1SessionsByIdWatch").mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            stream = controller;
-          },
-        }),
-        { headers: { "Content-Type": "text/event-stream" } },
-      ),
-    );
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    vi.spyOn(messages, "reload").mockResolvedValue(true);
+    let port!: {
+      onmessage: ((event: MessageEvent) => void) | null;
+      postMessage: ReturnType<typeof vi.fn>;
+      start: () => void;
+    };
+    class Worker {
+      port = { onmessage: null, postMessage: vi.fn(), start() {} };
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
     const fetchSpy = vi.fn(
       async (_input: RequestInfo | URL) =>
-        new Response("[]", {
-          headers: { "Content-Type": "application/json" },
-        }),
+        new Response("[]", { headers: { "Content-Type": "application/json" } }),
     );
     vi.stubGlobal("fetch", fetchSpy);
     router.route = "sessions";
+    router.isRootPath = false;
     router.sessionId = "session-1";
     sessions.activeSessionId = "session-1";
     try {
       component = mount(App, { target: document.body });
       await flushEffects();
-      expect(watch).toHaveBeenCalledWith({ id: "session-1" }, expect.anything());
-      stream.enqueue(new TextEncoder().encode("event: session_ready\ndata: {}\n\n"));
+      expect(port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ session: "session-1" }),
+      );
+      port.onmessage?.(
+        new MessageEvent("message", { data: { type: "session_ready", data: "session-1" } }),
+      );
       await vi.waitFor(() =>
         expect(
           fetchSpy.mock.calls.some(([input]) =>
@@ -320,7 +569,6 @@ describe("App session URL date state", () => {
       expect(childrenRequests).toHaveLength(1);
     } finally {
       sync.unwatchSession();
-      stream.close();
     }
   });
 
@@ -347,9 +595,9 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
     const cancelRouteReads = vi.spyOn(sessions, "cancelRouteReads");
-    const loadMessages = vi.spyOn(messages, "loadSession").mockResolvedValue();
+    const loadMessages = vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     const cancelMessages = vi.spyOn(messages, "cancelInFlight");
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
@@ -394,8 +642,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -439,8 +687,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -489,8 +737,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -533,8 +781,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -581,8 +829,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -694,6 +942,33 @@ describe("App root Sessions landing", () => {
     router.sessionId = null;
     router.isRootPath = true;
   }
+
+  it("shows populated sessions without a getting started card", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    localStorage.clear();
+    sessions.archiveEmpty = false;
+    sessions.sessions = ["one", "two"].map((id) =>
+      sidebarIndexRowToSession({
+        id,
+        project: "demo",
+        machine: "local",
+        agent: "codex",
+        first_message: `Session ${id}`,
+        started_at: null,
+        ended_at: null,
+        created_at: "2026-01-01T00:00:00Z",
+        message_count: 1,
+      }),
+    );
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".analytics-page")).not.toBeNull();
+    expect(document.body.textContent).toContain("Session one");
+    expect(document.body.textContent).toContain("Session two");
+    expect(document.querySelector(".getting-started")).toBeNull();
+  });
 
   it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
     stubAppDependencies();
@@ -1404,7 +1679,7 @@ function message(ordinal: number, role: Message["role"], isSystem = false) {
   return {
     kind: "message" as const,
     ordinals: [ordinal],
-    message: { role, is_system: isSystem } as Message,
+    message: { ordinal, role, is_system: isSystem } as Message,
   };
 }
 
@@ -1425,6 +1700,19 @@ describe("findUserPromptOrdinal", () => {
     expect(findUserPromptOrdinal(items, 99, 1, true)).toBe(1);
     expect(findUserPromptOrdinal(items, 99, -1, true)).toBe(4);
     expect(findUserPromptOrdinal(items.slice(1, 3), 2, 1, true)).toBeUndefined();
+  });
+
+  it("treats a merged skill card as one stop at its prompt ordinal", () => {
+    const merged = {
+      kind: "message" as const,
+      ordinals: [5, 6],
+      skill: { id: 5, ordinal: 5, role: "user", is_system: true } as Message,
+      message: { id: 6, ordinal: 6, role: "user", is_system: false } as Message,
+    };
+    const withSkill = [message(1, "user"), merged, message(9, "user")];
+    expect(findUserPromptOrdinal(withSkill, 6, 1, true)).toBe(9);
+    expect(findUserPromptOrdinal(withSkill, 6, -1, true)).toBe(1);
+    expect(findUserPromptOrdinal(withSkill, 9, -1, true)).toBe(6);
   });
 
   it("keeps chronological directions when newest-first reorders rows", () => {
@@ -1520,11 +1808,11 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
       sessions.activeSessionId = id;
     });
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
@@ -1933,6 +2221,55 @@ describe("App telemetry", () => {
     );
   }
 
+  it("updates the tab title as the screen changes", async () => {
+    setup();
+    router.route = "activity";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.title).toBe("Activity · AgentsView");
+    router.navigate("usage");
+    await flushEffects();
+    expect(document.title).toBe("Usage · AgentsView");
+    router.navigateToSession("hostA~abc");
+    await flushEffects();
+    expect(document.title).toContain("Session (");
+  });
+
+  it("keeps the session tab title while loading, loaded, and missing", async () => {
+    setup();
+    const originalSessions = sessions.sessions;
+    const originalNotFound = sessions.activeSessionNotFound;
+    try {
+      sessions.sessions = [];
+      sessions.activeSessionNotFound = false;
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      router.navigateToSession("hostA~abc");
+      await flushEffects();
+      expect(sessions.activeSession).toBeUndefined();
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+
+      sessions.sessions = [
+        hydratedSession("hostA~abc", "codex", {
+          display_name: "Private title",
+          first_message: "Private prompt",
+        }),
+      ];
+      await flushEffects();
+      expect(sessions.activeSession?.display_name).toBe("Private title");
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+
+      sessions.sessions = [];
+      sessions.activeSessionNotFound = true;
+      await flushEffects();
+      expect(sessions.activeSessionNotFound).toBe(true);
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+    } finally {
+      sessions.sessions = originalSessions;
+      sessions.activeSessionNotFound = originalNotFound;
+    }
+  });
+
   function postedFor(event: string) {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
   }
@@ -1989,7 +2326,7 @@ describe("App telemetry", () => {
     sessions.sessions = [];
   });
 
-  it("reports one session_viewed per visit once the session hydrates", async () => {
+  it("reports one session_viewed per visit when the session hydrates", async () => {
     setup();
     sessions.sessions = [hydratedSession("session-1", "codex")];
     router.route = "sessions";

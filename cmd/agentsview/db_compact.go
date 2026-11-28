@@ -151,7 +151,7 @@ func runDBCompact(
 }
 
 // decideCompactRoute picks between delegating to a writable SQLite daemon and
-// compacting the archive directly. A read-only `pg serve` or `duckdb serve`
+// compacting the archive directly. A read-only `pg serve` or `clickhouse serve`
 // runtime does not own the local SQLite archive, so it is treated like no
 // daemon; the direct path's write-owner lock still refuses if a writable
 // daemon actually holds the archive.

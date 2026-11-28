@@ -35,7 +35,70 @@ func NewStore(
 		}
 		return nil, err
 	}
-	return &Store{pg: pg, ownedDB: pg}, nil
+	cockroach, encoding, err := pgEngine(ctx, pg)
+	if err != nil {
+		pg.Close()
+		return nil, err
+	}
+	return &Store{pg: pg, ownedDB: pg, cockroach: cockroach, serverEncoding: encoding}, nil
+}
+
+// servePoolConns is the most connections a serving pool opens. Page requests
+// run in parallel, so serving needs more than the default pool of 5. The pool
+// keeps all of them idle after a burst; with fewer idle slots, database/sql
+// closes the excess connections at once and the next burst reconnects.
+const servePoolConns = 15
+
+// sizeServePool sizes a serving pool to servePoolConns, or to the role's
+// connection limit when that is lower, so a page request waits for a
+// connection instead of failing with SQLSTATE 53300. CockroachDB has no
+// role connection limits in pg_roles, so it is not queried.
+func sizeServePool(ctx context.Context, pg *sql.DB, cockroach bool) error {
+	limit := servePoolConns
+	if !cockroach {
+		var roleLimit int
+		if err := pg.QueryRowContext(ctx,
+			`SELECT rolconnlimit FROM pg_catalog.pg_roles WHERE rolname = session_user`,
+		).Scan(&roleLimit); err != nil {
+			return fmt.Errorf("reading the role connection limit: %w", err)
+		}
+		if roleLimit > 0 && roleLimit < limit {
+			limit = roleLimit
+		}
+	}
+	pg.SetMaxOpenConns(limit)
+	pg.SetMaxIdleConns(limit)
+	return nil
+}
+
+// NewHostedServeStore opens a HostedStore whose pool is sized for `pg serve`.
+// Other callers use NewHostedStore and keep the default pool.
+func NewHostedServeStore(ctx context.Context, pgURL, schema, tenant string, allowInsecure bool) (*HostedStore, error) {
+	h, err := NewHostedStore(ctx, pgURL, schema, tenant, allowInsecure)
+	if err != nil {
+		return nil, err
+	}
+	if err := sizeServePool(ctx, h.DB(), h.physical.cockroach); err != nil {
+		_ = h.Close()
+		return nil, err
+	}
+	return h, nil
+}
+
+// pgEngine reports whether pg is CockroachDB, else its server encoding.
+func pgEngine(ctx context.Context, pg hostedQuerier) (bool, string, error) {
+	version, err := sessionVersionColumnPG(ctx, pg)
+	if err != nil {
+		return false, "", err
+	}
+	if version == "crdb_internal_mvcc_timestamp" {
+		return true, "", nil
+	}
+	var encoding string
+	if err := pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&encoding); err != nil {
+		return false, "", fmt.Errorf("reading server encoding: %w", err)
+	}
+	return false, encoding, nil
 }
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as
@@ -70,6 +133,15 @@ func (s *Store) DB() *sql.DB {
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	if pool := s.DB(); pool != nil {
+		queue := &s.runtimeState().frustrationSaves
+		queue.mu.Lock()
+		queue.closed = true
+		if queue.cancel != nil {
+			queue.cancel()
+		}
+		queue.mu.Unlock()
+		queue.wg.Wait()
+		s.saveActivityInputs()
 		var cacheErr error
 		if s.usageCache != nil {
 			cacheErr = s.usageCache.Close()
@@ -155,22 +227,25 @@ func probeInsightGenerationAvailabilityTx(
 	return true, nil
 }
 
-// GetSessionVersion returns the message count and a compact version
-// marker for SSE change detection.
-func (s *Store) GetSessionVersion(ctx context.Context,
-	id string,
-) (int, int64, bool) {
-	var count int
-	var updatedAt time.Time
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT message_count, updated_at
-		 FROM sessions WHERE id = $1`,
-		id,
-	).Scan(&count, &updatedAt)
-	if err != nil {
+const sessionVersionColumns = `message_count, updated_at`
+
+type sessionVersionRow struct {
+	count     int
+	updatedAt time.Time
+}
+
+func (v *sessionVersionRow) fields() []any { return []any{&v.count, &v.updatedAt} }
+func (v *sessionVersionRow) version() int64 {
+	return db.SessionVersionMarker(FormatISO8601(v.updatedAt))
+}
+
+// GetSessionVersion returns the message count and a compact version marker.
+func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	var v sessionVersionRow
+	if err := s.pg.QueryRowContext(ctx, "SELECT "+sessionVersionColumns+" FROM sessions WHERE id = $1", id).Scan(v.fields()...); err != nil {
 		return 0, 0, false
 	}
-	return count, db.SessionVersionMarker(FormatISO8601(updatedAt)), true
+	return v.count, v.version(), true
 }
 
 const maxPGInsights = 500

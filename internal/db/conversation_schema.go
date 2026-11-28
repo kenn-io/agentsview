@@ -98,6 +98,9 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error 
 	if err := ensureConversationUsageSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err := ensureConversationToolSchema(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -169,6 +172,9 @@ func initializeConversationExportTx(ctx context.Context, tx *sql.Tx, usageOnly b
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
+	}
+	if err := journalConversationToolSessionsTx(ctx, tx); err != nil {
+		return err
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES (?,'1')`, conversationExportInitializedKey)
 	return err

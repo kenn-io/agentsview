@@ -33,7 +33,7 @@ func TestVectorMirrorReusesSQL(t *testing.T) {
 	for i := range 22 {
 		unit := userDoc("session", fmt.Sprintf("source-%d", i), i, fmt.Sprintf("document %d", i))
 		key := DocKey(unit.Kind, unit.SessionID, unit.SourceUUID, i, 1)
-		unchanged, evicted, err := ix.upsertMirrorRow(t.Context(), key, unit, &sentinel)
+		unchanged, evicted, err := ix.upsertMirrorRow(t.Context(), key, unit, &sentinel, nil)
 		require.NoError(t, err)
 		require.False(t, unchanged)
 		require.Empty(t, evicted)

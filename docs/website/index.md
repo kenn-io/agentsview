@@ -32,16 +32,17 @@ harnesses include Claude Code, OpenClaude, Codex, Augure Code, Open Interpreter,
 Augure Desktop, Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code,
 and Visual Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and
 Harness, Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude
-Cowork, Aider, Antigravity, gptme, Junie, Muse Code, OMO, StepCode, Kilo, Kimi,
-Kiro, OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more.
-Every supported source is listed in
+Cowork, Aider, Antigravity, gptme, Junie, Muse Code, Muse Personal, OMO,
+StepCode, Kilo, Kimi, Kiro, OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx,
+Factory Droid, Direct API, and dozens more. Every supported source is listed in
 [session discovery](/docs/configuration/#session-discovery).
 
-Import [Claude.ai chats through Chrome](/docs/chat-import/#sync-claudeai-chats),
-including Google sign-in. Enable [Codex Cloud](/docs/configuration/#codex-cloud)
-on one machine to fetch ChatGPT dot, Codex web, and cloud task chats. Cloud
-chats without token counts show plan usage; optional live capture records only
-turns heard while connected and can send queued messages.
+Sync
+[Claude.ai, ChatGPT, Gemini Apps, and Grok web chats through Chrome](/docs/chat-import/).
+Enable [Codex Cloud](/docs/configuration/#codex-cloud) on one machine to fetch
+ChatGPT dot, Codex web, and cloud task chats. Cloud chats without token counts
+show plan usage; optional live capture records only turns heard while connected
+and can send queued messages.
 
 - **60+** agent formats parsed
 - **1** binary, zero accounts
@@ -78,8 +79,9 @@ Older command names still work. See the
 ## Search and score every transcript
 
 Find a conversation by project and date in the
-[command palette](/docs/usage/#command-palette), or open it by ID with
-`Ctrl/Cmd+G`. Full-text search matches words; opt-in
+[command palette](/docs/usage/#command-palette), open it by ID with
+`Ctrl/Cmd+G`, or press `t` in a session to jump to a prompt. Full-text search
+matches words in any order and can index text inside tool-result images; opt-in
 [search by meaning](/docs/semantic-search/) finds related ideas, and you can
 turn it on from the palette. [Health scores](/docs/session-intelligence/) and
 [quality signals](/docs/quality/) link back to the transcript so you can check
@@ -112,10 +114,12 @@ The same archive you browse is available to your agents:
 - **Desktop:** native app sharing the same data directory.
 
 An agent can check what a previous session already tried, quote its own history,
-or watch its spend mid-run. Read-only MCP tools expose file edits, tool calls,
-child sessions, Activity reports, tool usage, cost comparisons, and offline
-guide search. Native conversation-memory plugins bundle recall instructions and
-session-start refresh for Claude Code and Codex. See
+or watch its spend mid-run. Read-only MCP tools expose file edits, tool calls
+and saved results, child sessions, compaction summaries, Activity reports, tool
+usage, cost comparisons, and offline guide search. Run
+[`agentsview agent setup`](/docs/commands/#agentsview-agent-setup) to install
+conversation search skills and register the MCP server for Claude Code and
+Codex, or install AgentsView Memory from the Claude Code plugin marketplace. See
 [memory setup](/docs/mcp/#focused-memory-profile). Run
 [`agentsview why`](/docs/commands/#agentsview-why) to find the session and
 prompt behind a line of code.
@@ -129,8 +133,6 @@ SQLite is the archive of record. From there:
 - [ClickHouse sync](/docs/clickhouse-sync/) serves the dashboard from a remote
   copy, including semantic and hybrid search when embeddings are pushed.
   Session edits stay in SQLite.
-- [DuckDB mirror](/docs/duckdb/) serves analytical reads locally or over the
-  Quack protocol.
 - [Filesystem sync](/docs/filesystem-sync/) and
   [artifact folder sync](/docs/artifact-sync/) move sessions between machines
   without any database server.
@@ -150,9 +152,8 @@ SQLite is the archive of record. From there:
 Your agent transcripts are some of the most sensitive data on your machine.
 AgentsView starts with one local SQLite archive and a loopback-only server.
 Session content leaves the machine only when you choose a feature such as
-PostgreSQL or ClickHouse sync, remote DuckDB access, Generated Insights, GitHub
-publishing, or hosted raw sync. Each feature documents what it sends and where
-it goes.
+PostgreSQL or ClickHouse sync, Generated Insights, GitHub publishing, or hosted
+raw sync. Each feature documents what it sends and where it goes.
 
 ## Start
 

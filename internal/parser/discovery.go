@@ -846,6 +846,12 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
+	if n := len(parts); n >= 6 && parts[n-5] == "sessions" {
+		home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+		if _, sessions := codexLabeledHome(root, home); sessions != "" {
+			parts = parts[n-4:]
+		}
+	}
 	switch len(parts) {
 	case 1:
 		if !isCodexSessionFilename(parts[0]) {
@@ -865,6 +871,74 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	default:
 		return CodexLayoutUnknown, "", false
 	}
+}
+
+// codexLabeledHome identifies a marked home within root.
+func codexLabeledHome(root, home string) (string, string) {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(home))
+	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") {
+		return "", ""
+	}
+	label := filepath.ToSlash(filepath.Dir(rel))
+	if label == "." {
+		label = ""
+	}
+	return label, filepath.Join(home, "sessions")
+}
+
+func codexLabeledSession(root, path string) (string, string) {
+	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
+		return "", ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	n := len(parts)
+	if n < 6 || parts[n-5] != "sessions" {
+		return "", ""
+	}
+	home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+	return codexLabeledHome(root, home)
+}
+
+// CodexSourceLabel returns the label preceding a marked Codex run home.
+func CodexSourceLabel(root, path string) string {
+	label, _ := codexLabeledSession(root, path)
+	return label
+}
+
+// CodexSourceLabelForRoots uses the outermost matching root for the label.
+func CodexSourceLabelForRoots(roots []string, path string) string {
+	_, label := CodexSourceLabelRoot(roots, path)
+	return label
+}
+
+// CodexSourceLabelRoot returns the outermost matching root and its label.
+func CodexSourceLabelRoot(roots []string, path string) (string, string) {
+	var selected, label string
+	for _, root := range roots {
+		candidate := CodexSourceLabel(root, path)
+		if candidate == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, selected)
+		if selected == "" || (err == nil && filepath.IsLocal(rel)) {
+			selected = root
+			label = candidate
+		}
+	}
+	return selected, label
+}
+
+// CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
+func CodexLabeledIndexSessions(root, indexPath string) string {
+	if filepath.Base(indexPath) != CodexSessionIndexFilename {
+		return ""
+	}
+	_, sessions := codexLabeledHome(root, filepath.Dir(indexPath))
+	return sessions
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with
@@ -1025,6 +1099,10 @@ func BuildGeminiProjectMap(
 	geminiDir string,
 ) map[string]string {
 	result := make(map[string]string)
+	// Deleted project paths that share an existing ancestor resolve through
+	// the same sibling scan, so one memo keeps a long, stale project list
+	// from rescanning that ancestor for every path.
+	ctx := WithProjectRootMemo(context.Background())
 
 	data, err := os.ReadFile(
 		filepath.Join(geminiDir, "projects.json"),
@@ -1032,7 +1110,7 @@ func BuildGeminiProjectMap(
 	if err == nil {
 		var pf geminiProjectsFile
 		if err := json.Unmarshal(data, &pf); err == nil {
-			addProjectPaths(result, pf.Projects)
+			addProjectPaths(ctx, result, pf.Projects)
 		}
 	}
 
@@ -1048,7 +1126,7 @@ func BuildGeminiProjectMap(
 			for _, p := range tf.TrustedFolders {
 				paths[p] = ""
 			}
-			addProjectPaths(result, paths)
+			addProjectPaths(ctx, result, paths)
 		}
 	}
 
@@ -1058,6 +1136,7 @@ func BuildGeminiProjectMap(
 // addProjectPaths adds hash and name entries for the given
 // absolute paths.
 func addProjectPaths(
+	ctx context.Context,
 	result map[string]string,
 	paths map[string]string,
 ) {
@@ -1069,7 +1148,7 @@ func addProjectPaths(
 
 	for _, absPath := range sorted {
 		name := paths[absPath]
-		project := ExtractProjectFromCwd(absPath)
+		project := ExtractProjectFromCwdWithBranchContext(ctx, absPath, "")
 		if project == "" {
 			project = "unknown"
 		}

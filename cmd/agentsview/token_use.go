@@ -202,6 +202,7 @@ type sessionUsageOutput struct {
 	service.SessionUsageReport
 	ServerRunning     bool `json:"server_running"`
 	RefreshIncomplete bool `json:"refresh_incomplete,omitzero"`
+	WaitIncomplete    bool `json:"wait_incomplete,omitzero"`
 }
 
 // startupWaitTimeout is how long CLI subcommands wait for a

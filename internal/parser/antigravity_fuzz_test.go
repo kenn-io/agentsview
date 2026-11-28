@@ -297,19 +297,26 @@ func FuzzExtractModelName(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		model := extractModelName(data)
-		if model == "" {
-			return
-		}
-		hasLetter := false
-		for _, r := range model {
-			assert.True(t, unicode.IsPrint(r),
-				"model %q contains non-printable rune %q", model, r)
-			if unicode.IsLetter(r) {
-				hasLetter = true
+		for _, model := range []string{
+			extractModelName(data),
+			func() string {
+				m, _ := resolveAntigravityGenerationModel(data, "")
+				return m
+			}(),
+		} {
+			if model == "" {
+				continue
 			}
+			hasLetter := false
+			for _, r := range model {
+				assert.True(t, unicode.IsPrint(r),
+					"model %q contains non-printable rune %q", model, r)
+				if unicode.IsLetter(r) {
+					hasLetter = true
+				}
+			}
+			assert.True(t, hasLetter, "model %q has no letters", model)
 		}
-		assert.True(t, hasLetter, "model %q has no letters", model)
 	})
 }
 

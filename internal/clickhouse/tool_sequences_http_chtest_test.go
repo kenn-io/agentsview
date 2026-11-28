@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -17,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -88,19 +86,11 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 		assert.Equal(t, wantEvidence, gotEvidence, signal)
 	}
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = duckdb.Push(t.Context(), path, local, "tool-sequences-boundary", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	mirror, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, mirror.Close()) })
-	mirrorHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, mirror, nil).Handler()
 	for _, sessionID := range sessionIDs {
 		localJSON := getToolSequencesDocument(t, localHandler, sessionID)
 		remoteJSON := getToolSequencesDocument(t, remoteHandler, sessionID)
 		assert.Equal(t, localJSON, remoteJSON, sessionID)
 		if sessionID == boundaryID {
-			assert.Equal(t, localJSON, getToolSequencesDocument(t, mirrorHandler, sessionID))
 			assert.Equal(t, float64(4), localJSON["total_tool_calls"])
 			assert.Equal(t, float64(4), localJSON["total_sequence_calls"])
 			assert.Equal(t, float64(1), localJSON["total_sequences"])
@@ -121,7 +111,7 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 				}
 			}
 			assert.Equal(t, true, calls[3].(map[string]any)["tool_changed"])
-			t.Log("boundary sequence ordinals=[99 100 101 102], repeats=2, switch/recovery=true, calls=4, omissions=0; SQLite/DuckDB/ClickHouse HTTP responses equal")
+			t.Log("boundary sequence ordinals=[99 100 101 102], repeats=2, switch/recovery=true, calls=4, omissions=0; SQLite/ClickHouse HTTP responses equal")
 		}
 	}
 }

@@ -233,7 +233,7 @@ func TestSyncMarkerMaintainedByTriggers(t *testing.T) {
 // TestReplaceSessionUsageEventsAdvancesSyncMarker pins the push-visibility
 // contract for usage-only rewrites: ReplaceSessionUsageEvents must bump
 // local_modified_at so the sync_marker trigger fires and both push targets
-// (PostgreSQL and the DuckDB mirror) re-select the session, even when no
+// (PostgreSQL and ClickHouse) re-select the session, even when no
 // session file changed (e.g. a pricing-driven recompute).
 func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
 	database := testDB(t)
@@ -278,7 +278,7 @@ func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
 // parent_session_id and relationship_type — both mirrored columns, neither
 // a sync_marker signal — so it must bump local_modified_at, or linking an
 // older session after a push target's cutoff would never re-push it
-// (PostgreSQL and the DuckDB mirror alike).
+// (PostgreSQL and ClickHouse alike).
 func TestLinkSubagentSessionsAdvancesSyncMarker(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
@@ -794,7 +794,7 @@ func TestPushStateWritesStopWaitingBehindALongWrite(t *testing.T) {
 			return d.Update(ctx, func(*sql.Tx) error { return nil })
 		},
 		"DeleteSyncStateByPrefix": func(ctx context.Context, d *DB) error {
-			return d.DeleteSyncStateByPrefix(ctx, "duckdb_")
+			return d.DeleteSyncStateByPrefix(ctx, "legacy_")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

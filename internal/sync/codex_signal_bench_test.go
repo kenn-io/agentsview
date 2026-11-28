@@ -66,7 +66,6 @@ func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 	// signals+secrets maintenance; nothing is amortized across iterations.
 	engine.signalSched.mu.Lock()
 	engine.signalSched.interval = 0
-	engine.signalSched.quiet = 0
 	engine.signalSched.mu.Unlock()
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)

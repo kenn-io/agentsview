@@ -20,7 +20,6 @@ func BenchmarkPGConcurrentPush(b *testing.B) {
 	const writers, sessions, messages = 4, 400, 20
 	pgURL := testPGURL(b)
 	schema := pgUsageBenchmarkSchema(b)
-	b.Cleanup(func() { cleanNamedPGSchema(b, pgURL, schema) })
 	syncers := make([]*Sync, writers)
 	locals := make([]*db.DB, writers)
 	writerSessions := make([][]db.Session, writers)

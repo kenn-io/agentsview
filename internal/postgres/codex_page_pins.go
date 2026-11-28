@@ -158,6 +158,14 @@ func (s *Sync) migrateCodexPages(
 		if page == nil || page.Agent != old.agent {
 			return fmt.Errorf("cannot replace legacy Codex thread: retained page %s is unavailable", pageID)
 		}
+		storedPage, err := s.local.GetSessionFull(ctx, pageID)
+		if err != nil {
+			return fmt.Errorf("reading retained Codex page links: %w", err)
+		}
+		if storedPage == nil {
+			return fmt.Errorf("cannot replace legacy Codex thread: retained page %s is unavailable", pageID)
+		}
+		page.PRLinks = storedPage.PRLinks
 		if projectFailsFilter(page.Project, s.projects, s.excludeProjects) {
 			return fmt.Errorf(
 				"push stopped: Codex thread %s has pins or other edits that must move to its page in project %q, "+

@@ -104,7 +104,7 @@ function projectReport(): Report {
 }
 
 function calendarDay(label: string): HTMLButtonElement {
-  return screen.getByRole("button", { name: label }) as HTMLButtonElement;
+  return screen.getByRole("gridcell", { name: label }) as HTMLButtonElement;
 }
 
 async function selectFirstActivityRange() {
@@ -129,7 +129,7 @@ it("reports the analytics kind for a displayed report failure", async () => {
   const component = mount(ActivityPage, { target: document.body });
   try {
     await vi.waitFor(() =>
-      expect(document.querySelector(".status.error")?.textContent).toContain("Report failed"),
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Report failed"),
     );
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
   } finally {
@@ -743,8 +743,8 @@ describe("ActivityPage calendar day rollover", () => {
     await flushEffects();
     await openCalendar("Jun 17, 2026");
 
-    const june18 = calendarDay("Jun 18, 2026");
-    expect(june18.disabled).toBe(false);
+    const june18 = calendarDay("Thursday, June 18, 2026");
+    expect(june18.getAttribute("aria-disabled")).toBeNull();
     await fireEvent.click(june18);
     expect(activity.date).toBe("2026-06-18");
   });
@@ -760,23 +760,25 @@ describe("ActivityPage calendar day rollover", () => {
     await flushEffects();
     await openCalendar("Jun 17, 2026");
 
-    const june18 = calendarDay("Jun 18, 2026");
-    const june19 = calendarDay("Jun 19, 2026");
-    expect(june18.disabled).toBe(true);
-    expect(june19.disabled).toBe(true);
+    const june18 = calendarDay("Thursday, June 18, 2026");
+    const june19 = calendarDay("Friday, June 19, 2026");
+    expect(june18.getAttribute("aria-disabled")).toBe("true");
+    expect(june19.getAttribute("aria-disabled")).toBe("true");
+    await fireEvent.click(june18);
+    expect(activity.date).toBe("2026-06-17");
 
     await vi.advanceTimersByTimeAsync(500);
     await flushEffects();
 
-    expect(june18.disabled).toBe(false);
+    expect(june18.getAttribute("aria-disabled")).toBeNull();
     await fireEvent.click(june18);
     expect(activity.date).toBe("2026-06-18");
-    expect(june19.disabled).toBe(true);
+    expect(june19.getAttribute("aria-disabled")).toBe("true");
 
     await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
     await flushEffects();
 
-    expect(june19.disabled).toBe(false);
+    expect(june19.getAttribute("aria-disabled")).toBeNull();
     await fireEvent.click(june19);
     expect(activity.date).toBe("2026-06-19");
 
@@ -798,14 +800,14 @@ describe("ActivityPage calendar day rollover", () => {
     await flushEffects();
     await openCalendar("May 30, 2026");
 
-    const june3 = calendarDay("Jun 3, 2026");
-    expect(june3.disabled).toBe(true);
+    const june3 = calendarDay("Wednesday, June 3, 2026");
+    expect(june3.getAttribute("aria-disabled")).toBe("true");
 
     vi.setSystemTime(new Date(2026, 5, 3, 12, 0, 0));
     await vi.advanceTimersByTimeAsync(500);
     await flushEffects();
 
-    expect(june3.disabled).toBe(false);
+    expect(june3.getAttribute("aria-disabled")).toBeNull();
     await fireEvent.click(june3);
     expect(activity.date).toBe("2026-06-03");
   });

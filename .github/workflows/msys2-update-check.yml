@@ -14,6 +14,10 @@ env:
 # If this workflow fails, update the pinned SHA and packages in ci.yml.
 
 on:
+  # Exercise changes to this workflow with updated packages before merging.
+  pull_request:
+    paths:
+      - .github/workflows/msys2-update-check.yml
   schedule:
     - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
   workflow_dispatch:
@@ -38,12 +42,19 @@ jobs:
             timeout: 27
             package: ./cmd/agentsview
             skip: '^Test[A-P]'
-          - name: Capture, Database, Parser
+          - name: Capture, Parser
             timeout: 38
-            package: ./internal/capture ./internal/db ./internal/parser
-          - name: DuckDB
-            timeout: 27
-            package: ./internal/duckdb
+            package: ./internal/capture ./internal/parser
+          # The full database suite exceeds the per-package timeout on Windows.
+          # Complementary filters run every test on exactly one runner.
+          - name: Database A-M
+            timeout: 38
+            package: ./internal/db
+            run: '^Test[A-M]'
+          - name: Database remaining
+            timeout: 38
+            package: ./internal/db
+            skip: '^Test[A-M]'
           # Match normal Windows CI; complementary filters cover every sync test.
           - name: Sync A-R
             timeout: 27
@@ -74,7 +85,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.0
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Restore pricing snapshot
         shell: bash
@@ -120,7 +131,6 @@ jobs:
               'go.kenn.io/agentsview/cmd/agentsview'
               'go.kenn.io/agentsview/internal/capture'
               'go.kenn.io/agentsview/internal/db'
-              'go.kenn.io/agentsview/internal/duckdb'
               'go.kenn.io/agentsview/internal/parser'
               'go.kenn.io/agentsview/internal/sync'
             )

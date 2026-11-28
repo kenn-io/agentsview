@@ -57,6 +57,7 @@ describe("registerShortcuts", () => {
     for (const id of starred.ids) {
       starred.unstar(id);
     }
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
     navigateMessage = vi.fn();
     navigateUserPrompt = vi.fn();
     cleanup = registerShortcuts({ navigateMessage, navigateUserPrompt });
@@ -85,6 +86,22 @@ describe("registerShortcuts", () => {
       unmount(header);
       sync.serverVersion = null;
     }
+  });
+
+  it("does not copy a Claude resume command when host actions are unavailable", async () => {
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(false);
+    sessions.sessions = [
+      { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+    ];
+    sessions.activeSessionId = "claude:copied";
+    const resume = vi
+      .spyOn(SessionsService, "postApiV1SessionsByIdResume")
+      .mockRejectedValue(new Error("detached"));
+    fireKey("c");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resume).not.toHaveBeenCalled();
+    expect(copyToClipboard).not.toHaveBeenCalled();
   });
 
   describe("remote c copy", () => {

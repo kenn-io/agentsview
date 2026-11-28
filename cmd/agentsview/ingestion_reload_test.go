@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"net"
 	"net/http"
@@ -28,7 +29,7 @@ import (
 
 func writeReloadGeminiSession(t *testing.T, root, id string) {
 	t.Helper()
-	path := filepath.Join(root, "tmp", "project", "chats", "session-"+id+".json")
+	path := reloadGeminiSessionPath(root, id)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(testjsonl.GeminiSessionJSON(
 		id, "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
@@ -36,6 +37,25 @@ func writeReloadGeminiSession(t *testing.T, root, id string) {
 			"user", "2026-08-09T10:00:00Z", "hello from "+id,
 		)},
 	)), 0o644))
+}
+
+func reloadGeminiSessionPath(root, id string) string {
+	return filepath.Join(root, "tmp", "project", "chats", "session-"+id+".json")
+}
+
+// pauseAfterStartup puts ingestion in the state of an idle daemon: startup
+// opened watcher dispatch, then client inactivity paused collection.
+func pauseAfterStartup(t *testing.T, ingestion *daemonIngestion) {
+	t.Helper()
+	ingestion.OpenWatcherDispatch()
+	ingestion.Suspend()
+	require.False(t, ingestion.Active())
+}
+
+// collectWhilePaused hands the watcher the paths a native change event would
+// report, so a test does not wait out the platform's delivery latency.
+func collectWhilePaused(ingestion *daemonIngestion, paths ...string) {
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: paths})
 }
 
 func sessionImported(t *testing.T, database *db.DB, id string) bool {
@@ -236,9 +256,9 @@ func TestDaemonIngestionSharedCatchupPreservesLifecycle(t *testing.T) {
 
 func TestIdleWakePreservesImportCounts(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
+	pauseAfterStartup(t, f.ingestion)
 	writeReloadGeminiSession(t, f.root, "overnight")
+	collectWhilePaused(f.ingestion, reloadGeminiSessionPath(f.root, "overnight"))
 	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
 
 	_, body := searchIngestionArchive(t, ts.URL, "overnight")
@@ -252,6 +272,92 @@ func TestIdleWakePreservesImportCounts(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode, string(response.Body))
 	require.NotNil(t, response.JSON200)
 	assert.EqualValues(t, 1, response.JSON200.Stats.Synced)
+}
+
+func TestCatchUpPollsLiveActivity(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	cfg := f.cfg
+	cfg.SyncInterval, cfg.BackgroundSyncInterval = time.Hour, 2*time.Hour
+	f.ingestion.cfg.Store(&cfg)
+	var polls atomic.Int64
+	f.ingestion.mu.Lock()
+	f.ingestion.live = &liveActivity{
+		stop:    func() {},
+		pollNow: func(context.Context) { polls.Add(1) },
+	}
+	f.ingestion.mu.Unlock()
+	f.ingestion.OpenWatcherDispatch()
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(1), polls.Load(),
+		"a background read looks for growth that no file event reported")
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(1), polls.Load(), "reads inside one live interval share a catch-up")
+
+	f.ingestion.Suspend()
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(2), polls.Load(), "a wake after an idle pause polls too")
+}
+
+func TestReadHoldsLiveIntervalSoLaterReadsSkipCatchUp(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	cfg := f.cfg
+	cfg.SyncInterval, cfg.BackgroundSyncInterval = time.Second, time.Hour
+	f.ingestion.cfg.Store(&cfg)
+	var polls atomic.Int64
+	f.ingestion.mu.Lock()
+	f.ingestion.readHold = 2 * time.Second
+	f.ingestion.live = &liveActivity{
+		stop:    func() {},
+		pollNow: func(context.Context) { polls.Add(1) },
+	}
+	f.ingestion.mu.Unlock()
+	f.ingestion.OpenWatcherDispatch()
+	override := f.ingestion.SyncIntervalOverride()
+	require.Zero(t, override.Value(), "nothing holds the live interval before a read")
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	require.Equal(t, int64(1), polls.Load(), "the first read catches up on the changes the background interval held")
+	assert.Equal(t, agentsync.LiveInterval, override.Value(), "the read holds the live interval")
+
+	// Without the hold, a read this long after the last catch-up would start
+	// another one.
+	f.ingestion.mu.Lock()
+	f.ingestion.lastCatchup = time.Now().Add(-time.Hour)
+	f.ingestion.mu.Unlock()
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(1), polls.Load(), "a read during the hold leaves syncing to the live watcher")
+
+	require.Eventually(t, func() bool { return override.Value() == 0 }, 20*time.Second, 50*time.Millisecond,
+		"the hold lapses once reads stop")
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(2), polls.Load(), "the first read after the hold lapses catches up again")
+}
+
+func TestIdleWakeRunsPeriodicPassSkippedDuringPause(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	var passes atomic.Int64
+	f.ingestion.setScheduled(func(context.Context) { passes.Add(1) })
+	require.True(t, f.ingestion.AdmitScheduled(), "a running daemon admits its periodic pass")
+
+	pauseAfterStartup(t, f.ingestion)
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Zero(t, passes.Load(), "a pause that skipped no pass owes none")
+
+	f.ingestion.Suspend()
+	require.False(t, f.ingestion.AdmitScheduled(), "a paused daemon turns its periodic pass away")
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(1), passes.Load(), "the wake runs the pass the pause skipped")
+	assert.True(t, f.ingestion.AdmitScheduled())
 }
 
 func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {
@@ -272,9 +378,9 @@ func TestDaemonIngestionReloadWhileSuspended(t *testing.T) {
 
 func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
+	pauseAfterStartup(t, f.ingestion)
 	writeReloadGeminiSession(t, f.root, "overnight")
+	collectWhilePaused(f.ingestion, reloadGeminiSessionPath(f.root, "overnight"))
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	releaseOnce := sync.OnceFunc(func() { close(release) })
 	defer func() { releaseOnce(); <-finished }()
@@ -287,7 +393,7 @@ func TestDaemonIngestionStopWaitsForCatchup(t *testing.T) {
 	defer stop()
 	readerDone := make(chan struct{})
 	go func() { f.ingestion.EnsureFresh(ctx); close(readerDone) }()
-	require.Eventually(t, f.ingestion.Active, time.Second, time.Millisecond, "catch-up has restored collection and is waiting for the engine")
+	require.Eventually(t, f.ingestion.Active, time.Second, time.Millisecond, "catch-up has resumed collection and is waiting for the engine")
 	stop()
 	<-readerDone
 	stopped := make(chan struct{})
@@ -373,10 +479,12 @@ func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 			if tc.name != "nil receiver pass-through" {
 				ingestion = newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 				t.Cleanup(ingestion.Stop)
-				ingestion.Suspend()
-				ingestion.applying.Wait()
+				pauseAfterStartup(t, ingestion)
 			}
 			writeReloadGeminiSession(t, root, "overnight")
+			if ingestion != nil {
+				collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
+			}
 			var syncCalls, resyncCalls atomic.Int64
 			syncRunner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
 			resyncRunner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
@@ -414,4 +522,161 @@ func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 			assert.False(t, ingestion.Pending())
 		})
 	}
+}
+
+// agentsview sync asks a running daemon for the changes its watchers
+// collected. Until startup opens their delivery the watchers cannot vouch for
+// the archive, so the daemon runs a discovery pass instead.
+func TestDaemonSyncChangesOnly(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := filepath.Join(t.TempDir(), "gemini")
+	writeReloadGeminiSession(t, root, "first")
+	remote := httptest.NewServer(server.New(config.Config{
+		Host: "127.0.0.1", DataDir: t.TempDir(), AuthToken: "remote-token",
+	}, dbtest.OpenTestDB(t), nil).Handler())
+	t.Cleanup(remote.Close)
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}},
+		// The collected changes wait for this interval unless a sync asks.
+		SyncInterval: time.Hour, BackgroundSyncInterval: time.Hour,
+		RemoteHosts: []config.RemoteHost{
+			{Host: "remote", Transport: config.RemoteTransportHTTP, URL: remote.URL, Token: "remote-token"},
+			// A name that cannot resolve reads as offline on every platform.
+			{Host: "offline", Transport: config.RemoteTransportHTTP, URL: "http://offline.invalid", Token: "remote-token"},
+		},
+	}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: "test-machine",
+	})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	tr := transport{URL: serveIngestionArchive(t, cfg, database, engine, ingestion).URL}
+
+	stats, err := runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.False(t, stats.ChangesOnly, "before startup the daemon runs a discovery pass")
+	assert.True(t, sessionImported(t, database, "gemini:first"))
+
+	ingestion.OpenWatcherDispatch()
+	writeReloadGeminiSession(t, root, "second")
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{reloadGeminiSessionPath(root, "second")}})
+	stats, err = runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.True(t, stats.ChangesOnly)
+	assert.True(t, sessionImported(t, database, "gemini:second"))
+
+	writeReloadGeminiSession(t, root, "third")
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{reloadGeminiSessionPath(root, "third")}})
+	failures, err := runDaemonRemoteSync(t.Context(), tr, "", cfg.RemoteHosts, false, true, true, nil)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "an offline host is skipped as it is after a discovery pass")
+	assert.True(t, sessionImported(t, database, "gemini:third"))
+}
+
+// A replacement watcher sees only later changes, so after Settings enables a
+// provider its existing history needs a full pass before a sync can apply
+// collected changes alone.
+func TestDaemonSyncChangesOnlyAfterSettingsChange(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := filepath.Join(t.TempDir(), "gemini")
+	writeReloadGeminiSession(t, root, "existing")
+	startup := config.Config{
+		Host:           "127.0.0.1",
+		AgentDirs:      map[parser.AgentType][]string{parser.AgentGemini: {root}},
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		SyncInterval:   time.Hour, BackgroundSyncInterval: time.Hour,
+	}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: startup.AgentDirs, DisabledAgents: startup.DisabledAgents, Machine: "test-machine",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	enabled := startup
+	enabled.DisabledAgents = nil
+	ingestion := newDaemonIngestion(t.Context(), startup, engine, database, nil,
+		func() (config.Config, error) { return enabled, nil })
+	t.Cleanup(ingestion.Stop)
+	ingestion.OpenWatcherDispatch()
+	tr := transport{URL: serveIngestionArchive(t, startup, database, engine, ingestion).URL}
+	_, err := ingestion.Reload(t.Context())
+	require.NoError(t, err)
+	ingestion.applying.Wait()
+
+	stats, err := runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.False(t, stats.ChangesOnly, "new roots need a full pass")
+	assert.True(t, sessionImported(t, database, "gemini:existing"))
+
+	stats, err = runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.True(t, stats.ChangesOnly, "the full pass covered the new roots")
+}
+
+func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "gemini")
+	path := filepath.Join(dir, "archive.db")
+	cfg := config.Config{Host: "127.0.0.1", DBPath: path, DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	database, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "existing", "project", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	for _, table := range []string{"tool_input_trigram_fts", "tool_result_trigram_fts", "tool_event_trigram_fts"} {
+		for _, suffix := range []string{"_ai", "_ad", "_au"} {
+			_, err = raw.ExecContext(t.Context(), "DROP TRIGGER IF EXISTS "+table+suffix)
+			require.NoError(t, err)
+		}
+		_, err = raw.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+table)
+		require.NoError(t, err)
+	}
+	_, err = raw.ExecContext(t.Context(), "DELETE FROM stats WHERE key='tool_substring_index_ready'")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.True(t, database.SearchRepairPending())
+	require.False(t, database.BlockingSearchRepairPending())
+	writeReloadGeminiSession(t, root, "existing-file")
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	pauseAfterStartup(t, ingestion)
+	writeReloadGeminiSession(t, root, "changed")
+	collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "changed"))
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer func() {
+		releaseOnce()
+		select {
+		case <-finished:
+		case <-time.After(20 * time.Second):
+			assert.Fail(t, "exclusive engine work did not finish")
+		}
+	}()
+	go func() {
+		defer close(finished)
+		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "exclusive engine work did not start")
+	}
+	result := make(chan bool, 1)
+	go func() { result <- ingestion.EnsureFresh(t.Context()) }()
+	require.Eventually(t, func() bool { ingestion.mu.Lock(); defer ingestion.mu.Unlock(); return ingestion.catchup != nil }, 20*time.Second, 50*time.Millisecond)
+	releaseOnce()
+	select {
+	case fresh := <-result:
+		require.True(t, fresh)
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "freshness wait did not finish")
+	}
+	require.True(t, sessionImported(t, database, "gemini:changed"))
 }

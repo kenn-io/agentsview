@@ -14,7 +14,7 @@ const planUsageColumns = db.SessionPlanUsageColumns
 // the archive's row, or removes it when the archive has none. It reports
 // whether the PG table changed.
 func (s *Sync) replacePlanUsage(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx pgSessionExecer, sessionID string,
 ) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM session_plan_usage WHERE session_id = $1`, sessionID,
@@ -37,7 +37,7 @@ func (s *Sync) replacePlanUsage(
 }
 
 func insertPlanUsage(
-	ctx context.Context, tx *sql.Tx, sessionID string, p *db.SessionPlanUsage,
+	ctx context.Context, tx pgSessionExecer, sessionID string, p *db.SessionPlanUsage,
 ) error {
 	values, err := db.SessionPlanUsageValues(p)
 	if err != nil {
@@ -93,7 +93,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 	if deferred || version == standbyUsageMarker || (version == "" && s.runtimeState().usageIdentityDenied.Load()) {
 		raw := f
 		raw.ModelAliases = nil
-		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store) (*db.PlanUsageCountSummary, error) {
+		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store, _ string) (*db.PlanUsageCountSummary, error) {
 			return view.readPlanUsageSessionCounts(ctx, raw)
 		})
 		if handled {

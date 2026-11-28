@@ -52,10 +52,12 @@ describe("KNOWN_AGENTS", () => {
       "qclaw",
       "iflow",
       "junie",
+      "factory",
       "kimi",
       "kimi-work",
       "claude-ai",
       "chatgpt",
+      "grok-web",
       "kiro",
       "kiro-ide",
       "cortex",
@@ -74,6 +76,7 @@ describe("KNOWN_AGENTS", () => {
       "freebuff",
       "crush",
       "muse",
+      "muse-personal",
     ]);
   });
 

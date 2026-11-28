@@ -7,12 +7,12 @@ import (
 )
 
 // DecodeStoredTokenUsage is the single guard every backend that serves
-// messages reads through (internal/db, internal/postgres, internal/duckdb),
+// messages reads through (internal/db, internal/postgres),
 // so its contract is pinned here.
 //
 // The empty case is the one that matters in practice: token_usage is
 // "TEXT NOT NULL DEFAULT ”", so nearly every row holds "". Returning a
-// non-nil, zero-length jsontext.Value there is what made every duckdb serve
+// non-nil, zero-length jsontext.Value there is what made every replica server
 // transcript blank -- it is not valid JSON, omitempty does not skip it, and
 // the response fails to marshal. Dropping invalid values is defense at the
 // point of consequence: reaching the encoder with one panics the handler,

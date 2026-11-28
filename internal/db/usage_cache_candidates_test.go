@@ -113,7 +113,8 @@ func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
 	}{
 		{"token", usageQueryKindToken, []rangeSearch{
 			{"m", "idx_messages_usage_timestamp", "(timestamp>? AND timestamp<?)", false},
-			{"ue", "idx_usage_events_occurred", "(occurred_at>? AND occurred_at<?)", false},
+			{"ue", "idx_usage_events_occurred_us", "(occurred_at_us>? AND occurred_at_us<?)", false},
+			{"ue", "idx_usage_events_occurred_unparsed", "(occurred_at>? AND occurred_at<?)", false},
 		}},
 		{"activity", usageQueryKindActivity, []rangeSearch{
 			{"m", "idx_messages_activity_timestamp", "(timestamp>? AND timestamp<?)", true},

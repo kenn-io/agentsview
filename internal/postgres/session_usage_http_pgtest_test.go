@@ -35,7 +35,6 @@ func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
 	t.Parallel()
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
-	dbtest.SeedPricingMeta(t, local)
 	for _, id := range []string{"codex:native:thread", "codex:child", "archive~codex:hosted", "a~codex:shared", "b~codex:shared", "claude-id", "codex:claude-id", "codex:codex:missing", "codex:freebuff:missing"} {
 		s := db.Session{ID: id, Agent: "codex", Project: "project", Machine: "test", MessageCount: 1, TotalOutputTokens: 500, HasTotalOutputTokens: true}
 		if id == "codex:child" {

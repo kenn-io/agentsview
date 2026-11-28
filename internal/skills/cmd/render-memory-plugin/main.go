@@ -15,7 +15,7 @@ func main() {
 	var out string
 	var version string
 	flag.StringVar(&out, "out", "plugins/agentsview-memory", "plugin root")
-	flag.StringVar(&version, "version", "0.1.0", "plugin version")
+	flag.StringVar(&version, "version", skills.MemoryPluginVersion, "plugin version")
 	flag.Parse()
 
 	artifacts, err := skills.RenderPluginPackage(version)

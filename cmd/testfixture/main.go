@@ -13,10 +13,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 type sessionSpec struct {
@@ -72,7 +70,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	out := flag.String("out", "", "output database path")
-	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
 	flag.Parse()
 	if *out == "" {
 		return errors.New("usage: testfixture -out <path>")
@@ -151,12 +148,6 @@ func run() error {
 	}
 
 	fmt.Printf("Fixture DB written to %s\n", *out)
-	if *duckDBOut != "" {
-		if err := writeDuckDBMirror(ctx, database, *duckDBOut); err != nil {
-			return fmt.Errorf("writing DuckDB mirror: %w", err)
-		}
-		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
-	}
 	return nil
 }
 
@@ -277,23 +268,6 @@ func createToolSequencesFixture(
 		return err
 	}
 	return database.ReplaceSessionMessages(ctx, sessionID, msgs)
-}
-
-func writeDuckDBMirror(ctx context.Context, database *db.DB, path string) error {
-	if err := os.Remove(path); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("removing existing DuckDB mirror: %w", err)
-	}
-	result, err := duckdbsync.Push(
-		ctx, path, database, "test-machine", storage.MirrorPushOptions{}, true, nil,
-	)
-	if err != nil {
-		return err
-	}
-	if result.Errors > 0 {
-		return fmt.Errorf("DuckDB push had %d session error(s)", result.Errors)
-	}
-	return nil
 }
 
 func createSessionFixture(ctx context.Context,

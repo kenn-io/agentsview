@@ -1,32 +1,42 @@
-let requestShapes;
+import { platforms } from "./platforms.js";
 
-export async function allowedPath(path) {
-  if (typeof path !== "string") return false;
-  requestShapes ??= fetch(chrome.runtime.getURL("claude_ai_requests.txt"))
-    .then(async (response) => {
-      if (!response.ok) throw new Error("Claude request shapes unavailable");
-      return (await response.text()).trim().split(/\r?\n/);
+const requestShapes = new Map();
+
+function shapePattern(shape, params) {
+  const pattern = shape
+    .split(/(\{[a-zA-Z]+\})/)
+    .map((part) => {
+      if (!part.startsWith("{")) return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const name = part.slice(1, -1);
+      if (!Object.hasOwn(params, name)) throw new Error(`Unknown request placeholder ${part}`);
+      return params[name];
     })
-    .catch((error) => {
-      requestShapes = undefined;
-      throw error;
-    });
-  const shapes = await requestShapes;
-  if (path === shapes[0]) return true;
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const [prefix, list] = shapes[1].split("{organization}");
-  if (!path.startsWith(prefix)) return false;
-  const rest = path.slice(prefix.length);
-  const slash = rest.indexOf("/");
-  if (!uuid.test(rest.slice(0, slash))) return false;
-  const tail = rest.slice(slash);
-  const listPrefix = list.replace("{offset}", "");
-  if (tail.startsWith(listPrefix) && /^\d+$/.test(tail.slice(listPrefix.length))) return true;
-  const detail = shapes[2].split("{organization}")[1];
-  const [detailPrefix, suffix] = detail.split("{conversation}");
-  return (
-    tail.startsWith(detailPrefix) &&
-    tail.endsWith(suffix) &&
-    uuid.test(tail.slice(detailPrefix.length, -suffix.length))
-  );
+    .join("");
+  return new RegExp(`^${pattern}$`);
+}
+
+function shapesFor(platform) {
+  if (!requestShapes.has(platform)) {
+    const { params } = platforms[platform];
+    const pending = fetch(chrome.runtime.getURL(`requests/${platform}.txt`))
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Browser request shapes unavailable");
+        return (await response.text())
+          .trim()
+          .split(/\r?\n/)
+          .map((shape) => shapePattern(shape, params));
+      })
+      .catch((error) => {
+        requestShapes.delete(platform);
+        throw error;
+      });
+    requestShapes.set(platform, pending);
+  }
+  return requestShapes.get(platform);
+}
+
+export async function allowedPath(platform, path) {
+  if (typeof path !== "string" || !Object.hasOwn(platforms, platform)) return false;
+  const shapes = await shapesFor(platform);
+  return shapes.some((shape) => shape.test(path));
 }

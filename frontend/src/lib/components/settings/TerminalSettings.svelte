@@ -23,17 +23,25 @@
     localArgs = settings.terminal.custom_args ?? "";
   });
 
+  let error: string | null = $state(null);
+
   async function saveTerminal() {
     if (settings.saving) return;
-    await settings.runMutation(async () => {
-      await ConfigService.postApiV1ConfigTerminal({
-        mode: localMode as TerminalConfigBody["mode"],
-        custom_bin: localBin || undefined,
-        custom_args: localArgs || undefined,
+    error = null;
+    try {
+      await settings.runMutation(async () => {
+        await ConfigService.postApiV1ConfigTerminal({
+          mode: localMode as TerminalConfigBody["mode"],
+          custom_bin: localBin || undefined,
+          custom_args: localArgs || undefined,
+        });
       });
-    });
-    // Reload settings after the mutation so hydration sees the saved config.
-    await settings.load();
+      // Reload settings after the mutation so hydration sees the saved config.
+      await settings.load();
+    } catch (e) {
+      // Keep the edited values so the user can correct them and save again.
+      error = e instanceof Error ? e.message : m.settings_save_failed();
+    }
   }
 
   let dirty = $derived(
@@ -96,6 +104,9 @@
       </Button>
     </div>
   {/if}
+  {#if error}
+    <p class="msg error control-offset">{error}</p>
+  {/if}
 </div>
 
 <style>
@@ -124,6 +135,15 @@
 
   .save-row {
     display: flex;
+  }
+
+  .msg {
+    font-size: 11px;
+    margin: 0;
+  }
+
+  .msg.error {
+    color: var(--accent-red, #ef4444);
   }
 
   .control-offset {

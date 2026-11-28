@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db
@@ -1155,8 +1156,9 @@ func addMessageToCacheTotals(
 	sessionID, model, tokenJSON, timestamp string,
 	pricing *export.PricingResolver,
 ) error {
-	inputTok, outputTok, cacheCrTok, cacheRdTok := clampedUsageTokenCounters(tokenJSON)
-	cacheCr1hTok := clampedCacheCreation1hTokens(tokenJSON)
+	parsed := usagefacts.ParseTokenUsage(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok := clampedUsageTokenCounters(parsed)
+	cacheCr1hTok := clampedCacheCreation1hTokens(parsed)
 
 	totals, ok := perSession[sessionID]
 	if !ok {

@@ -27,6 +27,7 @@ import (
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func (s *Server) registerSessionRoutes() {
@@ -103,7 +104,7 @@ type sessionFilterInput struct {
 	HasSecret        bool              `query:"has_secret" doc:"Filter sessions with secret findings"`
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
 	Label            []string          `query:"label,explode" doc:"Keep sessions carrying this exact label; repeat to require several"`
-	PR               string            `query:"pr" doc:"Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123"`
+	PR               string            `query:"pr" doc:"Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123. Includes URLs in user prompts; a mention does not mean work was done on the PR"`
 	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
 	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
 }
@@ -114,6 +115,7 @@ type SessionListFilters = sessionFilterInput
 
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
+	Flat            bool              `query:"flat" doc:"Match child sessions individually when include_children is true"`
 	ExclusionCounts optionalBoolParam `query:"exclusion_counts" doc:"Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only."`
 	SessionListFilters
 	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
@@ -140,7 +142,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 		service.SessionIDsRequireCSVEncoding(records[0]) {
 		members = records[0]
 	}
-	if len(members) > 100 {
+	if len(members) > service.MaxListSessionIDs {
 		return nil, apiError(http.StatusBadRequest, "ids must contain 1 to 100 non-empty session IDs")
 	}
 	ids := make([]string, 0, len(members))
@@ -159,6 +161,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 }
 
 type messageListInput struct {
+	CompactBoundary  bool             `query:"compact_boundary" doc:"Only compact boundary messages"`
 	ID               string           `path:"id" required:"true" doc:"Session ID"`
 	Limit            int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction        messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
@@ -299,6 +302,7 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
+	filter.Flat = in.Flat
 	filter.ExclusionCounts = optionalBoolValue(in.ExclusionCounts)
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
@@ -405,6 +409,7 @@ func (s *Server) humaGetMessages(
 		ExpectedRevision: in.ExpectedRevision,
 		EvidenceSource:   in.EvidenceSource,
 	}
+	filter.CompactBoundaryOnly = in.CompactBoundary
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}
@@ -974,17 +979,72 @@ func (s *Server) humaGetSessionDir(
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
+	return s.sessionDirectoryOutput(ctx, session)
+}
+
+// sessionDirectoryOutput hides reassigned paths in copied archives.
+func (s *Server) sessionDirectoryOutput(
+	ctx context.Context, session *db.Session,
+) (*jsonOutput[sessionDirectoryResponse], error) {
+	detached, err := s.hostPathsDetached(ctx)
+	if err != nil || detached {
+		return &jsonOutput[sessionDirectoryResponse]{}, err
+	}
 	return &jsonOutput[sessionDirectoryResponse]{
 		Body: sessionDirectoryResponse{Path: resolveSessionPath(session, filepath.IsAbs)},
 	}, nil
+}
+
+// requireLocalHostActions rejects host actions in remote and copied archives.
+func (s *Server) requireLocalHostActions(ctx context.Context) error {
+	if s.db.ReadOnly() {
+		return apiError(http.StatusNotImplemented, "not available in remote mode")
+	}
+	return s.requireAttachedHostPaths(ctx)
+}
+
+// requireAttachedHostPaths rejects host actions in copied archives.
+func (s *Server) requireAttachedHostPaths(ctx context.Context) error {
+	detached, err := s.hostPathsDetached(ctx)
+	if err != nil {
+		return err
+	}
+	if detached {
+		return apiError(http.StatusConflict, "session actions are unavailable in a copied archive")
+	}
+	return nil
+}
+
+func (s *Server) hostPathsDetached(ctx context.Context) (bool, error) {
+	database, ok := s.db.(*db.DB)
+	if !ok {
+		return false, nil
+	}
+	detached, err := database.HostPathsDetached(ctx)
+	if err != nil {
+		return false, serverError(err)
+	}
+	return detached, nil
+}
+
+// resumeSession returns the live session after rejecting copied archives.
+func (s *Server) resumeSession(ctx context.Context, id string) (*db.Session, error) {
+	session, err := s.db.GetSessionFull(ctx, id)
+	if err != nil {
+		return nil, internalError("resume: session lookup failed", err)
+	}
+	if session == nil || session.DeletedAt != nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+	return session, s.requireAttachedHostPaths(ctx)
 }
 
 func (s *Server) humaOpenSession(
 	ctx context.Context,
 	in *openSessionInput,
 ) (*jsonOutput[openSessionResponse], error) {
-	if s.db.ReadOnly() {
-		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
+	if err := s.requireLocalHostActions(ctx); err != nil {
+		return nil, err
 	}
 	session, err := s.db.GetSessionFull(ctx, in.ID)
 	if err != nil {
@@ -1197,6 +1257,11 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	if s.engine != nil {
+		// Restoring changes no source file, so fallback polling must reconcile
+		// to read a transcript that changed while the session was in the trash.
+		s.engine.ForgetPollScans()
+	}
 	if s.broadcaster != nil {
 		s.broadcaster.Emit("sessions")
 	}
@@ -1391,11 +1456,7 @@ func (s *Server) humaWatchSession(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)
 		defer heartbeat.Stop()
-		if t, err := s.db.GetSessionTiming(streamCtx, in.ID); err != nil {
-			log.Printf("session timing initial: %v", err)
-		} else if t != nil {
-			stream.SendJSON("session.timing", t)
-		}
+		s.sendSessionFrame(streamCtx, stream, in.ID, false, false)
 		for {
 			select {
 			case <-streamCtx.Done():
@@ -1404,22 +1465,8 @@ func (s *Server) humaWatchSession(
 				if !ok {
 					return
 				}
-				if identity, ok := s.db.(db.SessionWatchStateStore); ok {
-					state, e := identity.GetSessionWatchState(in.ID)
-					if e != nil {
-						return
-					}
-					if state.State != db.SessionWatchResolved {
-						stream.SendJSON("session.identity", state)
-						return
-					}
-					stream.SendJSON("session.identity", state)
-				}
-				stream.Send("session_updated", in.ID)
-				if t, err := s.db.GetSessionTiming(streamCtx, in.ID); err != nil {
-					log.Printf("session timing update: %v", err)
-				} else if t != nil {
-					stream.SendJSON("session.timing", t)
+				if !s.sendSessionFrame(streamCtx, stream, in.ID, true, false) {
+					return
 				}
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().UTC().Format(time.RFC3339))
@@ -1428,15 +1475,89 @@ func (s *Server) humaWatchSession(
 	}}, nil
 }
 
-func (s *Server) humaEvents(
-	_ context.Context,
-	_ *emptyInput,
-) (*huma.StreamResponse, error) {
-	if s.broadcaster == nil {
+func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update, versioned bool) bool {
+	if update {
+		identityFailed := false
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				if !versioned {
+					return false
+				}
+				identityFailed = true
+			} else if !stream.SendJSON("session.identity", state) {
+				return false
+			} else if state.State != db.SessionWatchResolved {
+				return true
+			}
+		}
+		marker := ""
+		if versioned && !identityFailed {
+			marker = s.sessionMarker(ctx, id)
+		}
+		if versioned && !stream.SendWithID(marker, "session_updated", id) {
+			return false
+		}
+		if !versioned && !stream.Send("session_updated", id) {
+			return false
+		}
+	}
+	if t, err := s.db.GetSessionTiming(ctx, id); err != nil {
+		log.Printf("session timing: %v", err)
+	} else if t != nil {
+		stream.SendJSON("session.timing", t)
+	}
+	return true
+}
+
+func (s *Server) sessionMarker(ctx context.Context, id string) string {
+	marker, err := s.db.GetSessionTreeMarker(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return marker.Marker
+}
+
+type eventsInput struct {
+	Sessions []string `query:"session,explode" doc:"Session IDs to watch; repeat for each session"`
+}
+
+func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
+	if s.broadcaster == nil && len(in.Sessions) == 0 {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusServiceUnavailable, "events not available in this mode"),
 			http.Header{"Retry-After": []string{"300"}},
 		)
+	}
+	var found, missing []string
+	for _, id := range in.Sessions {
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, serverError(err)
+				}
+				log.Printf("session watch state %q: %v", id, err)
+			}
+			if err == nil && state.State != db.SessionWatchResolved {
+				missing = append(missing, id)
+				continue
+			}
+		}
+		sess, err := s.sessions.Get(ctx, id)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, serverError(err)
+			}
+			log.Printf("session watch %q: %v", id, err)
+			found = append(found, id)
+			continue
+		}
+		if sess == nil {
+			missing = append(missing, id)
+			continue
+		}
+		found = append(found, id)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -1445,8 +1566,49 @@ func (s *Server) humaEvents(
 				apiResponseError{Message: "streaming not supported"})
 			return
 		}
-		sub, unsub := s.broadcaster.Subscribe()
-		defer unsub()
+		ctx, cancel := context.WithCancel(hctx.Context())
+		defer cancel()
+		var sub <-chan Event
+		if s.broadcaster != nil {
+			var unsub func()
+			sub, unsub = s.broadcaster.Subscribe()
+			defer unsub()
+			defer s.holdSyncInterval(syncpkg.LiveInterval)()
+		}
+		type tick struct {
+			id     string
+			closed bool
+		}
+		ticks := make(chan tick)
+		for _, id := range missing {
+			if !stream.Send("session_missing", id) {
+				return
+			}
+		}
+		for _, id := range found {
+			updates := s.sessionTreeMonitor(ctx, id)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case _, ok := <-updates:
+						select {
+						case ticks <- tick{id, !ok}:
+						case <-ctx.Done():
+							return
+						}
+						if !ok {
+							return
+						}
+					}
+				}
+			}()
+			if !stream.SendWithID(s.sessionMarker(ctx, id), "session_ready", id) {
+				return
+			}
+			s.sendSessionFrame(ctx, stream, id, false, true)
+		}
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}
@@ -1456,13 +1618,23 @@ func (s *Server) humaEvents(
 		defer heartbeat.Stop()
 		for {
 			select {
-			case <-hctx.Context().Done():
+			case <-ctx.Done():
 				return
 			case ev, ok := <-sub:
 				if !ok {
 					return
 				}
 				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
+			case t := <-ticks:
+				if t.closed {
+					if !stream.Send("session_missing", t.id) {
+						return
+					}
+					continue
+				}
+				if !s.sendSessionFrame(ctx, stream, t.id, true, true) {
+					return
+				}
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
 			}
@@ -1607,12 +1779,9 @@ func (s *Server) humaResumeSession(
 	ctx context.Context,
 	in *resumeSessionInput,
 ) (*jsonOutput[resumeResponse], error) {
-	session, err := s.db.GetSessionFull(ctx, in.ID)
+	session, err := s.resumeSession(ctx, in.ID)
 	if err != nil {
-		return nil, internalError("resume: session lookup failed", err)
-	}
-	if session == nil || session.DeletedAt != nil {
-		return nil, apiError(http.StatusNotFound, "session not found")
+		return nil, err
 	}
 	req := in.Body
 	host, rawID := parser.StripHostPrefix(in.ID)

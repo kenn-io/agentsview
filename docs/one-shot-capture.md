@@ -5,15 +5,15 @@ description: Capture exact usage from one supported non-interactive agent execut
 
 # One-shot CI capture
 
-`agentsview capture` is the automation-only path for measuring one exact agent
-execution. It runs without the AgentsView daemon, web server, web interface,
-watchers, or any listening socket. It does not replace the normal interactive
-AgentsView experience.
+Use `agentsview capture` in CI and other automated runs to measure exact usage
+from one non-interactive agent execution. It runs without the AgentsView daemon,
+web server, web interface, watchers, or any listening socket, and it does not
+replace the normal interactive AgentsView experience.
 
-The first schema version supports these direct producer commands:
+Schema version 1 supports two direct producer commands:
 
-- `claude -p` or `claude --print`;
-- `codex exec --json`.
+- `claude -p` or `claude --print`
+- `codex exec --json`
 
 Other non-interactive producers need a future adapter that can prove exact
 session identity and finality. AgentsView deliberately does not guess from a
@@ -21,40 +21,40 @@ process ID, the newest transcript, or a time-window scan.
 
 On Windows, the producer command must resolve to a native executable. AgentsView
 rejects `.cmd` and `.bat` shims because they cannot preserve an untrusted
-argument boundary safely. The producer runs in its own console process group; an
-interrupt is relayed to that group, and a failed relay or a repeated interrupt
-terminates a producer that remains blocked.
+argument boundary safely. AgentsView runs the producer in its own console
+process group, relays an interrupt to that group, and terminates a producer that
+remains blocked if a relay fails or a second interrupt arrives.
 
-Each supported command must start a fresh provider session. Claude continuation,
-resume, fork, pull-request resume, and teleport options are rejected. Codex
-`exec resume` is also rejected because its transcript includes usage from work
+Each supported command must start a fresh provider session. AgentsView rejects
+Claude continuation, resume, fork, pull-request resume, and teleport options. It
+also rejects Codex `exec resume` because its transcript includes usage from work
 that happened before the captured execution.
 
 Claude sources default to `${CLAUDE_CONFIG_DIR}/projects` or
-`~/.claude/projects`; Codex sources default to `${CODEX_HOME}/sessions` or
-`~/.codex/sessions`. Use `--provider-root` when the producer writes elsewhere.
+`~/.claude/projects`, and Codex sources default to `${CODEX_HOME}/sessions` or
+`~/.codex/sessions`. If the producer writes elsewhere, pass `--provider-root`.
 The command reads only bounded custom-model pricing from AgentsView
-`config.toml`; it does not resolve or open the normal AgentsView archive.
+`config.toml` and does not resolve or open the normal AgentsView archive.
 
-Every capture copies its exact provider JSONL into `<capture-dir>/sources/`
-before accounting. AgentsView ingests only those copies. This makes
-`capture report` independent of the original Claude or Codex archive after the
-copy is complete.
+Before accounting, each capture copies its exact provider JSONL into
+`<capture-dir>/sources/`, and AgentsView ingests only those copies. Once the
+copy finishes, `capture report` does not depend on the original Claude or Codex
+archive.
 
-`capture run` requires the final capture directory not to exist. It creates that
-directory exclusively and secures it before writing state. The result file must
-be outside the capture directory; use `--result -` with `capture report` when
-standard output is preferred. Put capture state under a private workflow
-directory or the runner's protected temporary directory. AgentsView rejects a
-location whose parent chain allows another account to replace the capture
-directory.
+`capture run` requires that the final capture directory does not exist yet. It
+creates that directory exclusively and secures it before writing state. Put the
+result file outside the capture directory, or pass `--result -` to
+`capture report` if you want standard output. Store capture state under a
+private workflow directory or the runner's protected temporary directory.
+AgentsView rejects any location whose parent chain lets another account replace
+the capture directory.
 
 ## GitHub Actions example
 
-This job asks Claude Code to diagnose a generic build failure. The producer's
-standard output and standard error remain ordinary live job output. The usage
-result goes to a separate file and is uploaded with the standard artifact
-action.
+This workflow job asks Claude Code to diagnose a generic build failure. The
+producer's standard output and standard error stream to the live job log as
+usual, while the usage result goes to a separate file for upload with the
+standard artifact action.
 
 ```yaml
 name: diagnose-build
@@ -161,28 +161,27 @@ jobs:
         run: exit "${{ steps.recover.outputs.status }}"
 ```
 
-Use the install method and version pin required by your organization. The
-occurrence-specific paths prevent another workflow attempt from supplying stale
-state. Recovery changes the saved status only after it successfully replaces a
-missing or failed report; a complete initial report therefore cannot hide a
-post-start stream error. The example uploads usage and transcripts as separate
-artifacts because they have different disclosure and retention needs. Removing
-the capture directory after successful export deletes its source copies and
-recovery database from the runner. Do not remove it before the final
-`capture report` attempt.
+Use the install method and version pin your organization requires. Including the
+occurrence in the directory and file paths keeps another workflow attempt from
+supplying stale state. Recovery updates the saved status only after it successfully replaces
+a missing or failed report, so a complete initial report cannot hide a
+post-start stream error. Usage and transcripts go into separate artifacts because they have different
+disclosure and retention needs. Removing the capture directory after a
+successful export deletes its source copies and recovery database from the
+runner. Do not remove it before the final `capture report` attempt.
 
-`capture run` does not impose a runtime timeout on Claude or Codex. Use the
+`capture run` does not impose a runtime timeout on Claude or Codex; set the
 workflow's `timeout-minutes` for that policy. AgentsView applies only its
-bounded post-exit finalization timeout. That deadline covers source polling,
-copying, isolated database setup, ingestion, usage-row sorting and
-deduplication, pricing, token projection, shutdown, and verification. If these
-flags are customized, `--quiescence` must be shorter than
-`--finalization-timeout`; invalid timing bounds are rejected before the producer
-starts and cannot become recovery state.
+bounded post-exit finalization timeout, which covers source polling, copying,
+isolated database setup, ingestion, usage-row sorting and deduplication,
+pricing, token projection, shutdown, and verification. If you customize these
+flags, keep `--quiescence` shorter than `--finalization-timeout`. AgentsView
+rejects invalid timing bounds before starting the producer, and they cannot
+become recovery state.
 
 ## Codex
 
-Codex must be in JSON mode so its `thread.started.thread_id` is a supported
+Run Codex in JSON mode so `thread.started.thread_id` provides a supported
 machine contract:
 
 ```bash
@@ -194,28 +193,28 @@ agentsview capture run \
   -- codex exec --json "Diagnose the build failure."
 ```
 
-The JSONL stream is copied byte-for-byte to standard output. AgentsView does not
-parse formatted stderr and does not add `--json` itself. Schema version 1
-reports Codex cache-write and reasoning-output categories as unavailable, not
-zero. Older Codex releases do not record cache writes, so a zero cannot be
-proven; `input_tokens` still includes Codex cache writes. The canonical parser
-does not retain reasoning-output tokens. Every Codex v1
-result therefore has `assurance.state: partial`; this is expected, not a
-reporting failure.
+AgentsView copies the JSONL stream byte-for-byte to standard output. It does not
+parse formatted stderr and does not add `--json` for you. In schema version 1,
+Codex cache-write and reasoning-output categories are reported as unavailable
+rather than zero. Older Codex releases do not record cache writes, so zero
+cannot be proven, and `input_tokens` still includes Codex cache writes. The
+canonical parser also does not retain reasoning-output tokens. As a result,
+every Codex v1 result has `assurance.state: partial`, which is expected rather
+than a reporting failure.
 
-The initial adapter requires `exec` immediately after the resolved executable.
-For example, use `codex exec -c key=value --json ...`; a global-option form such
-as `codex -c key=value exec --json ...` is unsupported in schema version 1.
-`codex exec resume` is not a one-shot capture input.
+The initial adapter requires `exec` right after the resolved executable. Pass
+flags after `exec`, such as `codex exec -c key=value --json ...`. A
+global-option form such as `codex -c key=value exec --json ...` is unsupported in
+schema version 1, and `codex exec resume` is not a one-shot capture input.
 
 ## Claude wrappers and standard input
 
-For a direct `claude` executable, AgentsView creates a UUID and passes
-`--session-id` to the child. It also accepts a UUID already present in the
-Claude arguments.
+When you run the `claude` executable directly, AgentsView generates a UUID and
+passes `--session-id` to the child. It also accepts a UUID already present in
+the Claude arguments.
 
-If an intervening script is required, make it pass a caller-chosen UUID to
-Claude, then supply the same UUID with `--session-id` to `capture run`:
+If you need an intervening script, make it pass a caller-chosen UUID to Claude,
+then pass the same UUID to `capture run` with `--session-id`:
 
 ```bash
 session_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
@@ -230,23 +229,22 @@ agentsview capture run \
   -- ./run-claude-ci.sh "${session_id}"
 ```
 
-The script must invoke non-interactive Claude with that exact `--session-id`.
-`--claude-work-dir` is required for wrappers and must name the directory from
-which the script actually starts Claude, after any directory changes. AgentsView
-cannot verify arguments hidden inside the script; a wrong UUID or working
-directory ends as `no_session` rather than selecting a nearby transcript. The
-script must start a fresh session; it must not continue, resume, or fork prior
-work.
+Your script must invoke non-interactive Claude with that exact `--session-id`
+and start a fresh session rather than continuing, resuming, or forking prior
+work. Wrappers also require `--claude-work-dir`, which must name the directory
+from which the script actually starts Claude after any directory changes.
+AgentsView cannot verify arguments hidden inside the script. A wrong UUID or
+working directory ends as `no_session` instead of picking a nearby transcript.
 
-The UUID must use lowercase hexadecimal and be new: `capture run` rejects
+The UUID must be lowercase hexadecimal and unused: `capture run` rejects
 uppercase UUIDs, an existing exact root transcript, or a delegated-session tree
-before it starts the producer. AgentsView also reserves the provider root and
-UUID through finalization, so concurrent captures cannot claim the same
-deterministic transcript. The provider root retains one owner-private
-reservation registry lock; active per-session entries are removed when
-finalization ends and contain no transcript content.
+before starting the producer. AgentsView also reserves the provider root and
+UUID through finalization so concurrent captures cannot claim the same
+deterministic transcript. The provider root keeps one owner-private reservation
+registry lock, and AgentsView removes active per-session entries when
+finalization ends; those entries contain no transcript content.
 
-Standard input is inherited unchanged, so prompt-on-stdin works:
+The child inherits standard input unchanged, so piping a prompt on stdin works:
 
 ```bash
 printf '%s\n' 'Diagnose the build failure.' | \
@@ -260,25 +258,27 @@ printf '%s\n' 'Diagnose the build failure.' | \
 
 ## Outcomes and retries
 
-Child execution and reporting are separate in the result:
+The result tracks child execution and reporting separately:
 
 - If reporting succeeds, `capture run` exits with the child status.
-- A failed child can still have complete or partial usage.
-- If the child succeeds but reporting fails, the command exits with status `70`.
-- If both fail, the command preserves the child's status and records the
+- A failed child can still produce complete or partial usage.
+- If the child succeeds but reporting fails, `capture run` exits with status
+  `70`.
+- If both fail, `capture run` preserves the child's status and records the
   reporting failure in the result.
 - A standard-stream error after the child starts does not become
   `child_start_failed`. AgentsView preserves the child outcome, attempts usage
   finalization, and surfaces the stream error from the command.
-- `SIGINT` and `SIGTERM` are forwarded to the child. AgentsView then records the
-  signal and attempts the bounded finalization pass.
+- AgentsView forwards `SIGINT` and `SIGTERM` to the child, records the signal,
+  and attempts the bounded finalization pass.
 
 Once the wrapper starts, it writes a result even when reporting fails. A missing
-result means the wrapper itself stopped before it could report. Retry from the
-same private capture directory without rerunning the producer. This also covers
-a signal that arrives after the child exits but before the bounded finalization
-pass writes the result. Once `sources/bundle.json` is complete, recovery does
-not need the producer's home directory or live archive:
+result means the wrapper itself stopped before it could report. To retry without
+rerunning the producer, run `capture report` against the same private capture
+directory. This also covers a signal that arrives after the child exits and
+before the bounded finalization pass writes the result. Once
+`sources/bundle.json` is complete, recovery does not need the producer's home
+directory or live archive:
 
 ```bash
 agentsview capture report \
@@ -286,14 +286,14 @@ agentsview capture report \
   --result ./usage-build-42.json
 ```
 
-`capture run` removes any existing result file before it starts the producer.
-Consumers must still verify that `occurrence_id` matches the requested
-occurrence before accepting or uploading a result.
+`capture run` removes any existing result file before starting the producer.
+Consumers must still check that `occurrence_id` matches the requested occurrence
+before accepting or uploading a result.
 
-A completed capture is sealed. Replaying it emits the same bytes. Failed
+A completed capture is sealed, and replaying it emits the same bytes. Failed
 recovery attempts emit and preserve the first failure envelope; only a
 reporting-complete retry replaces and seals it. Running a new producer in a
-directory that already contains an occurrence is an explicit conflict; use
+directory that already holds an occurrence is an explicit conflict. Use
 `capture report` instead. The caller-supplied occurrence ID is opaque
 correlation data, not a person, organization, or ownership label.
 
@@ -315,30 +315,30 @@ The result's `reporting.reason` is a closed value:
 | `ingest_failed`           | Exact-path parsing or isolated SQLite accounting failed                                                                   | Keep the capture directory and report the producer and AgentsView versions                        |
 
 Failure envelopes never contain transcript text, prompts, responses, source
-paths, environment values, or credentials. The capture directory contains the
-provider JSONL, parsed message content in `capture.db`, and local source paths
-in its private manifest. Treat the entire directory as sensitive diagnostic
-state. AgentsView uses owner-only mode bits on Unix and a protected Windows
+paths, environment values, or credentials. The capture directory itself holds
+the provider JSONL, parsed message content in `capture.db`, and local source
+paths in its private manifest. Treat the whole directory as sensitive diagnostic
+state. AgentsView sets owner-only mode bits on Unix and a protected Windows
 access-control list limited to the current user, Local System, and local
 administrators. It also rejects replaceable parent directories and creates the
 isolated SQLite archive with owner-only permissions before opening it.
 
-The `sources/` subdirectory is independently uploadable. It contains the
+You can upload the `sources/` subdirectory on its own. It contains the
 provider-relative JSONL files and `bundle.json`, whose closed schema is
-`agentsview.one-shot-transcripts` version `1`. Each bundle entry associates a
+`agentsview.one-shot-transcripts` version `1`. Each bundle entry pairs a
 provider session ID with an `application/jsonl` raw-source reference containing
 a relative path, SHA-256 hash, and byte count. Claude subagent IDs use the
-provider's `agent-...` identity from the transcript filename; they are not
-UUIDs. Every captured Claude subagent contributes to usage even when an
-interrupted producer did not flush its parent-link record. Consumers must reject
-unknown bundle schema names, versions, fields, media types, unsafe paths, or
-mismatched hashes. The bundle contains transcript content and is not safe to
-publish with the usage JSON. AgentsView keeps `sources/` after sealing and never
-removes it automatically.
+provider's `agent-...` identity from the transcript filename rather than UUIDs,
+and every captured Claude subagent contributes to usage even when an interrupted
+producer did not flush its parent-link record. Consumers must reject unknown
+bundle schema names, versions, fields, media types, unsafe paths, or mismatched
+hashes. The bundle contains transcript content and is not safe to publish with
+the usage JSON. AgentsView keeps `sources/` after sealing and never removes it
+automatically.
 
 To import an extracted bundle into the normal AgentsView archive later, point
 the matching provider directory setting at the provider root inside `sources/`
-and run the ordinary sync command. Do not point it at `sources/` itself:
+rather than `sources/` itself:
 
 ```toml
 # Use the entry that matches the bundle's provider.
@@ -348,28 +348,29 @@ dirs = ["/path/to/sources/claude/projects"]
 dirs = ["/path/to/sources/codex/sessions"]
 ```
 
-Then run `agentsview source sync`. This optional import uses the normal AgentsView
-experience; one-shot capture and `capture report` do not require it or start its
-services.
+Then run `agentsview source sync`. This optional import uses the normal
+AgentsView experience; one-shot capture and `capture report` do not require it
+or start its services.
 
-Preflight errors happen before the wrapper starts and therefore do not create a
-result. These include a missing or oversized occurrence ID, an unsupported
+Preflight errors happen before the wrapper starts, so they do not create a
+result. They include a missing or oversized occurrence ID, an unsupported
 provider invocation or continuation mode, an invalid or previously used explicit
 UUID, a result path inside capture state, and any pre-existing capture
-directory. The result path must also be outside the provider root. The provider
-root cannot be the capture directory or a child of it. Correct a malformed
-invocation. For an existing occurrence, use `capture report`; never delete its
-state merely to turn a retry into a second occurrence. Recovery requires a
+directory. The result path must also sit outside the provider root, and the
+provider root cannot be the capture directory or a child of it. If an invocation
+is malformed, fix it and rerun. For an existing occurrence, run
+`capture report` instead of deleting its state to turn a retry into a second
+occurrence. Before AgentsView changes or cleans recovery state, it requires a
 current-user-owned directory with a valid manifest and only capture-owned
-top-level entries before AgentsView changes or cleans state.
+top-level entries.
 
 ## Result contract
 
-The JSON envelope has schema name `agentsview.one-shot-usage` and version `1`.
+The JSON envelope uses schema name `agentsview.one-shot-usage` and version `1`.
 Consumers must reject unknown schema names, versions, and closed enum values. A
-present token field with value zero is proven zero. An omitted field is
+present token field with value zero is proven zero, while an omitted field is
 unavailable. Money uses AgentsView's exact integer-microdollar object and a
-separate `USD` currency; no floating-point monetary field is emitted.
+separate `USD` currency, with no floating-point monetary field.
 
 The envelope includes exact root and delegated provider session IDs,
 provider-derived timestamps when available, child exit or signal outcome,
@@ -385,7 +386,7 @@ adapter is proven, `partial` when useful facts are present with a named gap, and
 `unfinished_session`, `malformed_transcript`, `cost_unavailable`,
 `usage_unavailable`, `codex_cache_write_unavailable`,
 `reasoning_output_unavailable`, `unpriced_model`, and `metadata_truncated`.
-These are not reporting failures: consumers may use the proven fields while
+These are not reporting failures. Consumers may use the proven fields while
 preserving the stated limitation.
 
 A quiescent transcript can be `unfinished_session` after the producer exits, for
@@ -395,5 +396,5 @@ authoritative complete cost exists; omitted cost is never silently treated as
 zero. `malformed_transcript` means at least one source line could not be parsed,
 so the visible usage may undercount the producer's total. When stored output
 includes messages not represented by canonical usage rows, AgentsView reports
-that output but omits input and cache fields and adds `usage_unavailable` so
+that output, omits input and cache fields, and adds `usage_unavailable` so
 categories with different provenance are not mixed.

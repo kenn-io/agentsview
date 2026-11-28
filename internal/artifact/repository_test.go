@@ -39,9 +39,9 @@ func TestOpenRepositorySupportsDocbankSQLiteDrivers(t *testing.T) {
 			t.Parallel()
 			repository, err := openRepository(t.Context(), t.TempDir(), driver)
 			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, repository.Close()) })
 			result := createCheckpointBody(t, repository.Content(), 1, []byte("driver parity"))
 			assert.True(t, result.Created)
-			require.NoError(t, repository.Close())
 		})
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/fsevents"
+	"go.kenn.io/agentsview/internal/parser"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -357,8 +358,6 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 		logicalRoots   int
 		shallowRoots   int
 		shallowStreams int
-		appendPaths    int
-		appendRenames  int
 	}
 	var observations []observation
 	for _, tc := range []struct {
@@ -458,12 +457,14 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			assert.False(t, appendBatch.FullSync)
 			assert.Empty(t, appendBatch.ReconcileRoots)
 			assert.Empty(t, appendBatch.Renames)
-			assert.Equal(t, []string{changedPath}, appendBatch.Paths)
-			got.appendPaths = len(appendBatch.Paths)
-			got.appendRenames = len(appendBatch.Renames)
+			// Seeing a marker once does not consume all its native notifications.
+			// Count every path this phase wrote, including a repeated marker,
+			// while still rejecting any unchanged file in the cold archive.
+			assert.Subset(t, []string{barrierPath, changedPath}, appendBatch.Paths)
+			assert.LessOrEqual(t, len(appendBatch.Paths), 2)
 
-			// Establish an after-close delivery barrier so any duplicate append
-			// notification cannot be mistaken for the atomic replacement below.
+			// Wait for post-close delivery before replacing the file. The marker
+			// itself may be reported again alongside the replacement.
 			closedBarrier := filepath.Join(root, ".append-closed")
 			require.NoError(t, os.WriteFile(closedBarrier, []byte("closed"), 0o600))
 			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
@@ -491,9 +492,12 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			// in both Paths and Renames; their combined count depends on native
 			// coalescing, not archive size. Bound the affected paths instead.
 			allowedPaths := []string{tempPath, changedPath}
-			assert.Subset(t, allowedPaths, replacementBatch.Paths,
+			// Both delivery markers are real writes under the watched root.
+			// macOS may repeat them in a later batch, so include them in the
+			// changed-path bound without allowing unrelated cold archive paths.
+			assert.Subset(t, []string{barrierPath, closedBarrier, tempPath, changedPath}, replacementBatch.Paths,
 				"atomic replacement must not include cold archive paths")
-			assert.LessOrEqual(t, len(replacementBatch.Paths), 2)
+			assert.LessOrEqual(t, len(replacementBatch.Paths), 4)
 			assert.LessOrEqual(t, len(replacementBatch.Renames), 2)
 			for _, rename := range replacementBatch.Renames {
 				assert.Contains(t, allowedPaths, rename.Path,
@@ -523,7 +527,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 	}
 	require.Len(t, observations, 2)
 	assert.Equal(t, observations[0], observations[1],
-		"recursive native state and append work must not scale with cold files or directories")
+		"recursive native state must not scale with cold files or directories")
 }
 
 func TestDarwinWatcherDirectoryRenameCarriesFullSyncMetadata(t *testing.T) {
@@ -754,6 +758,115 @@ func TestDarwinWatcherMostSpecificRecursiveRootOwnsRename(t *testing.T) {
 	assert.Equal(t, backendEvent{
 		Path: renamedPath, Root: nested, Op: backendOpRename, ItemType: backendItemFile,
 	}, sink.event)
+}
+
+type recordingDirectSink struct {
+	events     []backendEvent
+	meaningful bool
+}
+
+func (s *recordingDirectSink) TryAccumulate(fn func(func(backendEvent) bool) bool) bool {
+	s.meaningful = fn(func(ev backendEvent) bool {
+		s.events = append(s.events, ev)
+		return true
+	})
+	return true
+}
+
+func (*recordingDirectSink) RetainAuthoritative(backendLifecycleToken) {}
+
+type noopDarwinStream struct{}
+
+func (noopDarwinStream) Start() error { return nil }
+func (noopDarwinStream) Close() error { return nil }
+
+func TestDarwinWatchBackendConsumeFSEventsEnforcesMaxDepthAndExtraDirectories(t *testing.T) {
+	const id = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	require.NoError(t, os.MkdirAll(container, 0o755))
+
+	provider, ok := parser.NewProvider(parser.AgentAntigravityCLI, parser.ProviderConfig{
+		Roots: []string{container},
+	})
+	require.True(t, ok)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+
+	sink := &recordingDirectSink{}
+	var captured func([]fsevents.Event)
+	backend := &darwinWatchBackend{
+		sink:    sink,
+		streams: make(map[string]darwinStream),
+		logical: make(map[string]*darwinLogicalRoot),
+		shallow: make(map[string]int),
+		newStream: func(_ string, cb func([]fsevents.Event)) (darwinStream, error) {
+			captured = cb
+			return noopDarwinStream{}, nil
+		},
+	}
+	backend.nativeOpen.Store(true)
+	backend.roots.Store(&darwinRootSnapshot{})
+
+	results := backend.RegisterRoots([]WatchRoot{{
+		Path:             plan.Roots[0].Path,
+		Recursive:        plan.Roots[0].Recursive,
+		MaxDepth:         plan.Roots[0].MaxDepth,
+		ExtraDirectories: plan.Roots[0].ExtraDirectories,
+		Exists:           true,
+	}}, 1)
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	require.NotNil(t, captured)
+
+	instanceDir := filepath.Join(container, "insthash")
+	acp := filepath.Join(instanceDir, "antigravity-acp")
+	brainSession := filepath.Join(acp, "brain", id)
+	generated := filepath.Join(brainSession, ".system_generated")
+	logsDir := filepath.Join(generated, "logs")
+
+	kept := []fsevents.Event{
+		{Path: instanceDir, Flags: fseventFlagItemCreated | fseventFlagItemIsDir},
+		{Path: filepath.Join(acp, "conversations", id+".db-wal"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "plan.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "plan.md.metadata.json"), Flags: fseventFlagItemRemoved | fseventFlagItemIsFile},
+		{Path: filepath.Join(logsDir, "transcript.jsonl"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+	}
+	dropped := []fsevents.Event{
+		{Path: filepath.Join(acp, "log"), Flags: fseventFlagItemCreated | fseventFlagItemIsDir},
+		{Path: filepath.Join(acp, "log", "agent.log"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(acp, "builtin", "skills", "guide.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "scratch", "note.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(generated, "noise.txt"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(generated, "steps", "001.json"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(logsDir, "chunks", "001.bin"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+	}
+
+	// Excluded subtree events alone must not mark delivery meaningful.
+	captured(dropped)
+	assert.False(t, sink.meaningful)
+	assert.Empty(t, sink.events)
+
+	// Mixed delivery forwards only the permitted instance, conversation,
+	// artifact, and transcript events.
+	captured(append(append([]fsevents.Event(nil), dropped...), kept...))
+	assert.True(t, sink.meaningful)
+	gotPaths := make([]string, 0, len(sink.events))
+	for _, ev := range sink.events {
+		gotPaths = append(gotPaths, ev.Path)
+	}
+	wantPaths := make([]string, 0, len(kept))
+	for _, ev := range kept {
+		wantPaths = append(wantPaths, filepath.Clean(ev.Path))
+	}
+	assert.Equal(t, wantPaths, gotPaths)
+
+	// Created-subtree filtering honors the same bounds.
+	assert.True(t, backend.includeCreatedSubtreePath(container, filepath.Join(brainSession, "plan.md"), false))
+	assert.True(t, backend.includeCreatedSubtreePath(container, filepath.Join(logsDir, "transcript.jsonl"), false))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(acp, "log"), true))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(acp, "log", "agent.log"), false))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(generated, "steps"), true))
 }
 
 func TestDarwinWatcherNestedShallowRootDoesNotShadowRecursiveStream(t *testing.T) {
@@ -1295,6 +1408,7 @@ func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
+	rootOpen := backend.logical[root].open.Load
 	watcher.Start()
 
 	first := filepath.Join(root, "first.json")
@@ -1311,6 +1425,9 @@ func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
+	// The callback publishes the batch before recovery acknowledges it and
+	// reopens path delivery. Wait before requiring an ordinary file event.
+	require.Eventually(t, rootOpen, 5*time.Second, time.Millisecond)
 	second := filepath.Join(root, "second.json")
 	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
@@ -2639,8 +2756,11 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	backend.retryInitial = time.Millisecond
-	backend.retryMax = 5 * time.Millisecond
+	// Open fallback schedules native recovery after retryInitial, and
+	// recovery can try the ancestor again. Keep that retry out of this
+	// test's lifetime so the attempt count below sees only the failed try.
+	backend.retryInitial = time.Hour
+	backend.retryMax = time.Hour
 	var attempts atomic.Int32
 	backend.addAncestor = func(path string) error {
 		if path == intermediate && attempts.Add(1) == 1 {
@@ -2670,9 +2790,11 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 	require.Equal(t, RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
-	watcher.Start()
+	// Create intermediate before Start so Start's single startup lifecycle
+	// wake drives the advance attempt; calling signalLifecycle() after Start
+	// can deliver a second wake once fallback is open and re-run addAncestor.
 	require.NoError(t, os.Mkdir(intermediate, 0o700))
-	backend.signalLifecycle()
+	watcher.Start()
 
 	assert.Equal(t, []string{ancestor}, requireReceiveWithin(t, coverage, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {

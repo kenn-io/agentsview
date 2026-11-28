@@ -85,10 +85,8 @@ type usageParityAgentBreakdown struct {
 
 func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_usage_facts_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
@@ -180,10 +178,8 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 
 func TestUsageCSVFiltersParity(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_usage_csv_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
 	syncer, err := New(t.Context(), pgURL, schema, local, "host-a", true, storage.PusherOptions{})
@@ -224,10 +220,8 @@ func TestUsageCSVFiltersParity(t *testing.T) {
 
 func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_usage_fractional_rounding_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
@@ -580,10 +574,8 @@ func captureUsageParitySession(
 // A day before a skipped local midnight keeps its last hour.
 func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_usage_matching_day_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	message := func(sessionID, ts string) db.Message {

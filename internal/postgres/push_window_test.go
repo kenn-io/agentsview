@@ -11,7 +11,7 @@ import (
 )
 
 // The PG push selects candidates with the same unbounded-above
-// ListSessionsForMirrorWindow the DuckDB mirror push uses (Backend Parity).
+// ListSessionsForMirrorWindow the ClickHouse push uses (Backend Parity).
 // The tests below pin the two behaviors the old bounded
 // ListSessionsModifiedBetween(lastPush, now) selection got wrong:
 //

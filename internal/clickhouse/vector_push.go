@@ -24,6 +24,10 @@ import (
 // between progress reports; every vector batch flush also reports.
 const vectorProgressStride = 2000
 
+// usageOnlyVectorsReason explains why a usage-only archive's push sends no
+// vectors.
+const usageOnlyVectorsReason = "usage-only archive keeps no vectors"
+
 // vectorCompleteMarker is the vector_push_state session_id (never a real
 // session id) recording this archive's clean generation-wide pass.
 const vectorCompleteMarker = ""
@@ -59,7 +63,7 @@ func (s *Sync) pushVectors(
 ) (storage.VectorPushResult, error) {
 	var res storage.VectorPushResult
 	if s.local.ArchiveContent().UsageOnly() {
-		res.Skipped, res.SkippedReason = true, "usage-only archive keeps no vectors"
+		res.Skipped, res.SkippedReason = true, usageOnlyVectorsReason
 		return res, s.clearUsageOnlyVectors(ctx)
 	}
 	if s.vectorSource == nil {

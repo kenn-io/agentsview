@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { Button } from "@kenn-io/kit-ui";
+  import { ChevronUpIcon } from "../../icons.js";
+  import { m } from "../../i18n/index.js";
   import { onDestroy, untrack } from "svelte";
   import type { Session } from "../../api/types.js";
   import {
@@ -18,9 +21,10 @@
   // stops every read and forgets the pacing state.
   interface Props {
     session: Session;
+    onclose: () => void;
   }
 
-  let { session }: Props = $props();
+  let { session, onclose }: Props = $props();
 
   let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
   let toolSequencesLoading = $state(false);
@@ -128,7 +132,12 @@
   }
 </script>
 
-<SignalPanel {session} />
+{#snippet closeAction()}
+  <Button size="sm" label={m.session_diagnostics_hide()} onclick={onclose}>
+    <ChevronUpIcon size="14" aria-hidden="true" />
+  </Button>
+{/snippet}
+<SignalPanel {session} headerActions={closeAction} />
 <ToolSequencesPanel
   errorTelemetryKind="session"
   data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}

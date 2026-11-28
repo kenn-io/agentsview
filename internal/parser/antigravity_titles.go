@@ -30,15 +30,41 @@ func AntigravitySessionRoot(path string) (string, bool) {
 	return "", false
 }
 
+// AntigravityCLISessionRoot returns the Antigravity CLI root that owns a
+// stored conversation path, even after it was deleted.
+func AntigravityCLISessionRoot(path string) (string, bool) {
+	path = filepath.Clean(path)
+	root := filepath.Dir(filepath.Dir(path))
+	if _, ok := antigravityCLISessionIDForPath(root, path); ok {
+		return root, true
+	}
+	return "", false
+}
+
+// AntigravityCLITitleStoreOwner reports whether store is the
+// conversation_summaries.db of root or of an instance beneath root.
+func AntigravityCLITitleStoreOwner(root, store string) bool {
+	cleanRoot := filepath.Clean(root)
+	cleanStore := filepath.Clean(store)
+	if filepath.Base(cleanStore) != AntigravitySummariesDBName {
+		return false
+	}
+	if samePath(filepath.Dir(cleanStore), cleanRoot) {
+		return true
+	}
+	instanceRoot, ok := antigravityCLIContainerSpec.InstanceRootForPath(cleanRoot, cleanStore)
+	return ok && samePath(filepath.Dir(cleanStore), instanceRoot)
+}
+
 // applyAntigravityTitle sets the session's title from its root's store. An
 // unreadable store or missing entry leaves no title signal, so the stored
 // name survives the write.
-func applyAntigravityTitle(ctx context.Context, sess *ParsedSession, src antigravitySource) {
-	titles, _, err := AntigravityStoreTitles(ctx, filepath.Join(src.Root, AntigravitySummariesDBName))
+func applyAntigravityTitle(ctx context.Context, sess *ParsedSession, root, id string) {
+	titles, _, err := AntigravityStoreTitles(ctx, filepath.Join(root, AntigravitySummariesDBName))
 	if err != nil {
 		return
 	}
-	if title, ok := titles[src.ID]; ok {
+	if title, ok := titles[id]; ok {
 		sess.SessionName = title
 		sess.SessionNamePresent = true
 	}
@@ -49,5 +75,6 @@ func applyAntigravityTitle(ctx context.Context, sess *ParsedSession, src antigra
 func PreservesStoredSessionName(sess ParsedSession) bool {
 	return (sess.Agent == AgentCodex ||
 		sess.Agent == AgentAntigravity ||
+		sess.Agent == AgentAntigravityCLI ||
 		sess.Agent == AgentQoder) && !sess.SessionNamePresent
 }

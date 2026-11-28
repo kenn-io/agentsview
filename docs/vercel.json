@@ -288,12 +288,22 @@
     },
     {
       "source": "/duckdb/",
-      "destination": "/docs/duckdb/",
+      "destination": "/docs/clickhouse-sync/",
       "permanent": true
     },
     {
       "source": "/duckdb.md",
-      "destination": "/docs/duckdb.md",
+      "destination": "/docs/clickhouse-sync.md",
+      "permanent": true
+    },
+    {
+      "source": "/docs/duckdb/",
+      "destination": "/docs/clickhouse-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/docs/duckdb.md",
+      "destination": "/docs/clickhouse-sync.md",
       "permanent": true
     },
     {

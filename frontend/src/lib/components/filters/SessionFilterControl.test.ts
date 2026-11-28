@@ -102,6 +102,33 @@ it("shows a temporary machine failure, disables rows, and retries when reopened"
 });
 
 describe("SessionFilterControl agent options", () => {
+  it("refreshes agent and machine options when reopened after an import", async () => {
+    const agents = vi
+      .spyOn(MetadataService, "getApiV1Agents")
+      .mockResolvedValueOnce({ agents: [{ name: "claude", session_count: 1 }] })
+      .mockResolvedValueOnce({ agents: [{ name: "codex", session_count: 1 }] });
+    const machines = vi
+      .spyOn(MetadataService, "getApiV1Machines")
+      .mockResolvedValueOnce({ machines: ["old-machine"], machine_labels: {}, machine_aliases: {} })
+      .mockResolvedValueOnce({
+        machines: ["new-machine"],
+        machine_labels: {},
+        machine_aliases: {},
+      });
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    component = mount(SessionFilterControl, { target: document.body });
+
+    await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    await screen.findByRole("button", { name: "old-machine" });
+    await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+
+    expect(await screen.findByRole("button", { name: "new-machine" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Codex/ })).toBeTruthy();
+    expect(agents).toHaveBeenCalledTimes(2);
+    expect(machines).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps custom session labels under one base Claude option", () => {
     sessions.agents = [{ name: "claude", session_count: 2 }];
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

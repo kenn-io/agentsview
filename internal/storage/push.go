@@ -33,6 +33,12 @@ type PushOptions struct {
 	// when FullVectors is set or the push runs (or is promoted to run) full, so
 	// reset recovery and backfills keep generation-wide reconciliation.
 	ScopeVectorsToChangedSessions bool
+	// SkipIfUnchanged marks a push a watcher change triggered. When the
+	// archive holds nothing new for the replica, a ClickHouse push then
+	// writes nothing and leaves upkeep that does not depend on local
+	// changes, such as repricing and machine labels, to the next push
+	// without it. PostgreSQL ignores it.
+	SkipIfUnchanged bool
 	// LastReconciledVectorGeneration is the replica generation id the
 	// caller last reconciled generation-wide. When a scoped push resolves
 	// a different active generation id, the vector phase promotes itself
@@ -84,6 +90,11 @@ type PushResult struct {
 	// already held the local content, so the push rewrote only the session
 	// row. SessionsPushed includes them.
 	SessionRowsOnly int
+	// SessionsAppended counts pushed sessions that only grew, so the push
+	// kept the replica rows of their earlier messages and wrote the rest.
+	// SessionsPushed includes them, and MessagesPushed counts only the
+	// messages written.
+	SessionsAppended int
 	// CommitLinksOnly counts sessions whose commit links alone a push
 	// rewrote to bring them to the current format.
 	CommitLinksOnly int
@@ -185,7 +196,7 @@ func (e PushNotStartedError) Error() string { return e.Err.Error() }
 func (e PushNotStartedError) Unwrap() error { return e.Err }
 
 // PushPhaseRebuilt is the progress phase a daemon push reports as soon as its
-// sync has rebuilt the archive. Every mirror pushes in full after a rebuild,
+// sync has rebuilt the archive. Every replica pushes in full after a rebuild,
 // so a client whose stream ends after this report need not ask for --full
 // again. A client whose stream ends without it keeps its --full request.
 const PushPhaseRebuilt = "rebuilt"

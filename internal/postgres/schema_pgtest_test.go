@@ -30,7 +30,6 @@ func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -70,7 +69,6 @@ func TestSecretFindingsSchema(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -144,7 +142,6 @@ func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -186,7 +183,6 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -209,11 +205,34 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 	assert.True(t, exists, "idx_tool_calls_file_path index missing")
 }
 
+func TestToolCallsSubagentIndex(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
+	_, err = pg.ExecContext(ctx, `DROP INDEX idx_tool_calls_subagent`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
+
+	var definition string
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = $1 AND tablename = 'tool_calls'
+		  AND indexname = 'idx_tool_calls_subagent'`, schemaTestSchema).Scan(&definition))
+	assert.Contains(t, definition, "(subagent_session_id)")
+	assert.Contains(t, definition, "(subagent_session_id IS NOT NULL)")
+}
+
 func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -243,7 +262,7 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, 'seed');
+		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, '2026-01-01T00:00:00Z');
 
 		ALTER TABLE usage_events
 			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION
@@ -358,7 +377,6 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -448,7 +466,6 @@ func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -483,7 +500,6 @@ func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()

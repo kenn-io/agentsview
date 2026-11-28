@@ -23,7 +23,11 @@ type Memo[T any] struct {
 	// Without it only the slots are capped.
 	Size     func(T) int64
 	MaxBytes int64
-	bytes    int64
+	// Shrink returns a smaller equivalent copy of a slot and its size. Put
+	// shrinks new rows, then older slots oldest first, before evicting.
+	// It runs under the memo lock and should be cheap.
+	Shrink func(rows []T, size int64) ([]T, int64)
+	bytes  int64
 }
 
 type memoEntry[T any] struct {
@@ -65,6 +69,9 @@ func (m *Memo[T]) Put(slot, version string, rows []T) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removeLocked(slot)
+	if m.Size != nil && size > maxBytes && m.Shrink != nil {
+		rows, size = m.Shrink(slices.Clone(rows), size)
+	}
 	if m.Size != nil && size > maxBytes {
 		return
 	}
@@ -74,7 +81,20 @@ func (m *Memo[T]) Put(slot, version string, rows []T) {
 	m.entries[slot] = memoEntry[T]{version: version, rows: rows, bytes: size}
 	m.order = append(m.order, slot)
 	m.bytes += size
-	for len(m.order) > cmp.Or(m.Limit, memoLimit) || m.bytes > maxBytes {
+	for len(m.order) > cmp.Or(m.Limit, memoLimit) {
+		m.removeLocked(m.order[0])
+	}
+	for _, retained := range m.order {
+		if m.Shrink == nil || m.bytes <= maxBytes {
+			break
+		}
+		entry := m.entries[retained]
+		oldSize := entry.bytes
+		entry.rows, entry.bytes = m.Shrink(slices.Clone(entry.rows), entry.bytes)
+		m.bytes += entry.bytes - oldSize
+		m.entries[retained] = entry
+	}
+	for m.bytes > maxBytes {
 		m.removeLocked(m.order[0])
 	}
 }
@@ -98,4 +118,22 @@ func (m *Memo[T]) removeLocked(slot string) {
 	delete(m.entries, slot)
 	m.order = slices.DeleteFunc(m.order, func(s string) bool { return s == slot })
 	m.bytes -= entry.bytes
+}
+
+// MemoSnapshot is one retained slot at a point in time.
+type MemoSnapshot[T any] struct {
+	Slot, Version string
+	Rows          []T
+}
+
+// Snapshot copies the retained slots and their row slices.
+func (m *Memo[T]) Snapshot() []MemoSnapshot[T] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	slots := make([]MemoSnapshot[T], 0, len(m.order))
+	for _, slot := range m.order {
+		entry := m.entries[slot]
+		slots = append(slots, MemoSnapshot[T]{Slot: slot, Version: entry.version, Rows: slices.Clone(entry.rows)})
+	}
+	return slots
 }

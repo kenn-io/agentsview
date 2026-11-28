@@ -10,7 +10,7 @@ import (
 // have its frustration marker decided by a SQL store. Each is a symbol,
 // punctuation, format, or private-use rune: not a letter, not whitespace,
 // and unchanged by lowercasing. Over such a prompt the RE2 regular
-// expressions ClickHouse and DuckDB run (UTF-8, ASCII \b) see the same
+// expressions ClickHouse runs (UTF-8, ASCII \b) see the same
 // words, spaces, and boundaries IsFrustrationMarker sees in Go. Prompts
 // with any other non-ASCII rune go to Go. The set covers the dashes,
 // quotes, arrows, check marks, box drawing, and emoji common in prompts.

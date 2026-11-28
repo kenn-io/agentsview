@@ -1,7 +1,6 @@
 package db
 
 import (
-	"container/list"
 	"context"
 	"encoding/json/v2"
 	"fmt"
@@ -35,9 +34,9 @@ type activityMemoEntry struct {
 }
 
 func (e activityMemoEntry) bytes() int64 {
-	// 64 bytes stand in for the map entry and the list element.
+	// 96 bytes stand in for the map entry, list element, and retained key.
 	return int64(unsafe.Sizeof(e)) + int64(len(e.key.id)+len(e.version)) + e.runs.Bytes() +
-		e.counted.bytes() + 64
+		e.counted.bytes() + 96
 }
 
 // activityMemoCounted keeps a window's counted messages. A message stored
@@ -87,9 +86,7 @@ func (c *activityMemoCounted) bytes() int64 {
 type activityCandidateMemo struct {
 	mu         sync.Mutex
 	generation uint64
-	entries    map[activityMemoKey]*list.Element
-	order      list.List
-	bytes      int64
+	boundedLRU[activityMemoKey, activityMemoEntry]
 }
 
 func (m *activityCandidateMemo) swap(swap func()) {
@@ -97,9 +94,7 @@ func (m *activityCandidateMemo) swap(swap func()) {
 	defer m.mu.Unlock()
 	swap()
 	m.generation++
-	m.entries = nil
-	m.order.Init()
-	m.bytes = 0
+	m.reset()
 }
 
 func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemoEntry) {
@@ -108,27 +103,13 @@ func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemo
 	if generation != m.generation {
 		return
 	}
-	if m.entries == nil {
-		m.entries = make(map[activityMemoKey]*list.Element)
+	for _, entry := range entries {
+		m.remove(entry.key)
 	}
 	for _, entry := range entries {
-		if old := m.entries[entry.key]; old != nil {
-			m.bytes -= old.Value.(activityMemoEntry).bytes()
-			m.order.Remove(old)
-			delete(m.entries, entry.key)
-		}
+		m.add(entry.key, entry, entry.bytes())
 	}
-	for _, entry := range entries {
-		m.entries[entry.key] = m.order.PushBack(entry)
-		m.bytes += entry.bytes()
-	}
-	for m.bytes > activityMemoMaxBytes {
-		old := m.order.Front()
-		e := old.Value.(activityMemoEntry)
-		delete(m.entries, e.key)
-		m.bytes -= e.bytes()
-		m.order.Remove(old)
-	}
+	m.trim(activityMemoMaxBytes)
 }
 
 // activityReportCandidateSource streams the sessions' candidates that start
@@ -178,12 +159,15 @@ func (db *DB) activityReportRuns(
 	var misses []string
 	m.mu.Lock()
 	for _, id := range ids {
-		if element := m.entries[activityMemoKey{id, lower}]; element != nil && generation == m.generation {
-			e := element.Value.(activityMemoEntry)
-			if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
-				sessions[id] = e
-				m.order.MoveToBack(element)
-				continue
+		key := activityMemoKey{id, lower}
+		if generation == m.generation {
+			if e, ok := m.get(key); ok {
+				version, exists := versions[id]
+				if exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
+					sessions[id] = e
+					continue
+				}
+				m.remove(key)
 			}
 		}
 		misses = append(misses, id)

@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"context"
+	"encoding/json/v2"
 	"errors"
 	"maps"
 	"os"
@@ -46,6 +48,65 @@ func codexSessionRootForIndex(path string) string {
 			return ""
 		}
 	}
+}
+
+func codexRunHome(path string) string {
+	sessions := codexSessionRootForIndex(path)
+	if filepath.Base(sessions) != "sessions" {
+		return ""
+	}
+	if _, _, ok := CodexSessionPathInfo(sessions, path); !ok {
+		return ""
+	}
+	home := filepath.Dir(sessions)
+	if !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") {
+		return ""
+	}
+	return home
+}
+
+func codexRunMetadataPath(path string) string {
+	if home := codexRunHome(path); home != "" {
+		return filepath.Join(home, CodexRunMetadataFilename)
+	}
+	return ""
+}
+
+// CodexRunMetadataFilename is the file roborev writes in each retained run
+// home to record the label its caller gave the run.
+const CodexRunMetadataFilename = "roborev.json"
+
+// CodexRecordedLabel returns the label roborev recorded in the run home that
+// holds the rollout at path, independent of configured roots. The home is the
+// direct parent of the rollout's sessions directory and must be a marked
+// .codex-run-v1- home. Missing, malformed, or empty metadata returns "" so
+// callers keep the path-derived label. Read errors leave the session for retry.
+// The label is display text and never names a path.
+func CodexRecordedLabel(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	metadataPath := codexRunMetadataPath(path)
+	if metadataPath == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(metadataPath)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var meta struct {
+		Label string `json:"label"`
+	}
+	if json.Unmarshal(data, &meta) != nil {
+		return "", nil //nolint:nilerr // Invalid optional metadata uses the path-derived label.
+	}
+	return meta.Label, nil
 }
 
 // loadCodexSessionIndexes concatenates the title indexes at the given paths.

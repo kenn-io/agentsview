@@ -12,16 +12,70 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
+
+	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/money"
 )
 
 const defaultBaseURL = "https://api.cursor.com"
+
+// Cursor limits /teams/filtered-usage-events to 60 requests per minute per
+// team, shared by every caller using that team's admin keys. Spacing requests
+// a second apart holds one fetch to that rate on its own; retries absorb the
+// requests other callers spend from the same budget, and the odd window where
+// timing jitter lands one request over.
+const defaultRequestInterval = time.Second
+
+// A rate-limited Admin API response carries Retry-After: 60, the length of
+// Cursor's limit window. Longer server-requested waits are capped here so a
+// malformed header cannot stall a fetch, and backoff growth stops at the same
+// ceiling.
+const maxRetryDelay = 60 * time.Second
+
+// maxPageAttempts bounds how many times one page is requested before the fetch
+// gives up. With Retry-After: 60, five attempts wait out four limit windows.
+const maxPageAttempts = 5
 
 // Client talks to the Cursor Admin API.
 type Client struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
+
+	// RequestInterval is the minimum time between the starts of consecutive
+	// requests in FetchAllUsageEvents, retries included. NewClient sets it to
+	// one second; zero disables pacing.
+	RequestInterval      time.Duration
+	DailyRequestInterval time.Duration
+	lastUsageRequest     time.Time
+	lastDailyRequest     time.Time
+
+	// OnRetry, when set, is called before FetchAllUsageEvents waits to retry
+	// a page after a rate-limit or server error, with the page number, that
+	// error and the wait.
+	OnRetry func(page int, err error, wait time.Duration)
+}
+
+// statusError reports a non-2xx response from the Cursor Admin API.
+type statusError struct {
+	statusCode int
+	status     string
+	// retryAfter is the server's requested wait from the Retry-After header,
+	// or zero when the response did not include one.
+	retryAfter time.Duration
+}
+
+func (e *statusError) Error() string {
+	return "cursor admin API returned " + e.status
+}
+
+// retryable reports whether the same request may succeed later: a rate limit
+// clears when Cursor's window rolls over, and a server error may be transient.
+// Other statuses, such as a rejected key or bad request, will not change.
+func (e *statusError) retryable() bool {
+	return e.statusCode == http.StatusTooManyRequests ||
+		e.statusCode >= http.StatusInternalServerError
 }
 
 // TokenUsage mirrors the per-request usage payload.
@@ -34,6 +88,7 @@ type TokenUsage struct {
 
 // UsageEvent is a parsed Cursor usage event.
 type UsageEvent struct {
+	ConversationID string
 	Timestamp      time.Time
 	Model          string
 	Kind           string
@@ -68,6 +123,8 @@ func NewClient(apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		RequestInterval:      defaultRequestInterval,
+		DailyRequestInterval: 3 * time.Second,
 	}
 }
 
@@ -151,7 +208,11 @@ func (c *Client) ListUsageEvents(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Page{}, fmt.Errorf("cursor admin API returned %s", resp.Status)
+		return Page{}, &statusError{
+			statusCode: resp.StatusCode,
+			status:     resp.Status,
+			retryAfter: httputil.ParseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 
 	var decoded usageEventsEnvelope
@@ -194,6 +255,63 @@ func requestUserID(raw string) (int64, error) {
 	return userID, nil
 }
 
+// ListDailyUsageUsers returns numeric member IDs from one window of at most 30 days.
+func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) ([]string, error) {
+	type dailyResponse struct {
+		Data []struct {
+			UserID jsontext.Value `json:"userId"`
+		} `json:"data"`
+		Pagination struct {
+			HasNext bool `json:"hasNextPage"`
+		} `json:"pagination"`
+	}
+	var users []string
+	for page := 1; ; page++ {
+		// Daily requests do not use the usage-page retry callback.
+		resp, err := retryCursorRequest(ctx, c, &c.lastDailyRequest, c.DailyRequestInterval, 0, func() (dailyResponse, error) {
+			var result dailyResponse
+			body, err := json.Marshal(map[string]any{"startDate": timestampMillis(start), "endDate": timestampMillis(end), "page": page, "pageSize": 1000})
+			if err != nil {
+				return result, err
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/teams/daily-usage-data", bytes.NewReader(body))
+			if err != nil {
+				return result, err
+			}
+			req.SetBasicAuth(c.APIKey, "")
+			req.Header.Set("Content-Type", "application/json")
+			r, err := c.httpClient().Do(req)
+			if err != nil {
+				return result, err
+			}
+			defer r.Body.Close()
+			if r.StatusCode < 200 || r.StatusCode >= 300 {
+				return result, &statusError{statusCode: r.StatusCode, status: r.Status, retryAfter: httputil.ParseRetryAfter(r.Header.Get("Retry-After"))}
+			}
+			err = json.UnmarshalRead(r.Body, &result)
+			return result, err
+		})
+		if err != nil {
+			return nil, fmt.Errorf("fetching Cursor daily usage page %d: %w", page, err)
+		}
+		for _, row := range resp.Data {
+			id, err := strconv.ParseUint(string(row.UserID), 10, 64)
+			if err != nil || id == 0 {
+				continue
+			}
+			users = append(users, strconv.FormatUint(id, 10))
+		}
+		if !resp.Pagination.HasNext {
+			return users, nil
+		}
+	}
+}
+
+// FetchAllUsageEvents requests every page of q, starting at q.Page. Requests,
+// retries included, start at least RequestInterval apart. A page that fails
+// with a rate limit or server error is requested again after the server's
+// Retry-After wait, or after an exponential backoff when the response has
+// none, up to maxPageAttempts times; any other failure ends the fetch.
 func (c *Client) FetchAllUsageEvents(
 	ctx context.Context, q Query,
 ) ([]UsageEvent, error) {
@@ -207,8 +325,12 @@ func (c *Client) FetchAllUsageEvents(
 	}
 
 	var out []UsageEvent
+	// lastRequest spans the whole fetch so the request after a retried page
+	// is paced from the retry, not from the page's first attempt.
+	lastRequest := c.lastUsageRequest
+	defer func() { c.lastUsageRequest = lastRequest }()
 	for {
-		resp, err := c.ListUsageEvents(ctx, Query{
+		resp, err := c.listUsageEventsWithRetry(ctx, &lastRequest, Query{
 			StartDate: q.StartDate,
 			EndDate:   q.EndDate,
 			Page:      page,
@@ -217,7 +339,7 @@ func (c *Client) FetchAllUsageEvents(
 			UserID:    q.UserID,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("fetching Cursor usage page %d: %w", page, err)
 		}
 		out = append(out, resp.Events...)
 		if len(resp.Events) == 0 {
@@ -230,6 +352,98 @@ func (c *Client) FetchAllUsageEvents(
 			return out, nil
 		}
 		page++
+	}
+}
+
+// waitForRequestSlot blocks until RequestInterval has passed since
+// lastRequest. A zero lastRequest means no request has been made yet.
+func waitForRequestSlot(
+	ctx context.Context, lastRequest time.Time, interval time.Duration,
+) error {
+	if lastRequest.IsZero() || interval <= 0 {
+		return nil
+	}
+	wait := interval - time.Since(lastRequest)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// listUsageEventsWithRetry requests one page, retrying a rate limit or server
+// error as FetchAllUsageEvents describes. Every attempt waits for its request
+// slot and records its start in lastRequest.
+func (c *Client) listUsageEventsWithRetry(
+	ctx context.Context, lastRequest *time.Time, q Query,
+) (Page, error) {
+	return retryCursorRequest(ctx, c, lastRequest, c.RequestInterval, q.Page, func() (Page, error) {
+		return c.ListUsageEvents(ctx, q)
+	})
+}
+
+func retryCursorRequest[T any](ctx context.Context, c *Client, lastRequest *time.Time, interval time.Duration, page int, request func() (T, error)) (T, error) {
+	result, err := backoff.Retry(ctx, func() (T, error) {
+		var zero T
+		if err := waitForRequestSlot(ctx, *lastRequest, interval); err != nil {
+			return zero, backoff.Permanent(err)
+		}
+		*lastRequest = time.Now()
+		result, err := request()
+		if err == nil {
+			return result, nil
+		}
+		statusErr, ok := errors.AsType[*statusError](err)
+		if !ok || !statusErr.retryable() {
+			return zero, backoff.Permanent(err)
+		}
+		if statusErr.retryAfter > 0 {
+			return zero, backoff.RetryAfter(min(statusErr.retryAfter, maxRetryDelay), err)
+		}
+		return zero, err
+	},
+		backoff.WithBackOff(newRetryBackOff()),
+		backoff.WithMaxTries(maxPageAttempts),
+		// Attempts and the context bound the loop; an elapsed-time limit
+		// would cut off a run of honored 60-second Retry-After waits.
+		backoff.WithMaxElapsedTime(0),
+		backoff.WithNotify(func(err error, wait time.Duration) {
+			if page > 0 && c.OnRetry != nil {
+				if statusErr, ok := errors.AsType[*statusError](err); ok {
+					err = statusErr
+				}
+				c.OnRetry(page, err, wait)
+			}
+		}),
+	)
+	retryErr := backoff.AsRetryError(err)
+	if retryErr == nil {
+		return result, err
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return result, ctxErr
+	}
+	if errors.Is(retryErr.Cause, backoff.ErrExhausted) {
+		return result, fmt.Errorf("giving up after %d attempts: %w", maxPageAttempts, retryErr.LastErr)
+	}
+	return result, retryErr.LastErr
+}
+
+// newRetryBackOff paces retries of a failed page when the server gave no
+// Retry-After: about 2s, 4s, 8s and 16s, randomized so concurrent callers on
+// the same team do not retry in lockstep.
+func newRetryBackOff() *backoff.ExponentialBackOff {
+	return &backoff.ExponentialBackOff{
+		InitialInterval:     2 * time.Second,
+		RandomizationFactor: 0.5,
+		Multiplier:          2,
+		MaxInterval:         maxRetryDelay,
 	}
 }
 
@@ -247,6 +461,7 @@ func (e usageEventsEnvelope) usageEvents() []rawUsageEvent {
 }
 
 type rawUsageEvent struct {
+	ConversationID string         `json:"conversationId"`
 	Timestamp      string         `json:"timestamp"`
 	Model          string         `json:"model"`
 	Kind           string         `json:"kind"`
@@ -279,9 +494,10 @@ func parseUsageEvent(raw rawUsageEvent) (UsageEvent, error) {
 		return UsageEvent{}, fmt.Errorf("parsing Cursor token fee: %w", err)
 	}
 	return UsageEvent{
-		Timestamp: t,
-		Model:     strings.TrimSpace(raw.Model),
-		Kind:      strings.TrimSpace(raw.Kind),
+		ConversationID: strings.TrimSpace(raw.ConversationID),
+		Timestamp:      t,
+		Model:          strings.TrimSpace(raw.Model),
+		Kind:           strings.TrimSpace(raw.Kind),
 		TokenUsage: TokenUsage{
 			InputTokens:      raw.TokenUsage.InputTokens,
 			OutputTokens:     raw.TokenUsage.OutputTokens,

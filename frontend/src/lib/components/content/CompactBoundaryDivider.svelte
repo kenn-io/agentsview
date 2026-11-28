@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Disclosure } from "@kenn-io/kit-ui";
   import type { DbMessage as Message } from "../../api/generated/index.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
@@ -31,7 +32,7 @@
     {m.compact_boundary_label()}
     {#if message.timestamp}
       <span class="boundary-time">
-        &middot; {formatTimestamp(message.timestamp)}
+        &middot; {formatTimestamp(message.timestamp, ui.alwaysShowYear)}
       </span>
     {/if}
   </span>

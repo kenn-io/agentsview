@@ -8,7 +8,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func exportSessionToTestStoreWithLimits(
@@ -644,4 +646,46 @@ func TestExportPreservesSmallSingleSegmentHash(t *testing.T) {
 	require.NoError(t, err)
 	m := latestTestStoreManifest(t, store, origin)
 	assert.Equal(t, []string{wantHash}, m.Segments)
+}
+
+func TestExportMixedClaudeDialogueWithinLimit(t *testing.T) {
+	ctx := t.Context()
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "sess-1", "alpha", func(s *db.Session) { s.MessageCount, s.UserMessageCount = 3, 3 })
+	first := strings.Repeat("review ", 80)
+	second := strings.Repeat("changes 🌿 ", 70)
+	third := strings.Repeat("finish ", 70)
+	blocks := gjson.Parse(fmt.Sprintf(`[{"type":"text","text":%q},{"type":"thinking","thinking":"consider"},{"type":"text","text":%q},{"type":"thinking","thinking":"reflect"},{"type":"text","text":%q}]`, first, second, third))
+	content, thinking, parsedDialogue, hasThinking, _, _, _ := parser.ExtractTextContent(ctx, blocks)
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{
+		{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: content, ThinkingText: thinking, DialogueText: &parsedDialogue, HasThinking: hasThinking},
+		{SessionID: "sess-1", Ordinal: 1, Role: "user", Content: "[Thinking]\nprivate\n[/Thinking]", ThinkingText: "private", DialogueText: new(""), HasThinking: true},
+		{SessionID: "sess-1", Ordinal: 2, Role: "user", Content: "display text with context", DialogueText: new("display text")},
+	}))
+	limits := productionArtifactLimits()
+	limits.sessionDecodedBytes = 3000
+	result, err := exportToStoreWithLimits(ctx, database, store, ExportOptions{Origin: contractOrigin, Full: true}, limits)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ExportedSessions)
+	m := latestTestStoreManifest(t, store, contractOrigin)
+	require.Len(t, m.Segments, 1)
+	ref, err := NewRef(contractOrigin, KindSegments, m.Segments[0]+".ndjson")
+	require.NoError(t, err)
+	segment := readContractArtifact(t, store, ref)
+	assert.Contains(t, string(segment), `"dialogue_ranges"`)
+	assert.LessOrEqual(t, int64(len(segment)), limits.sessionDecodedBytes)
+}
+
+func TestDecodeSegmentRejectsInvalidDialogueRanges(t *testing.T) {
+	for name, tc := range map[string]struct{ ranges, errorText string }{
+		"out of bounds": {`[[0,4]]`, "invalid dialogue range bounds"},
+		"overlapping":   {`[[0,2],[1,3]]`, "invalid dialogue range bounds"},
+		"split rune":    {`[[1,2]]`, "invalid dialogue range text"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeSegment([]byte(`{"v":5,"ordinal":0,"role":"user","content":"éx","dialogue_ranges":` + tc.ranges + `}` + "\n"))
+			require.ErrorContains(t, err, tc.errorText)
+		})
+	}
 }

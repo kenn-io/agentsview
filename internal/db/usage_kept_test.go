@@ -5,6 +5,8 @@ package db
 import (
 	"context"
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,4 +235,203 @@ func TestDailyUsageKeptProjectIdentityChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.EqualValues(t, 2, prepares.Load())
+}
+
+type usageResponse struct {
+	result DailyUsageResult
+	err    error
+}
+
+// The read looks up its memo after the version query, then Flights.Do calls
+// Done after registering the waiter. Signal at that point.
+type flightWaitContext struct {
+	context.Context
+	armed   atomic.Bool
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (ctx *flightWaitContext) Value(key any) any {
+	if _, ok := key.(usageWindowMemoKey); ok {
+		ctx.armed.Store(true)
+	}
+	return ctx.Context.Value(key)
+}
+
+func (ctx *flightWaitContext) Done() <-chan struct{} {
+	if ctx.armed.Load() {
+		ctx.once.Do(func() { close(ctx.waiting) })
+	}
+	return ctx.Context.Done()
+}
+
+func waitFor(t *testing.T, ch <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, message)
+	}
+}
+
+func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	var prepares atomic.Int32
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	database.SetUsageWindowPrepareForTest(func(context.Context) {
+		if prepares.Add(1) == 1 {
+			close(started)
+			<-resume
+		}
+	})
+	first, second := make(chan usageResponse, 1), make(chan usageResponse, 1)
+	ctx1 := WithUsageWindowMemo(t.Context())
+	ctx2 := &flightWaitContext{Context: WithUsageWindowMemo(t.Context()), waiting: make(chan struct{})}
+	go func() { result, err := database.GetDailyUsage(ctx1, filter); first <- usageResponse{result, err} }()
+	<-started
+	ranking := filter
+	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
+	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- usageResponse{result, err} }()
+	waitFor(t, ctx2.waiting, "read did not join its flight")
+	release()
+	a, b := <-first, <-second
+	require.NoError(t, a.err)
+	require.NoError(t, b.err)
+	assert.Equal(t, 10, a.result.Totals.InputTokens)
+	assert.Equal(t, a.result.Totals, b.result.Totals)
+	assert.EqualValues(t, 1, prepares.Load())
+}
+
+func TestDailyUsageKeptFailedBuildIsNotReused(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	started := make(chan struct{})
+	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
+		if prepares.Add(1) == 1 {
+			close(started)
+			<-ctx.Done()
+		}
+	})
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	deadline, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	ctx := WithUsageWindowMemo(deadline)
+	canceled, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := database.GetDailyUsage(canceled, filter); done <- err }()
+	waitFor(t, started, "prepare did not start")
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-deadline.Done():
+		require.FailNow(t, "canceled read did not return")
+	}
+	got, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 10, got.Totals.InputTokens)
+	assert.EqualValues(t, 2, prepares.Load())
+}
+
+// Caller checks isolate flight registration and the retry decision from
+// database/sql context calls, which can run after a flight starts.
+type retryFlightContext struct {
+	context.Context
+	joined   chan struct{}
+	paused   chan struct{}
+	resume   chan struct{}
+	once     sync.Once
+	attempts atomic.Int32
+}
+
+func (ctx *retryFlightContext) Done() <-chan struct{} {
+	pc, _, _, _ := runtime.Caller(1)
+	caller := runtime.FuncForPC(pc).Name()
+	if strings.Contains(caller, "/internal/kept.") && (ctx.attempts.CompareAndSwap(0, 1) || ctx.attempts.CompareAndSwap(2, 3)) {
+		select {
+		case ctx.joined <- struct{}{}:
+		default:
+		}
+	}
+	return ctx.Context.Done()
+}
+
+func (ctx *retryFlightContext) Err() error {
+	pc, _, _, _ := runtime.Caller(1)
+	if strings.HasSuffix(runtime.FuncForPC(pc).Name(), ".keptDailyUsage") && ctx.attempts.CompareAndSwap(1, 2) {
+		ctx.once.Do(func() { close(ctx.paused); <-ctx.resume })
+	}
+	return ctx.Context.Err()
+}
+
+func TestDailyUsageKeptJoinerSurvivesRepeatedCancel(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	left := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	right := left
+	right.Model = "model-a"
+	deadline, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+	started := make(chan struct{}, 2)
+	var prepares atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
+		if prepares.Add(1) <= 2 {
+			started <- struct{}{}
+			<-ctx.Done()
+		}
+	})
+	startOwner := func() (context.CancelFunc, <-chan error, <-chan error) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(WithUsageWindowMemo(deadline))
+		rightDone, leftDone := make(chan error, 1), make(chan error, 1)
+		go func() { _, err := database.GetDailyUsage(ctx, right); rightDone <- err }()
+		waitFor(t, started, "prepare did not start")
+		memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+		joined := make(chan struct{})
+		memo.mu.Lock()
+		for key, prepare := range memo.windows {
+			memo.windows[key] = func() (usagePreparedWindow, error) { close(joined); return prepare() }
+		}
+		memo.mu.Unlock()
+		go func() { _, err := database.GetDailyUsage(ctx, left); leftDone <- err }()
+		waitFor(t, joined, "window was not shared")
+		return cancel, rightDone, leftDone
+	}
+	cancelA, rightA, leftA := startOwner()
+	defer cancelA()
+	b := &retryFlightContext{Context: WithUsageWindowMemo(deadline), joined: make(chan struct{}, 2), paused: make(chan struct{}), resume: make(chan struct{})}
+	resume := sync.OnceFunc(func() { close(b.resume) })
+	defer resume()
+	done := make(chan usageResponse, 1)
+	go func() { result, err := database.GetDailyUsage(b, left); done <- usageResponse{result, err} }()
+	waitFor(t, b.joined, "read did not join its flight")
+	cancelA()
+	waitFor(t, b.paused, "retry did not pause")
+	cancelC, rightC, leftC := startOwner()
+	defer cancelC()
+	resume()
+	waitFor(t, b.joined, "read did not join its flight")
+	cancelC()
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+		assert.Equal(t, 10, result.result.Totals.InputTokens)
+	case <-deadline.Done():
+		require.FailNow(t, "joined read did not return")
+	}
+	for _, ch := range []<-chan error{rightA, leftA, rightC, leftC} {
+		select {
+		case err := <-ch:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-deadline.Done():
+			require.FailNow(t, "canceled read did not return")
+		}
+	}
+	assert.EqualValues(t, 3, prepares.Load())
 }

@@ -272,7 +272,7 @@ func newGptmeSourceSet(roots []string) JSONLSourceSet {
 }
 
 func gptmeProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
 			StreamingDiscovery:   CapabilitySupported,
@@ -291,7 +291,7 @@ func gptmeProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 		},
-	}
+	})
 }
 
 func isGptmeConversationPath(root, path string) bool {

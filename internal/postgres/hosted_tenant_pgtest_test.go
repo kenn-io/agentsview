@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -27,26 +28,38 @@ type hostedFixture struct {
 
 func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 	t.Helper()
-	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
-	role := schema + "_runtime"
-	admin, err := Open(t.Context(), testPGURL(t), schema, false)
+	// The first fixture in a test's database uses the copy of the tenant's
+	// template; later ones, such as one per subtest, get a new schema.
+	schema := "hosted_test_" + strings.ReplaceAll(tenant, "-", "_")
+	pgURL := testPGHostedURL(t, schema, tenant)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		schema = fmt.Sprintf("hosted_test_%x", rand.Uint64())
+	}
+	// Roles are server-wide, so each fixture's role has its own name.
+	role := fmt.Sprintf("hosted_test_%x_runtime", rand.Uint64())
+	admin, err := Open(t.Context(), pgURL, schema, false)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`)
-		assert.NoError(t, err)
-		_, err = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS "`+role+`"`)
-		assert.NoError(t, err)
-		assert.NoError(t, admin.Close())
-	})
-	require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
+	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
+	if !fresh {
+		require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
+	}
 	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`)
 	require.NoError(t, err)
+	// Roles are server-wide, so the role is dropped here; the schema goes
+	// with the test's database.
+	t.Cleanup(func() {
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY "`+role+`"`)
+		assert.NoError(t, err)
+		_, err = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE "`+role+`"`)
+		assert.NoError(t, err)
+	})
 	_, err = admin.ExecContext(t.Context(), `GRANT USAGE ON SCHEMA "`+schema+`" TO "`+role+`";
  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "`+schema+`" TO "`+role+`";
  GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+schema+`" TO "`+role+`"`)
 	require.NoError(t, err)
 	password := setHostedFixturePassword(t, admin, role)
-	dsn, err := appendConnParams(testPGURL(t), map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
+	dsn, err := appendConnParams(pgURL, map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
 	require.NoError(t, err)
 	runtime, err := OpenHosted(t.Context(), dsn, schema, tenant, false)
 	require.NoError(t, err)
@@ -84,6 +97,13 @@ func TestHostedTenantIsolation(t *testing.T) {
 		assert.Error(t, err)
 	}
 	require.NoError(t, conn.Close())
+	require.NoError(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
+	// Upgrade a journal installed before the checkpoint function's grant was revoked.
+	_, syncer, _ := newUsageJournalFixture(t)
+	_, err = syncer.pg.ExecContext(t.Context(), `GRANT EXECUTE ON FUNCTION checkpoint_usage_history() TO PUBLIC`)
+	require.NoError(t, err)
+	assert.Error(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
+	ensureUsageChangeJournalPG(t.Context(), syncer.pg)
 	require.NoError(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
 	assert.Error(t, CheckHostedTenant(t.Context(), a.admin, a.schema, a.tenant))
 	assert.Error(t, CheckHostedTenant(t.Context(), a.runtime, b.schema, a.tenant))
@@ -515,6 +535,66 @@ func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
 	}
 }
 
+// Hosted schemas provisioned before pricing_meta kept the OpenRouter
+// ownership list as a model_pricing row and the pricing times as text.
+// Provisioning, for an adopted mirror and for an already bound tenant,
+// moves the list into a tenant-protected pricing_meta and types the times.
+func TestHostedTenantProvisioningUpgradesOldPricingLayout(t *testing.T) {
+	oldLayout := func(t *testing.T, db *sql.DB, tenantColumn, tenantValue string) {
+		t.Helper()
+		for _, statement := range []string{
+			`DROP TABLE pricing_meta`,
+			`ALTER TABLE model_pricing DROP COLUMN updated_at`,
+			`ALTER TABLE model_pricing ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+			`INSERT INTO model_pricing (` + tenantColumn + `model_pattern, updated_at) VALUES
+				(` + tenantValue + `'_openrouter_models', '["or/model-a"]'),
+				(` + tenantValue + `'acme/model', '2026-07-01T00:00:02Z')`,
+		} {
+			_, err := db.ExecContext(t.Context(), statement)
+			require.NoError(t, err, statement)
+		}
+	}
+	// Only pushes, which run as the owner, read pricing_meta; the runtime
+	// role reads prices.
+	upgraded := func(t *testing.T, owner, runtime *sql.DB) {
+		t.Helper()
+		var owned string
+		require.NoError(t, owner.QueryRowContext(t.Context(),
+			`SELECT value FROM pricing_meta WHERE key = '_openrouter_models'`,
+		).Scan(&owned))
+		assert.Equal(t, `["or/model-a"]`, owned)
+		var patterns []string
+		rows, err := runtime.QueryContext(t.Context(), `SELECT model_pattern FROM model_pricing`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var pattern string
+			require.NoError(t, rows.Scan(&pattern))
+			patterns = append(patterns, pattern)
+		}
+		require.NoError(t, rows.Err())
+		assert.Equal(t, []string{"acme/model"}, patterns)
+		require.NoError(t, CheckSchemaCompat(t.Context(), runtime),
+			"typed pricing times pass the reader's schema check")
+	}
+
+	t.Run("bound tenant", func(t *testing.T) {
+		f := newHostedFixture(t, "tenant-a")
+		oldLayout(t, f.admin, "tenant_id, ", "'tenant-a', ")
+		require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+		require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+		upgraded(t, f.admin, f.runtime)
+	})
+	t.Run("adopted mirror", func(t *testing.T) {
+		pg := newHostedLegacyFixture(t)
+		var schema string
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
+		oldLayout(t, pg, "", "")
+		require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
+		upgraded(t, pg, pg)
+	})
+}
+
 func TestHostedTenantConcurrentProvisioning(t *testing.T) {
 	t.Parallel()
 	pg := newHostedLegacyFixture(t)
@@ -662,4 +742,51 @@ func TestHostedTenantUpgradeInstallsAutomationTracking(t *testing.T) {
 	current, err := automationAuditSchemaCurrentPG(t.Context(), f.admin)
 	require.NoError(t, err)
 	assert.True(t, current)
+}
+
+func TestHostedTenantUpgradeReconcilesAutomatedHeadlessReviews(t *testing.T) {
+	t.Parallel()
+	f := newHostedFixture(t, "tenant-a")
+	ctx := t.Context()
+
+	_, err := f.admin.ExecContext(ctx, `INSERT INTO raw_corpus_state(tenant_id, singleton, corpus_revision) VALUES ($1, 1, 10)
+		ON CONFLICT (singleton) DO UPDATE SET corpus_revision = 10`, f.tenant)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `INSERT INTO sessions (
+			tenant_id, id, machine, project, agent, entrypoint, source_session_id,
+			first_message, relationship_type,
+			user_message_count, is_automated, provenance_kind,
+			parser_relationship_type, relationship_inferred
+		) VALUES
+		($1, 'raw-row-panel', 'hosted', 'proj', 'claude', 'sdk-cli', 'panel-uuid-1',
+		 'You are a code reviewer. Review this change.', 'subagent',
+		 1, TRUE, 'raw', NULL, FALSE),
+		($1, 'raw-row-native-child', 'hosted', 'proj', 'claude', 'sdk-cli', 'agent-child-1',
+		 'You are a code reviewer. Review this change.', 'subagent',
+		 1, TRUE, 'raw', NULL, FALSE)`, f.tenant)
+	require.NoError(t, err)
+	_, err = f.admin.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = $1`, db.ClassifierHashKey)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+
+	var rel, parserRel string
+	var inferred bool
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT relationship_type, COALESCE(parser_relationship_type, ''), relationship_inferred
+		FROM sessions WHERE id = 'raw-row-panel'`).Scan(&rel, &parserRel, &inferred))
+	assert.Empty(t, rel, "automated headless review moves to Automated")
+	assert.Equal(t, "subagent", parserRel)
+	assert.True(t, inferred)
+
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'raw-row-native-child'`).Scan(&rel))
+	assert.Equal(t, "subagent", rel, "raw-projected native agent-* child stays Subagents via source_session_id")
+
+	var revAfterUpgrade int64
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT corpus_revision FROM raw_corpus_state WHERE singleton = 1`).Scan(&revAfterUpgrade))
+	assert.Greater(t, revAfterUpgrade, int64(10), "reclassifying raw rows advances corpus_revision")
+
+	require.NoError(t, EnsureHostedTenant(ctx, f.admin, f.schema, f.tenant))
+	var revAfterNoop int64
+	require.NoError(t, f.admin.QueryRowContext(ctx, `SELECT corpus_revision FROM raw_corpus_state WHERE singleton = 1`).Scan(&revAfterNoop))
+	assert.Equal(t, revAfterUpgrade, revAfterNoop, "idempotent upgrade without changes leaves corpus_revision unchanged")
 }

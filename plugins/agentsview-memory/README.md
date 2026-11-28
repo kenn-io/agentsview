@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-11-16
 ---
 
 # AgentsView Memory
@@ -9,9 +9,23 @@ through the focused AgentsView MCP profile. It bundles the same generated skill
 used by `agentsview skills install`, plus Claude's bounded search agent and a
 fail-open `SessionStart` hook for `startup`, `resume`, and `clear`.
 
-Install the package with the client's native plugin flow and ensure `agentsview`
-is on the client's `PATH`. The default target is the local archive owner. Select
-one hosted role through the client's local environment:
+## Install
+
+Put `agentsview` on your `PATH`, then run these commands in Claude Code:
+
+```text
+/plugin marketplace add kenn-io/agentsview
+/plugin install agentsview-memory@agentsview
+```
+
+Restart Claude Code and open `/mcp` to confirm the server is connected. Use
+`/plugin` to update the package. Codex has no marketplace here; run
+`agentsview agent setup --agent codex` instead. See the
+[installation routes](../../docs/mcp.md#choose-an-installation-route) to compare
+options.
+
+The default target is the local archive owner. Select one hosted role through
+the client's local environment:
 
 | Role                          | Environment                                                                                                            |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -20,10 +34,10 @@ one hosted role through the client's local environment:
 | Hosted reader over daemon     | `AGENTSVIEW_MEMORY_MODE=hosted-reader`, `AGENTSVIEW_MEMORY_SERVER`, and optional `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE` |
 | Hosted reader over PostgreSQL | `AGENTSVIEW_MEMORY_MODE=hosted-reader` and `AGENTSVIEW_MEMORY_PG=true`                                                 |
 
-`AGENTSVIEW_DISABLE_AUTO_SYNC=1` disables the hook action while keeping existing
-history searchable. Token values stay outside this package; the daemon target
-uses a token-file reference or the existing `AGENTSVIEW_SERVER_TOKEN` runtime
-environment.
+`AGENTSVIEW_DISABLE_AUTO_SYNC=1` skips the automatic lifecycle refresh. Launcher
+links are still recorded, and existing history stays searchable. Token values
+stay outside this package; the daemon target uses a token-file reference or the
+existing `AGENTSVIEW_SERVER_TOKEN` runtime environment.
 
 PostgreSQL MCP reads use the target selected by `default_pg` in the AgentsView
 configuration. For a named hosted contributor target, set `default_pg` to that

@@ -261,8 +261,6 @@ func commandRecoveryHint(cmd *cobra.Command) string {
 	switch name := recoveryCommandName(cmd); {
 	case name == "pg" || cmd.Name() == "clean-uploads":
 		return "check AGENTSVIEW_PG_URL or [pg].url in config.toml (named targets use default_pg); " + hint
-	case name == "duckdb":
-		return "check AGENTSVIEW_DUCKDB_PATH / AGENTSVIEW_DUCKDB_URL or [duckdb].path / [duckdb].url in config.toml; " + hint
 	case name == "clickhouse":
 		return "check AGENTSVIEW_CLICKHOUSE_URL or [clickhouse].url in config.toml (named targets use default_clickhouse); " + hint
 	case name == "raw" || name == "raw-sync":
@@ -297,6 +295,13 @@ func recoveryCommandName(cmd *cobra.Command) string {
 func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	if _, ok := errors.AsType[toml.ParseError](err); ok {
 		d.hint = configRecoveryHint
+		return
+	}
+	if errors.Is(err, db.ErrWALCheckpointBusy) {
+		d.display = "another connection holds a read transaction on the archive, " +
+			"so its WAL checkpoint could not finish: " + err.Error()
+		d.hint = "close other programs reading sessions.db, such as a sqlite3 shell, then retry; " +
+			commandHelpHint(cmd)
 		return
 	}
 	if errors.Is(err, errSessionNotFound) {

@@ -121,7 +121,7 @@ func sessionUsageBackends(t *testing.T) map[string]service.SessionService {
 	return map[string]service.SessionService{
 		"direct": service.NewReadOnlyBackend(direct),
 		"http": servicehttp.NewHTTPBackendForServer(ts.URL, "",
-			servicehttp.HTTPServerCapabilities{APIVersion: server.SubagentUsageAPIVersion}),
+			servicehttp.HTTPServerCapabilities{APIVersion: server.APIVersion}),
 	}
 }
 

@@ -3,7 +3,6 @@ package readbase
 import (
 	"context"
 	"database/sql"
-	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -105,52 +104,4 @@ func filterRetainedCommitLinks(rows []db.CommitLinkRow, projects, exclude []stri
 		}
 	}
 	return out
-}
-
-// RetainedCommitLinks refreshes only this archive's absent sessions. Stored
-// projects survive session deletion, so filtered pushes can retain their links.
-func RetainedCommitLinks(ctx context.Context, local *db.DB, q CommitLinkQuerier, dialect db.QueryDialect, projects, exclude []string) ([]string, []db.CommitLinkRow, error) {
-	retained, err := local.RetainedCommitLinkRows(ctx)
-	if err != nil || len(retained) == 0 {
-		return nil, nil, err
-	}
-	var ids []string
-	for _, r := range retained {
-		if len(ids) == 0 || ids[len(ids)-1] != r.SessionID {
-			ids = append(ids, r.SessionID)
-		}
-	}
-	live := make(map[string]bool)
-	err = db.QueryChunkedSize(ids, 200, func(batch []string) error {
-		b := db.NewQueryBuilder(dialect, 0)
-		ph := make([]string, 0, len(batch))
-		for _, id := range batch {
-			ph = append(ph, b.Add(id))
-		}
-		// Protect another archive's session, including one without any links.
-		rows, err := q.QueryContext(ctx, `SELECT id FROM sessions WHERE id IN (`+strings.Join(ph, ",")+`)`, b.Args()...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			live[id] = true
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	ids = slices.DeleteFunc(ids, func(id string) bool { return live[id] })
-	out := []db.CommitLinkRow{}
-	for _, r := range filterRetainedCommitLinks(retained, projects, exclude) {
-		if !live[r.SessionID] {
-			out = append(out, r)
-		}
-	}
-	return ids, out, nil
 }

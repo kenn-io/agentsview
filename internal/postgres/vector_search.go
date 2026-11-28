@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/pgvector"
 )
 
 // vectorSearcher is the PG-backed db.VectorSearcher: chunk-level KNN over one
@@ -19,20 +20,35 @@ import (
 // the shared vector_documents mirror. It mirrors internal/vector's Index
 // searcher semantics (Search + hydrateHits + resolveHit) for the PG backend.
 type vectorSearcher struct {
-	pg            *sql.DB
-	genID         int64
-	dimension     int
-	maxInputChars int
-	encode        storage.VectorQueryEncoder
-	chunkTable    string
+	pg              *sql.DB
+	tx              *sql.Tx
+	genID           int64
+	dimension       int
+	maxInputChars   int
+	encode          storage.VectorQueryEncoder
+	chunkTable      string
+	afterCandidates func()
 
-	// schemaMu guards the lazily resolved, quoted pgvector extension schema.
-	// The constructor takes no context, so it is resolved on first query
-	// (mirroring vector_push.go's vectorGeneration.halfvecType): both the
-	// ::halfvec cast and the `<=>` cosine operator must be schema-qualified,
-	// or they fail to resolve when pgvector lives in a schema off search_path.
-	schemaMu  sync.Mutex
-	extSchema string
+	chunks *vectorSearchChunks
+}
+
+type vectorSearchChunks struct {
+	mu    sync.Mutex
+	store *pgvector.Chunks[string]
+}
+
+func (v *vectorSearcher) inTx(tx *sql.Tx) *vectorSearcher {
+	return &vectorSearcher{pg: v.pg, tx: tx, genID: v.genID, dimension: v.dimension, maxInputChars: v.maxInputChars, encode: v.encode, chunkTable: v.chunkTable, afterCandidates: v.afterCandidates, chunks: v.chunks}
+}
+
+func (v *vectorSearcher) queryExecutor() interface {
+	storeExecutor
+	PrepareContext(context.Context, string) (*sql.Stmt, error)
+} {
+	if v.tx != nil {
+		return v.tx
+	}
+	return v.pg
 }
 
 // NewVectorSearcher builds a PG vector searcher for generation genID. The
@@ -49,24 +65,8 @@ func NewVectorSearcher(
 		maxInputChars: maxInputChars,
 		encode:        encode,
 		chunkTable:    vectorChunkTable(genID),
+		chunks:        &vectorSearchChunks{},
 	}
-}
-
-// resolveExtSchema returns the quoted schema pgvector's types and operators
-// live in, resolving it once from pg_extension. It is cached because the
-// pgvector schema cannot change for a live connection pool.
-func (v *vectorSearcher) resolveExtSchema(ctx context.Context) (string, error) {
-	v.schemaMu.Lock()
-	defer v.schemaMu.Unlock()
-	if v.extSchema != "" {
-		return v.extSchema, nil
-	}
-	schema, err := vectorExtensionSchema(ctx, v.pg)
-	if err != nil {
-		return "", fmt.Errorf("resolving pgvector schema: %w", err)
-	}
-	v.extSchema = schema
-	return v.extSchema, nil
 }
 
 // PrepareSemanticSearch implements db.VectorSearcher. It embeds query once.
@@ -89,16 +89,15 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 			"query embedding has %d dimensions, generation expects %d",
 			len(vec), v.dimension)
 	}
-	extSchema, err := v.resolveExtSchema(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
 	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
-		chunks, rowCap, err := v.knnChunks(ctx, vec, extSchema, limit)
+		chunks, err := v.knnChunks(ctx, vec, limit)
 		if err != nil {
 			return nil, false, err
 		}
-		exhausted := knnExhausted(len(chunks), limit, rowCap)
+		if v.afterCandidates != nil {
+			v.afterCandidates()
+		}
+		exhausted := len(chunks) < limit
 		docs, err := kitvec.RollupByDocument(chunks)
 		if err != nil {
 			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
@@ -114,137 +113,38 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 	}, 0, nil
 }
 
-// knnExhausted reports whether a KNN that asked for limit rows and returned
-// rows read every chunk. Only an HNSW index scan stops at rowCap below limit;
-// a sequential scan has no cap. A short result therefore proves exhaustion
-// unless it is exactly the cap, which a capped index scan also returns when
-// more rows remain.
-func knnExhausted(rows, limit, rowCap int) bool {
-	return rows < limit && (rowCap >= limit || rows != rowCap)
-}
-
 // chunkHit is one chunk-level KNN neighbor: the document it belongs to, which
 // chunk matched, and its cosine similarity (1 - cosine distance, higher is
 // better).
 type chunkHit = kitvec.Hit[string]
 
-// knnChunks runs the chunk-level KNN, returning up to exactly limit neighbors
-// ordered best (nearest) first, and the most rows the scan could return (see
-// tuneHNSWRecall). Fetching exactly `limit` chunks matches the
-// local sqlite-vec searcher's candidate pool (kit's queryGenerationSQL also
-// runs its KNN with LIMIT k before rollup), per the backend-parity rule: after
-// rollup the doc pool can be smaller than `limit` when a high-ranking run doc
-// contributes several neighbors, and both backends must shrink identically.
-// The query vector binds once as a halfvec-cast parameter; both the cast and
-// the cosine `<=>` operator are schema-qualified (::schema.halfvec,
-// OPERATOR(schema.<=>)) so they resolve when pgvector lives in a schema off
-// the connection's search_path.
-//
-// Recall contract: results are approximate ANN (HNSW), not the local backend's
-// exact brute-force scan — that divergence is the accepted halfvec/HNSW spec
-// trade-off. But the candidate pool must not silently cap below k: pgvector's
-// default hnsw.ef_search (40) would return only ~40 rows regardless of LIMIT k.
-// The KNN therefore runs inside a transaction with hnsw.ef_search set to k
-// clamped to [40, 1000] (see tuneHNSWRecall / hnswEfSearch): small-k searches
-// keep the stock 40 floor, larger k widens the pool up to pgvector's 1000
-// ceiling, and past that ceiling iterative scan keeps filling.
-func (v *vectorSearcher) knnChunks(
-	ctx context.Context, vec []float32, extSchema string, limit int,
-) ([]chunkHit, int, error) {
-	k := max(limit, 0)
-	literal, err := halfvecLiteral(vec)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query embedding: %w", err)
-	}
-	dist := fmt.Sprintf("embedding OPERATOR(%s.<=>) $1::%s.halfvec", extSchema, extSchema)
-	q := fmt.Sprintf(`
-SELECT doc_key, chunk_index, 1 - (%s) AS score
-  FROM %s
- ORDER BY %s
- LIMIT $2`, dist, v.chunkTable, dist)
-
-	tx, err := v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, 0, fmt.Errorf("begin chunk knn tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	rowCap, err := tuneHNSWRecall(ctx, tx, k)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	rows, err := tx.QueryContext(ctx, q, literal, k)
-	if err != nil {
-		return nil, 0, fmt.Errorf("chunk knn query: %w", err)
-	}
-	defer rows.Close()
-	defer func() { _ = rows.Close() }()
-
-	var hits []chunkHit
-	for rows.Next() {
-		var h chunkHit
-		var score float64
-		if err := rows.Scan(&h.Doc, &h.ChunkIndex, &score); err != nil {
-			return nil, 0, fmt.Errorf("scanning chunk knn row: %w", err)
+// knnChunks searches on the borrowed transaction when one is present.
+func (v *vectorSearcher) knnChunks(ctx context.Context, vec []float32, limit int) ([]chunkHit, error) {
+	tx := v.tx
+	if tx == nil {
+		var err error
+		tx, err = v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, err
 		}
-		h.Score = float32(score)
-		hits = append(hits, h)
+		defer func() { _ = tx.Rollback() }()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterating chunk knn rows: %w", err)
+	v.chunks.mu.Lock()
+	if v.chunks.store == nil {
+		var err error
+		v.chunks.store, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable)
+		if err != nil {
+			v.chunks.mu.Unlock()
+			return nil, err
+		}
 	}
-	return hits, rowCap, nil
-}
-
-// tuneHNSWRecall raises pgvector's per-scan HNSW candidate pool for the current
-// transaction so a KNN with LIMIT k returns k neighbors instead of silently
-// capping at the default hnsw.ef_search (40). ef_search is set to k clamped to
-// [40, 1000] — the recall knob is never tuned below its default, so small-k
-// searches keep stock recall — and never above pgvector's ceiling. k is an int
-// derived from the caller's limit and interpolated only after clamping, so the
-// SET LOCAL statement carries no unvalidated input. SET LOCAL requires a
-// transaction and resets on commit/rollback, so this never leaks into a pooled
-// connection.
-//
-// For k above the 1000 ceiling, ef_search alone cannot fill the pool, so
-// hnsw.iterative_scan = 'relaxed_order' (pgvector >= 0.8) lets the scan keep
-// going past ef_search. Older pgvector lacks that GUC and would abort the tx on
-// an unknown-GUC error, so it is probed first with current_setting(..., true)
-// (missing_ok), which yields NULL instead of erroring; a NULL result skips the
-// setting and leaves the 1000-row cap in place. tuneHNSWRecall returns the
-// most rows the scan can return: k, or 1000 when that cap stays in place.
-// hnswEfSearch clamps the KNN candidate-pool size k to pgvector's usable
-// hnsw.ef_search range [40, 1000]: never below the stock default 40 (so small-k
-// searches keep default recall) and never above pgvector's 1000 ceiling (past
-// which ef_search alone cannot widen the pool — tuneHNSWRecall falls back to
-// iterative scan there).
-func hnswEfSearch(k int) int {
-	return min(max(k, 40), 1000)
-}
-
-func tuneHNSWRecall(ctx context.Context, tx *sql.Tx, k int) (int, error) {
-	efSearch := hnswEfSearch(k)
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", efSearch)); err != nil {
-		return 0, fmt.Errorf("setting hnsw.ef_search: %w", err)
+	chunks := v.chunks.store
+	v.chunks.mu.Unlock()
+	page, err := chunks.SearchTx(ctx, tx, kitvec.Vector(vec), limit)
+	if err != nil {
+		return nil, err
 	}
-	if k <= efSearch {
-		return k, nil
-	}
-	var current sql.NullString
-	if err := tx.QueryRowContext(ctx,
-		`SELECT current_setting('hnsw.iterative_scan', true)`,
-	).Scan(&current); err != nil {
-		return 0, fmt.Errorf("probing hnsw.iterative_scan: %w", err)
-	}
-	if !current.Valid {
-		return efSearch, nil
-	}
-	if _, err := tx.ExecContext(ctx,
-		"SET LOCAL hnsw.iterative_scan = 'relaxed_order'"); err != nil {
-		return 0, fmt.Errorf("setting hnsw.iterative_scan: %w", err)
-	}
-	return k, nil
+	return page.Hits, nil
 }
 
 // vectorDoc is the subset of a vector_documents row needed to hydrate a chunk
@@ -311,7 +211,7 @@ func (v *vectorSearcher) lookupDocs(
 	if len(docKeys) == 0 {
 		return docs, nil
 	}
-	rows, err := v.pg.QueryContext(ctx, `
+	rows, err := v.queryExecutor().QueryContext(ctx, `
 SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
        d.subordinate OR `+db.SubordinateSessionSQL("s")+`, d.offsets, d.content
   FROM vector_documents d
@@ -320,7 +220,6 @@ SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
 	if err != nil {
 		return nil, fmt.Errorf("looking up search hit documents: %w", err)
 	}
-	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
@@ -357,7 +256,7 @@ func (v *vectorSearcher) ResolveMessageUnits(
 	if len(refs) == 0 {
 		return out, nil
 	}
-	stmt, err := v.pg.PrepareContext(ctx, `
+	stmt, err := v.queryExecutor().PrepareContext(ctx, `
 SELECT d.doc_key, d.ordinal, d.ordinal_end,
        d.subordinate OR `+db.SubordinateSessionSQL("s")+`
   FROM vector_documents d
@@ -367,7 +266,6 @@ SELECT d.doc_key, d.ordinal, d.ordinal_end,
 	if err != nil {
 		return nil, fmt.Errorf("resolve message units: %w", err)
 	}
-	defer stmt.Close()
 	defer func() { _ = stmt.Close() }()
 
 	for i, ref := range refs {
@@ -402,7 +300,11 @@ func (s *Store) SetVectorSearcher(searcher db.VectorSearcher) {
 func (s *Store) getVectorSearcher() db.VectorSearcher {
 	s.runtimeState().vectorMu.RLock()
 	defer s.runtimeState().vectorMu.RUnlock()
-	return s.runtimeState().vectorSearcher
+	searcher := s.runtimeState().vectorSearcher
+	if v, ok := searcher.(*vectorSearcher); ok && s.readTx != nil {
+		return v.inTx(s.readTx)
+	}
+	return searcher
 }
 
 // SetSemanticUnavailableReason records a human explanation for why semantic

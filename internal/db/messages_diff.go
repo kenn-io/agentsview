@@ -19,6 +19,7 @@ const diffDeleteChunkSize = 500
 // so the persisted tuple has exactly one definition.
 func messageInsertArgs(m Message) []any {
 	dialogue, dialogueIsContent := StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+	usageOutputTokens, usageWebSearchRequests := storedMessageUsageCounters(string(m.TokenUsage))
 	return []any{
 		m.SessionID, m.Ordinal, m.Role, m.Content,
 		m.ThinkingText, dialogue, dialogueIsContent,
@@ -30,6 +31,7 @@ func messageInsertArgs(m Message) []any {
 		m.ClaudeMessageID, m.ClaudeRequestID,
 		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 		m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+		usageOutputTokens, usageWebSearchRequests,
 	}
 }
 
@@ -225,6 +227,21 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 		}
 	}
 	return true
+}
+
+func dialogueMessagesChanged(stored, incoming []Message) bool {
+	byOrdinal := make(map[int]*string, len(stored))
+	for _, msg := range stored {
+		byOrdinal[msg.Ordinal] = msg.DialogueText
+	}
+	for _, msg := range incoming {
+		old := byOrdinal[msg.Ordinal]
+		if old != msg.DialogueText &&
+			(old == nil || msg.DialogueText == nil || *old != *msg.DialogueText) {
+			return true
+		}
+	}
+	return false
 }
 
 // transcriptMessagesGainSourceIDs reports whether incoming repeats stored
@@ -486,6 +503,9 @@ func applySessionMessageDiffTx(ctx context.Context,
 		if err := insertToolResultEventsTx(
 			tx, resolveToolResultEvents(msgs),
 		); err != nil {
+			return err
+		}
+		if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}

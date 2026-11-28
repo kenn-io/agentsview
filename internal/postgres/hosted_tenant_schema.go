@@ -11,7 +11,7 @@ import (
 
 // HostedTable describes a tenant-owned table. Keys omit tenant_id; the installer
 // always prefixes it. Extend the inventory with projection tables when their
-// schema lands. Unknown tables (including vector storage) fail closed.
+// schema lands. Unknown tables fail closed.
 type HostedTable struct {
 	Name        string
 	Key         []string
@@ -26,6 +26,32 @@ type HostedForeignKey struct {
 	References []string
 	Delete     string
 	Update     string
+}
+
+// hostedVectorTables inventories only existing tables named by a registered
+// generation. Catalog validation applies the same protections as core tables.
+func hostedVectorTables(ctx context.Context, q hostedQuerier, schema string) ([]HostedTable, error) {
+	var exists bool
+	if err := q.QueryRowContext(ctx, `SELECT to_regclass(format('%I.vector_generations',$1::text)) IS NOT NULL`, schema).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT 'vector_chunks_g'||id FROM vector_generations WHERE to_regclass(format('%I.%I',$1::text,'vector_chunks_g'||id)) IS NOT NULL ORDER BY id`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tables []HostedTable
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tables = append(tables, HostedTable{Name: name, Key: []string{"doc_key", "chunk_index"}})
+	}
+	return tables, rows.Err()
 }
 
 var hostedTables = append([]HostedTable{
@@ -55,6 +81,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "model_pricing", Key: []string{"model_pattern"}},
 	{Name: "model_pricing_bands", Key: []string{"model_pattern", "above_input_tokens"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"model_pattern"}, Table: "model_pricing", References: []string{"model_pattern"}, Delete: "CASCADE"}}},
 	{Name: "genai_pricing", Key: []string{"singleton"}},
+	{Name: "pricing_meta", Key: []string{"key"}},
 	{Name: "source_archives", Key: []string{"source_archive_id"}},
 	{Name: "source_project_identity_observations", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}},
 	{Name: "source_project_identity_observation_scopes", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Table: "source_project_identity_observations", References: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Delete: "CASCADE"}}},
@@ -90,6 +117,7 @@ var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"commit_links", commitLinksDDL},
 	{"image_text", imageTextDDL},
 	{"retained_commit_links", retainedCommitLinksDDL},
+	{"pricing_meta", pricingMetaDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already

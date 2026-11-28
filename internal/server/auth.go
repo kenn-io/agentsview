@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -141,6 +142,9 @@ func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Hand
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
+				// Clients retry 500s as transient; the log is the only place
+				// an operator can see the cause.
+				log.Printf("raw sync authentication failed: %v", err)
 				http.Error(w, "raw sync authentication failed", http.StatusInternalServerError)
 				return
 			}

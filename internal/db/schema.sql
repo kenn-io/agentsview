@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- non-Claude). Read by the incremental parser to skip fork
     -- detection on linear-bound transcripts. Like next_ordinal and
     -- last_entry_uuid, this is machine-local parse state deliberately
-    -- not mirrored to PostgreSQL or DuckDB: parsers never run against
+    -- not pushed to PostgreSQL or ClickHouse: parsers never run against
     -- those read-side stores, and any copy that drops it degrades to
     -- the conservative NULL verdict (full parse re-derives it).
     claude_linear_parse INTEGER,
@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     parser_relationship_type TEXT,
+    -- 1 when the parser marked the session subagent only because it is a
+    -- parentless headless run, not because of an explicit child marker.
+    relationship_inferred INTEGER NOT NULL DEFAULT 0,
+    -- 1 once a spawn edge or launcher link has given the session a parent.
+    -- It survives the deletion of that parent.
+    spawn_linked INTEGER NOT NULL DEFAULT 0,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,
@@ -73,6 +79,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     git_branch TEXT NOT NULL DEFAULT '',
     -- JSON array of parser-derived pull request links; '' when none.
     pr_links TEXT NOT NULL DEFAULT '',
+    structured_pr_links TEXT NOT NULL DEFAULT '',
     source_session_id TEXT NOT NULL DEFAULT '',
     source_version TEXT NOT NULL DEFAULT '',
     group_key TEXT NOT NULL DEFAULT '',
@@ -83,7 +90,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- last write to this row went through the incremental-append path
     -- rather than a full re-normalization. Consumed only by parse-diff
     -- to suppress benign incremental-vs-full skew; deliberately not
-    -- mirrored to PG/DuckDB.
+    -- pushed to replicas.
     last_write_incremental INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
     -- Before revert pages had separate IDs, trash covered the whole thread.
@@ -144,6 +151,8 @@ CREATE TABLE IF NOT EXISTS messages (
     token_usage TEXT NOT NULL DEFAULT '',
     context_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_web_search_requests INTEGER NOT NULL DEFAULT 0,
     provider_id TEXT NOT NULL DEFAULT '',
     has_context_tokens INTEGER NOT NULL DEFAULT 0,
     has_output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -291,7 +300,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TEXT,
-    dedup_key TEXT NOT NULL DEFAULT ''
+    dedup_key TEXT NOT NULL DEFAULT '',
+    -- occurred_at as UTC Unix microseconds, NULL when blank or unparseable.
+    -- Its indexes are created after archives that predate it gain it.
+    occurred_at_us INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
@@ -299,8 +311,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
     WHERE dedup_key != '';
 CREATE INDEX IF NOT EXISTS idx_usage_events_session
     ON usage_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
-    ON usage_events(occurred_at);
 
 -- Per-session plan usage and live-capture coverage. Codex cloud reports
 -- usage as shares of plan limits and credits, not tokens, so these never
@@ -352,6 +362,9 @@ CREATE TABLE IF NOT EXISTS cursor_usage_events (
     cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
     user_id TEXT NOT NULL DEFAULT '',
     user_email TEXT NOT NULL DEFAULT '',
+    account_user_id TEXT NOT NULL DEFAULT '',
+    account_polled_at TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
     is_headless INTEGER NOT NULL DEFAULT 0,
     dedup_key TEXT NOT NULL DEFAULT ''
 );
@@ -363,6 +376,14 @@ CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
     ON cursor_usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
     ON cursor_usage_events(model);
+
+CREATE TABLE IF NOT EXISTS cursor_account_polls (
+    account_user_id TEXT NOT NULL,
+    hour_start INTEGER NOT NULL,
+    polled_at TEXT NOT NULL,
+    PRIMARY KEY (account_user_id, hour_start)
+);
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);
 
 -- Tool calls table
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -1364,6 +1385,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Values the price refresh keeps between runs, such as the embedded catalog
+-- version and the model patterns OpenRouter supplied.
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+
 -- Git aggregation TTL cache: memoizes `git log --numstat` and
 -- `gh pr list` results per (repo, author, window) tuple so
 -- repeated `agentsview stats` invocations don't re-shell out.
@@ -1613,7 +1641,7 @@ CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
 -- order. Provider call IDs are not unique, so the natural stored coordinates
 -- (message ordinal, call index) are the authoritative key. A late result
 -- update reads only this table (O(distinct agents)) instead of rescanning the
--- call's full event history. Never mirrored to PostgreSQL or DuckDB.
+-- call's full event history. Never pushed to replicas.
 CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
     session_id         TEXT NOT NULL,
     message_ordinal    INTEGER NOT NULL,
@@ -1626,7 +1654,7 @@ CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
 );
 
 -- Machine-local parse checkpoints. SQLite-only, never mirrored to
--- PostgreSQL or DuckDB: parsers never run against those read-side stores,
+-- replicas: parsers never run against those read-side stores,
 -- and a copy that drops this table degrades to the conservative no-checkpoint
 -- behavior (full parse / prefix rescan), never to a wrong resume.
 CREATE TABLE IF NOT EXISTS parser_checkpoints (
@@ -1656,7 +1684,7 @@ CREATE TABLE IF NOT EXISTS parser_checkpoint_blobs (
 
 -- Compact per-session signal/secret maintenance state. SQLite-only: the
 -- state is machine-local sync bookkeeping and is never mirrored to
--- PostgreSQL or DuckDB. The state row carries a verification token
+-- replicas. The state row carries a verification token
 -- (transcript revision + signal version); a row whose token disagrees with
 -- the stored session must never be folded into an incremental delta.
 CREATE TABLE IF NOT EXISTS session_signal_state (
@@ -1701,6 +1729,13 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+-- The tool revision at which each session's tool calls last changed.
+-- The summary itself is computed from tool_calls when it is exported.
+CREATE TABLE IF NOT EXISTS conversation_tool_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_tool_changes_revision ON conversation_tool_changes(revision);
 
 -- Durable local raw archive identity, inventory and accepted generations.
 CREATE TABLE IF NOT EXISTS raw_archive_roots (
@@ -1813,6 +1848,14 @@ CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);
 CREATE TABLE IF NOT EXISTS codex_fork_state (
  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
  state_json TEXT NOT NULL
+);
+
+-- The Codex cloud account key of a chat imported from another computer's
+-- artifacts. Import clears the source path, which names the key for chats
+-- fetched on this computer, so reporting exports read it here instead.
+CREATE TABLE IF NOT EXISTS codex_cloud_accounts (
+ session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+ account_key TEXT NOT NULL
 );
 
 -- OCR text is shared by all occurrences of the same image and processor.

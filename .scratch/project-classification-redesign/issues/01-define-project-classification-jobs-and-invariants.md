@@ -33,7 +33,7 @@ unambiguous. These constraints do not select the final interaction flow.
 
 - An observed folder is identified by its source archive, machine, and
   normalized path. The source archive is implicit in the writable SQLite
-  archive; PostgreSQL and DuckDB mirrors retain it because the same
+  archive; PostgreSQL replicas retain it because the same
   machine/path pair can arrive from several archives. Session evidence defines
   whether a folder is observed. A renamed path is a separate observed folder;
   filesystem availability is not part of the current candidate evidence.

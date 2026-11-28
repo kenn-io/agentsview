@@ -4,13 +4,18 @@
 package mcp
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"slices"
+	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
+	responseBudgetBytes = 12_000
+
 	// activeExclusionWindow is how recently a session must have been
 	// active for search tools to exclude it by default. This keeps an
 	// agent from retrieving its own in-progress conversation (which
@@ -27,6 +32,7 @@ const (
 	// matches are short snippets, and recall callers page fewer times when
 	// a filtered search can return more of them at once.
 	maxContentSearchLimit = 50
+	contentTotalCap       = 500
 	defaultListLimit      = 20
 	maxListLimit          = 100
 
@@ -83,4 +89,32 @@ func roleAllowed(role string, roles []string) bool {
 		return role == "user" || role == "assistant"
 	}
 	return slices.Contains(roles, role)
+}
+
+// responseSize matches the SDK's escaping and nil collection format.
+func responseSize(out any) int {
+	data, _ := json.Marshal(out, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+	return len(data)
+}
+
+// fitsResponse reports whether the encoded response fits the byte budget.
+func fitsResponse(out any) bool {
+	return responseSize(out) <= responseBudgetBytes
+}
+
+// fitPrefix selects the largest fitting prefix and leaves it built.
+func fitPrefix(n int, build func(int) bool) int {
+	k := sort.Search(n+1, func(i int) bool { return !build(i) })
+	k = max(k-1, 0)
+	build(k)
+	return k
+}
+
+// fitText returns the longest rune prefix whose encoded item fits its budget.
+func fitText(text string, budget int, encode func(string) any) string {
+	runes := []rune(text)
+	n := sort.Search(len(runes), func(i int) bool {
+		return responseSize(encode(string(runes[:i+1]))) > budget
+	})
+	return string(runes[:n])
 }

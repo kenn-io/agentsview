@@ -2,7 +2,6 @@ package remotesync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,6 +62,16 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 					if !slices.Contains(providerExtraFiles[def.Type], file) {
 						providerExtraFiles[def.Type] = append(providerExtraFiles[def.Type], file)
 					}
+				}
+				continue
+			}
+			if def.Type == parser.AgentAntigravityCLI {
+				cliDirs, err := resolveAntigravityCLITargets(dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				if len(cliDirs) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], cliDirs...)
 				}
 				continue
 			}
@@ -179,6 +188,7 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
 		CodexIndexFiles: codexIndexFiles,
 		ForbiddenRoots:  forbiddenRoots,
+		InstallationID:  cfg.InstallationID,
 	}), nil
 }
 
@@ -203,13 +213,13 @@ func resolveFileScopedTarget(ctx context.Context, agent parser.AgentType, root s
 	seen := make(map[string]struct{})
 	var files []string
 	for _, source := range sources {
-		if agent == parser.AgentEvener {
+		if agent == parser.AgentEvener || agent == parser.AgentMusePersonal {
 			plan, supported, err := parser.ResolveRawCapturePlan(ctx, provider, source)
 			if err != nil {
 				return "", nil, err
 			}
 			if !supported {
-				return "", nil, errors.New("evener provider does not declare source companions")
+				return "", nil, fmt.Errorf("%s provider does not declare source companions", agent)
 			}
 			for _, entry := range plan.Entries {
 				// Capture validation canonicalizes paths; retain the configured
@@ -409,6 +419,22 @@ func appendUniqueForbiddenRoot(roots []string, root string) []string {
 		return roots
 	}
 	return append(roots, root)
+}
+
+func resolveAntigravityCLITargets(root string) ([]string, error) {
+	expanded, err := parser.ExpandAntigravityCLIRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for _, candidate := range expanded {
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, candidate)
+	}
+	return dirs, nil
 }
 
 func resolveHermesTargets(root string) ([]string, []string) {
@@ -1195,6 +1221,16 @@ func authorizedStaleCuratedFile(
 			vscodeWorkspaceChatVanished(allowed, forbidden, dir, rel, requestedFiles) {
 			return true
 		}
+		if agent == parser.AgentMusePersonal && filepath.Base(file) == "sessions.json" {
+			// The index is a companion only while a discovered transcript shares its
+			// sessions directory. A removed last transcript leaves no exportable index.
+			for _, candidate := range allowed.Files[agent] {
+				if filepath.Dir(candidate) == filepath.Dir(file) && strings.HasSuffix(candidate, ".jsonl") {
+					return false
+				}
+			}
+			return true
+		}
 		if agent == parser.AgentEvener && strings.HasSuffix(file, ".meta.json") {
 			// Metadata left behind by a deleted transcript is no longer a source companion.
 			_, err := os.Lstat(strings.TrimSuffix(file, ".meta.json") + ".transcript.jsonl")
@@ -1267,6 +1303,8 @@ func vscodeWorkspaceChatVanished(
 // for the given agent type.
 func sessionFileShape(agent parser.AgentType, root, rel string) bool {
 	switch agent {
+	case parser.AgentMusePersonal:
+		return parser.MusePersonalSessionFileShape(rel)
 	case parser.AgentEvener:
 		parts := strings.Split(rel, "/")
 		validLayout := len(parts) == 4 && parts[0] == "projects" && parts[2] == "sessions" ||

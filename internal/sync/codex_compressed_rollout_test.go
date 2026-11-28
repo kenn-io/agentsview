@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
@@ -411,6 +412,42 @@ func TestCodexDuplicatePreferenceAcrossRoots(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexReconciliationPrefersPlainOnEqualRecency(t *testing.T) {
+	database := openTestDB(t)
+	base := t.TempDir()
+	compressedRoot := filepath.Join(base, "a-root")
+	plainRoot := filepath.Join(base, "z-root")
+	compressed := filepath.Join(compressedRoot, "a-compressed", ".codex-run-v1-abc", "sessions", "2026", "09", "01", codexCompressedName)
+	plain := filepath.Join(plainRoot, "z-plain", ".codex-run-v1-abc", "sessions", "2026", "09", "01", compressedRolloutPlain)
+	changedAt := time.Unix(1_800_000_000, 0)
+	stale := compressedRolloutContent(testjsonl.CodexMsgJSON("user", "stale", "2026-09-01T10:00:01Z"))
+	current := compressedRolloutContent(testjsonl.CodexMsgJSON("user", "current", "2026-09-01T10:00:01Z"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(compressed), 0o755))
+	require.NoError(t, os.WriteFile(compressed, zstdCompressString(t, stale), 0o600))
+	require.NoError(t, os.Chtimes(compressed, changedAt, changedAt))
+
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		Machine: "local", DisableFilesystemProjectDiscovery: true,
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {compressedRoot, plainRoot}},
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{compressed}))
+	require.NoError(t, os.MkdirAll(filepath.Dir(plain), 0o755))
+	require.NoError(t, os.WriteFile(plain, []byte(current), 0o600))
+	require.NoError(t, os.Chtimes(plain, changedAt, changedAt))
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+
+	session, err := database.GetSessionFull(t.Context(), compressedRolloutSession)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.FilePath)
+	assert.Equal(t, plain, *session.FilePath)
+	messages, err := database.GetMessages(t.Context(), compressedRolloutSession, 0, 100, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	assert.Equal(t, "current", messages[0].Content)
 }
 
 func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {

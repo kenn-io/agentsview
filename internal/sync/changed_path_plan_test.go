@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -383,6 +384,69 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	require.Len(t, page.Sessions, 1,
 		"bounded processing must not import unrelated Claude sessions")
 	assert.Equal(t, "session-05", page.Sessions[0].ID)
+}
+
+// A remote mirror journal lists changed tool-result sidecars as well as
+// transcripts. The Claude parse reads those sidecars, so a changed sidecar
+// must select its owning transcript instead of re-reading every Claude
+// session on the host.
+func TestPlanChangedPathsClaudeToolResultSelectsOwningSession(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project-a")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	for i := range 12 {
+		path := filepath.Join(projectDir, fmt.Sprintf("session-%02d.jsonl", i))
+		body := testjsonl.NewSessionBuilder().AddClaudeUser(
+			"2026-08-14T10:00:00Z", fmt.Sprintf("message %d", i),
+		).String()
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	}
+	owner := filepath.Join(projectDir, "session-05.jsonl")
+	subagent := filepath.Join(projectDir, "session-05", "subagents", "agent-a1.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(subagent), 0o755))
+	require.NoError(t, os.WriteFile(subagent, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-08-14T10:00:00Z", "subagent").String()), 0o600))
+	tests := []struct {
+		name  string
+		path  string
+		files []string
+	}{
+		{
+			// Subagents also read root results, but their transcript-only
+			// fingerprints cannot change with them.
+			name:  "session result",
+			path:  filepath.Join(projectDir, "session-05", "tool-results", "out.txt"),
+			files: []string{owner},
+		},
+		{
+			name: "subagent result",
+			path: filepath.Join(
+				projectDir, "session-05", "subagents", "agent-a1", "tool-results", "out.txt",
+			),
+			files: []string{subagent},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, os.MkdirAll(filepath.Dir(tc.path), 0o755))
+			require.NoError(t, os.WriteFile(tc.path, []byte("output\n"), 0o600))
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "remote",
+			})
+			t.Cleanup(engine.Close)
+
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{tc.path})
+			require.NoError(t, err)
+			paths := make([]string, 0, len(plan.Files))
+			for _, file := range plan.Files {
+				paths = append(paths, file.Path)
+			}
+			assert.Equal(t, tc.files, paths)
+			assert.Empty(t, plan.FallbackProviders)
+		})
+	}
 }
 
 func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
@@ -991,4 +1055,219 @@ func TestPlanChangedPathsAntigravityTitleStoreIndex(t *testing.T) {
 	assert.Empty(t, plan.Files)
 	assert.Empty(t, plan.FallbackProviders,
 		"reading titles rewrites their WAL index without changing any session")
+}
+
+func TestPlanChangedPathsAntigravityCLITitleStore(t *testing.T) {
+	base := t.TempDir()
+	directRoot := filepath.Join(base, "antigravity-cli")
+	container := filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+	instanceRoot := filepath.Join(container, "hash1", "antigravity-acp")
+	require.NoError(t, os.MkdirAll(filepath.Join(directRoot, "conversations"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(instanceRoot, "conversations"), 0o700))
+
+	engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {directRoot, container},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	for _, root := range []string{directRoot, instanceRoot} {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			path := filepath.Join(root, parser.AntigravitySummariesDBName+suffix)
+			require.NoError(t, os.WriteFile(path, nil, 0o600))
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{path})
+			require.NoError(t, err)
+			assert.Empty(t, plan.Files, "path %s", path)
+			assert.Empty(t, plan.FallbackProviders, "path %s must not trigger fallback scan", path)
+		}
+	}
+}
+
+func TestPlanChangedPathsAntigravityCLISummaryWorkspaceChangeSelectsOnlyAffected(t *testing.T) {
+	const (
+		idChanged   = "11111111-2222-3333-4444-555555555551"
+		idUnchanged = "11111111-2222-3333-4444-555555555552"
+		idParent    = "cccccccc-dddd-eeee-ffff-000000000000"
+	)
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	instanceRoot := filepath.Join(container, "hash1", "antigravity-acp")
+	convDir := filepath.Join(instanceRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o700))
+
+	writeSession := func(id, prompt string) string {
+		t.Helper()
+		dbPath := filepath.Join(convDir, id+".db")
+		conn, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(),
+			"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		testjsonl.WriteAntigravityBrainTranscript(t, instanceRoot, id,
+			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"`+prompt+`"}`+"\n")
+		return dbPath
+	}
+	changedDB := writeSession(idChanged, "first session")
+	writeSession(idUnchanged, "second session")
+
+	store := testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+		idUnchanged: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+
+	archive := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {container}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+	// Title-only edit selects zero transcripts.
+	testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha renamed", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+		idUnchanged: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+	titlePlan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	assert.Empty(t, titlePlan.Files)
+	assert.Empty(t, titlePlan.FallbackProviders)
+
+	unchangedBefore, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idUnchanged)
+	require.NoError(t, err)
+	require.NotNil(t, unchangedBefore)
+
+	// Workspace and parent change selects only the affected conversation,
+	// while a title-only rename on the sibling reconciles without reparsing.
+	testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha renamed", WorkspaceURIs: `["file:///tmp/ws-new"]`, ParentID: idParent},
+		idUnchanged: {Title: "Beta renamed", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+	metaPlan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	assert.Empty(t, metaPlan.FallbackProviders)
+	require.Len(t, metaPlan.Files, 1)
+	assert.Equal(t, changedDB, metaPlan.Files[0].Path)
+
+	res, err := engine.SyncChangedPathPlanContext(t.Context(), metaPlan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Stats.Synced)
+	assert.Equal(t, 1, res.Stats.TitlesUpdated)
+	updated, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idChanged)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "/tmp/ws-new", updated.Cwd)
+	assert.Equal(t, "ws_new", updated.Project)
+	assert.Equal(t, new("antigravity-cli:"+idParent), updated.ParentSessionID)
+	assert.Equal(t, "subagent", updated.RelationshipType)
+	assert.Equal(t, new("Alpha renamed"), updated.SessionName)
+
+	unchangedAfter, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idUnchanged)
+	require.NoError(t, err)
+	require.NotNil(t, unchangedAfter)
+	assert.Equal(t, new("Beta renamed"), unchangedAfter.SessionName)
+	assert.Equal(t, unchangedBefore.FileHash, unchangedAfter.FileHash)
+}
+
+func TestPlanChangedPathsAntigravitySummaryReadFailureRetainsPendingWorkWhenTitlesSucceed(t *testing.T) {
+	const (
+		convID   = "11111111-2222-3333-4444-555555555551"
+		parentID = "cccccccc-dddd-eeee-ffff-000000000000"
+	)
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	instanceRoot := filepath.Join(container, "hash1", "antigravity-acp")
+	convDir := filepath.Join(instanceRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o700))
+
+	dbPath := filepath.Join(convDir, convID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	testjsonl.WriteAntigravityBrainTranscript(t, instanceRoot, convID,
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"first session"}`+"\n")
+	store := testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		convID: {Title: "Alpha", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+	})
+
+	archive := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {container}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	// Simulate an unreadable store during planning, then restore a readable
+	// updated store before execution so title reconciliation succeeds.
+	require.NoError(t, os.WriteFile(store, []byte("not a database"), 0o600))
+	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files)
+	assert.Empty(t, plan.FallbackProviders)
+
+	require.NoError(t, os.Remove(store))
+	testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		convID: {
+			Title:         "Alpha renamed",
+			WorkspaceURIs: `["file:///tmp/ws-new"]`,
+			ParentID:      parentID,
+		},
+	})
+
+	res, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Stats.TitlesUpdated)
+	assert.Equal(t, 1, res.Stats.Failed)
+	assert.False(t, res.Stats.ProcessingComplete(), "metadata-read failure must prevent retiring pending remote work")
+	assert.Empty(t, engine.SnapshotAntigravityTitleStates(), "title state must not persist after metadata-read failure")
+
+	// Next pass re-plans against the readable store and refreshes metadata.
+	retryPlan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	require.Len(t, retryPlan.Files, 1)
+	assert.Equal(t, dbPath, retryPlan.Files[0].Path)
+
+	retryRes, err := engine.SyncChangedPathPlanContext(t.Context(), retryPlan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, retryRes.Stats.Synced)
+	assert.True(t, retryRes.Stats.ProcessingComplete())
+	assert.Contains(t, engine.SnapshotAntigravityTitleStates(), store)
+
+	updated, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+convID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "/tmp/ws-new", updated.Cwd)
+	assert.Equal(t, "ws_new", updated.Project)
+	assert.Equal(t, new("antigravity-cli:"+parentID), updated.ParentSessionID)
+	assert.Equal(t, "subagent", updated.RelationshipType)
+	assert.Equal(t, new("Alpha renamed"), updated.SessionName)
+}
+
+// Codex's own databases and lock files in its home directory change
+// constantly. Before Codex classified them, each event fell back to a scan
+// of every Codex transcript.
+func TestPlanChangedPathsCodexHomeFilesNeedNoSync(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	paths := []string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, "session_index.jsonl.lock")}
+	for _, path := range paths {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	}
+	engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	plan, err := engine.PlanChangedPathsContext(t.Context(), paths)
+
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files)
+	assert.Empty(t, plan.FallbackProviders)
 }

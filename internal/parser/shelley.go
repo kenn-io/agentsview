@@ -151,7 +151,7 @@ type ShelleyConversationMeta struct {
 //     updated_at as a real nanosecond timestamp. The sync skip compares it
 //     for equality, but it must also stay a true timestamp: a synthetic
 //     future value would inflate the trigger-maintained sync_marker and
-//     make the row a perpetual PG/DuckDB push candidate (the mirror window
+//     make the row a perpetual replica push candidate (the mirror window
 //     is unbounded above), and the parse-diff engine's bounded
 //     ListSessionsModifiedBetween would treat it as future.
 //   - Fingerprint, a digest stored in file_hash, distinguishes any

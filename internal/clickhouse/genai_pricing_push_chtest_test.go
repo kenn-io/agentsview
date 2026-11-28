@@ -18,15 +18,15 @@ import (
 // since start and the largest result one of them returned.
 func genAIPricingReadsSince(t *testing.T, syncer *Sync, start time.Time) (reads, maxResultBytes uint64) {
 	t.Helper()
-	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS query_log")
 	require.NoError(t, err)
 	require.NoError(t, syncer.conn.QueryRowContext(t.Context(), `
 		SELECT count(), max(result_bytes)
 		FROM system.query_log
 		WHERE current_database = currentDatabase() AND type = 'QueryFinish'
-			AND query_kind = 'Select' AND event_time_microseconds >= ?
+			AND query_kind = 'Select' AND event_time_microseconds >= fromUnixTimestamp64Micro(?)
 			AND has(tables, currentDatabase() || '.genai_pricing')
-	`, start).Scan(&reads, &maxResultBytes))
+	`, start.UnixMicro()).Scan(&reads, &maxResultBytes))
 	return reads, maxResultBytes
 }
 
@@ -127,7 +127,7 @@ func TestPushPricesWithRetainedGenAIPricingAfterLostWrite(t *testing.T) {
 	future := uint64(time.Now().Add(time.Hour).UnixNano())
 	require.NoError(t, insertRows(ctx, syncer.conn, "genai_pricing", [][]any{{
 		int64(1), ahead.Version, ahead.SourceRef, ahead.Source,
-		string(ahead.Data), ahead.UpdatedAt, future,
+		string(ahead.Data), nil, future,
 	}}))
 	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "2", "1")))
 	pushPreparedUsage(t, syncer)

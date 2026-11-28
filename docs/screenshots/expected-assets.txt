@@ -91,7 +91,6 @@ screenshots/tool-sequences.png
 screenshots/tool-usage.png
 screenshots/top-sessions.png
 screenshots/top-skills.png
-screenshots/trends.png
 screenshots/usage-attribution-selected.png
 screenshots/usage-attribution.png
 screenshots/usage-cache-efficiency.png

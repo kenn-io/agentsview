@@ -126,6 +126,12 @@ type SourceCapabilities struct {
 	// its own watcher event. The OpenCode family receives the pager through its
 	// own engine route; other providers receive it only by declaring this.
 	StoredMemberFreshnessListing CapabilitySupport
+	// PollMetadataScan means the provider's WatchPlan names, through each
+	// root's Path, Recursive flag, and IncludeGlobs, every file whose change
+	// scheduled polling would act on. Polling can then compare file metadata
+	// with the previous pass and sync only changed files, falling back to
+	// reconciliation for anything it cannot compare.
+	PollMetadataScan CapabilitySupport
 }
 
 // ContentCapabilities declares optional normalized content fields a provider

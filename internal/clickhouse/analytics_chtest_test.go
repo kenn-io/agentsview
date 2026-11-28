@@ -18,7 +18,7 @@ import (
 
 func TestStoreAnalyticsReads(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
@@ -125,7 +125,7 @@ func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var store *Store
 			if tc.populated {
-				store, _, _ = newPushedStore(t)
+				store = newClonedReadStore(t)
 			} else {
 				dsn, database := chtest.FreshDatabase(t)
 				require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))

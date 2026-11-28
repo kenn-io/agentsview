@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,4 +183,77 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPromptPRLinks(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		want []string
+	}{
+		{"HTTPS://GITHUB.com/o/r/pull/1", []string{"https://github.com/o/r/pull/1"}},
+		{"https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1", []string{"https://github.com/o/r/pull/1"}},
+		{"https://github.com/owner/repo/pull/123\u00a0review", []string{"https://github.com/owner/repo/pull/123"}},
+		{"https://github.com/owner/repo/pull/123/files", []string{"https://github.com/owner/repo/pull/123"}},
+		{"[https://github.com/owner/repo/pull/123]", []string{"https://github.com/owner/repo/pull/123"}},
+		{"`https://github.com/owner/repo/pull/123`", []string{"https://github.com/owner/repo/pull/123"}},
+		{"**https://github.com/owner/repo/pull/123**", []string{"https://github.com/owner/repo/pull/123"}},
+		{"https://github.com/owner/repo/pull/1。", []string{"https://github.com/owner/repo/pull/1"}},
+		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", []string{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"}},
+		{"https://github.com/group/team/pulls/1/repo/pull/9/files", []string{"https://github.com/group/team/pulls/1"}},
+		{"https://github.com/o/r/blob/main/docs/pull/123", nil},
+		{"https://github.com/o/r/tree/feature/pull/5", nil},
+		{"https://github.com/o/pull/5", nil},
+		{"https://gitlab.com/g/r/-/blob/main/-/merge_requests/5", nil},
+		{"https://gitlab.com/g/-/merge_requests/5", nil},
+		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", []string{"https://github.com/owner/repo/pull/123"}},
+		{"(https://github.example.com/owner/repo/pulls/12).", []string{"https://github.example.com/owner/repo/pulls/12"}},
+		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", []string{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9"}},
+		{"https://github.com/owner/repo/pull/12-", nil},
+		{"https://github.com/owner/repo/pull/12a", nil},
+		{"https://github.com/owner/repo/issues/12", nil},
+		{"https://github.com/o/r/pull/1?tab=files,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://example.org/?url=https://github.com/o/r/pull/2 https://example.org/?url=foo,https://github.com/o/r/pull/2", nil},
+		{"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1\u2003https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://r.example/?u=https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/#https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/go/https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/?u=https://evil.example/a/b/pull/1 https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1?u=https://evil.example/a/b/pull/2", []string{"https://github.com/o/r/pull/1"}},
+	} {
+		t.Run(tt.text, func(t *testing.T) {
+			links, err := PromptPRLinksContext(t.Context(), tt.text)
+			require.NoError(t, err)
+			var urls []string
+			for _, link := range links {
+				urls = append(urls, link.URL)
+			}
+			assert.Equal(t, tt.want, urls)
+		})
+	}
+}
+
+func TestCombinePRLinksDeduplicatesIdentity(t *testing.T) {
+	first, ok := NewPRLink("https://github.com/Owner/Repo/pull/007", "Owner/Repo", 7)
+	require.True(t, ok)
+	duplicate, ok := NewPRLink("http://GITHUB.COM/owner/repo/pull/7", "owner/repo", 7)
+	require.True(t, ok)
+	otherHost := PRLink{URL: "https://forge.example/owner/repo/pull/7", Host: "forge.example", Repository: "owner/repo", Number: 7}
+	otherRepo := PRLink{URL: "https://github.com/owner/other/pull/7", Host: "github.com", Repository: "owner/other", Number: 7}
+	otherNumber := PRLink{URL: "https://github.com/owner/repo/pull/8", Host: "github.com", Repository: "owner/repo", Number: 8}
+	assert.Equal(t, []PRLink{first, otherHost, otherRepo, otherNumber}, CombinePRLinks([]PRLink{first}, []PRLink{duplicate, otherHost, otherRepo, otherNumber}))
+}
+
+func TestPromptPRLinksLongTokenAndCancellation(t *testing.T) {
+	text := strings.Repeat("https://", 100000) + " https://github.com/o/r/pull/1"
+	links, err := PromptPRLinksContext(t.Context(), text)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = PromptPRLinksContext(ctx, text)
+	require.ErrorIs(t, err, context.Canceled)
 }

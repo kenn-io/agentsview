@@ -212,6 +212,46 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 	assert.Equal(t, 1, attempts)
 }
 
+func TestDaemonArchivePushCompatibility(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		api           int
+		rejectUnknown bool
+		want          []apiclient.DaemonPushRequest
+	}{
+		{name: "current daemon", api: server.ArchiveWatchPushAPIVersion, want: []apiclient.DaemonPushRequest{{NoSourceSync: new(true)}}},
+		{name: "known older daemon", api: server.ArchiveWatchPushAPIVersion - 1, want: []apiclient.DaemonPushRequest{{}}},
+		{name: "unknown older daemon", rejectUnknown: true, want: []apiclient.DaemonPushRequest{{NoSourceSync: new(true)}, {}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests []apiclient.DaemonPushRequest
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request apiclient.DaemonPushRequest
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+					return
+				}
+				requests = append(requests, request)
+				if tt.rejectUnknown && request.NoSourceSync != nil {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					_, _ = io.WriteString(w, `{"errors":[{"location":"body.no_source_sync","message":"unexpected property"}]}`)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"SessionsPushed":1}`)
+			}))
+			t.Cleanup(daemon.Close)
+
+			result, err := postDaemonPush[storage.PushResult, storage.PushProgress](
+				t.Context(), transport{URL: daemon.URL, Runtime: &DaemonRuntime{API: tt.api}},
+				"", replicaPushOperations["pg"], apiclient.DaemonPushRequest{NoSourceSync: new(true)}, nil,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, storage.PushResult{SessionsPushed: 1}, result)
+			assert.Equal(t, tt.want, requests)
+		})
+	}
+}
+
 func daemonEventStream(body io.Reader) *runtime.Stream[[]byte] {
 	return runtime.NewEventStream[[]byte](&http.Response{Body: io.NopCloser(body)})
 }
@@ -232,8 +272,11 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 			_, _ = w.Write([]byte("event: error\ndata: " + data + "\n\n"))
 		})
 	}
-	unreachable := httptest.NewServer(http.NotFoundHandler())
-	unreachable.Close()
+	disconnected := serve(func(http.ResponseWriter, *http.Request) {
+		// Close the connection without a response while keeping the listener
+		// bound, so another test server cannot take this server's port.
+		panic(http.ErrAbortHandler)
+	})
 
 	for _, tt := range []struct {
 		name    string
@@ -243,7 +286,7 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 		{"daemon refused", serve(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}), false},
-		{"daemon unreachable", unreachable.URL, false},
+		{"daemon disconnected before responding", disconnected, false},
 		{"older daemon streamed an error", streamError(`{"error":"push: conn reset"}`), true},
 		{"pre-push resync failed", streamError(
 			`{"error":"resync failed","push_started":false}`), false},

@@ -12,10 +12,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/server"
 	"golang.org/x/term"
 )
@@ -127,7 +129,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
 	root.AddCommand(newArchiveCommand())
-	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
@@ -210,17 +211,17 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			runServe(cmd.Context(), mustLoadConfig(cmd), serveOptions{
+			return runServeLoop(cmd.Context(), mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
 				BasePath:        basePath,
 				Pprof:           pprofEnabled,
+				RestartArgs:     serveRestartArgs(cmd.Flags()),
 				ReloadConfig: func() (config.Config, error) {
 					return config.LoadPFlags(cmd.Flags())
 				},
-			}, restartPort)
-			return nil
+			}, restartPort, runServe)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -270,6 +271,24 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	return cmd
 }
 
+func serveRestartArgs(flags *pflag.FlagSet) []string {
+	var args []string
+	flags.Visit(func(flag *pflag.Flag) {
+		switch flag.Name {
+		case "background", "replace", "check-data-version", "port", "restart-port":
+			return
+		}
+		args = append(args, "--"+flag.Name+"="+flag.Value.String())
+	})
+	return args
+}
+
+func serveReplacementArgs(args []string, current config.Config) []string {
+	return slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		return current.AuthSettingsSaved && strings.HasPrefix(arg, "--require-auth=")
+	})
+}
+
 func applyServeRestartPort(cfg config.Config, port int) (config.Config, int) {
 	requestedPort := cfg.Port
 	if port > 0 {
@@ -308,8 +327,9 @@ func newServeStopCommand() *cobra.Command {
 		Short: "Stop the server, including sync and file watchers",
 		Long: "Stop the server and its background work, including a server started\n" +
 			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
-			"This also stops read-only PostgreSQL and DuckDB servers for the data\n" +
-			"directory. Use `agentsview daemon stop` to stop only the writable server.",
+			"This also stops read-only PostgreSQL and ClickHouse servers for the data\n" +
+			"directory.\n" +
+			"Use `agentsview daemon stop` to stop only the writable server.",
 		Example:      "  agentsview serve stop",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -326,7 +346,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		Long: "Restart only the writable SQLite background daemon using settings " +
 			"from config.toml.\n\n" +
 			"Unlike `agentsview serve stop`, this command intentionally leaves " +
-			"read-only PostgreSQL and DuckDB servers running.",
+			"read-only PostgreSQL and ClickHouse servers running.",
 		Example:      "  agentsview serve restart",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -387,6 +407,9 @@ func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Comm
 		Long: "Sync session data through the shared server, starting it in the\n" +
 			"background if needed. The server includes the web UI and continues\n" +
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
+			"A daemon that is already running applies only the changes its file\n" +
+			"watchers collected, without rescanning every session source. Pass\n" +
+			"--rescan to rescan them all.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
 			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.\n\n" +
@@ -415,6 +438,11 @@ func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Comm
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.Rescan, "rescan", false,
+		"Rescan every session source instead of syncing only the changes "+
+			"a running daemon's file watchers collected",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
@@ -536,30 +564,36 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:   "import --type <type> <path> | import --type claude-ai --sync",
+		Use:   "import --type <type> <path> | import --type <platform> --sync",
 		Short: "Import conversations",
 		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
-			"Claude.ai can instead use --type claude-ai --sync with the configured Chrome integration.",
+			"Supported platforms (" + browserSyncNames() + ") can instead use --type <platform> --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				if importType != "claude-ai" || len(replace) > 0 {
-					return errors.New("--sync requires --type claude-ai and cannot use --replace")
+				if _, ok := importer.LookupBrowserPlatform(importType); !ok || len(replace) > 0 {
+					return fmt.Errorf("--sync requires --type %s and cannot use --replace", browserSyncNames())
 				}
 				return cobra.NoArgs(cmd, args)
+			}
+			// Grok web chats have no file importer, so name the one way in
+			// instead of reporting an unknown type.
+			if importType == "grok-web" {
+				return errors.New("grok-web imports only through Chrome: use --type grok-web --sync")
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				return syncClaudeAIChrome(cmd.Context())
+				platform, _ := importer.LookupBrowserPlatform(importType)
+				return syncChrome(cmd.Context(), platform)
 			}
 			return importSessions(cmd.Context(), ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
-	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync Claude.ai through Chrome")
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync conversations through Chrome ("+browserSyncNames()+")")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps; with --sync, also grok-web")
 	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd
@@ -766,60 +800,6 @@ func newClickHouseCommand() *cobra.Command {
 	return cmd
 }
 
-func newDuckDBCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "duckdb",
-		Short: "DuckDB sync and serve commands",
-		Long: "Build a disposable DuckDB mirror from the persistent SQLite archive, inspect sync status, or serve read-only queries from that mirror. " +
-			"Quack exposes a DuckDB file over its separate remote protocol. " +
-			"Configure the intended path or connection before using these commands.",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newDuckDBPushCommand())
-	cmd.AddCommand(newDuckDBStatusCommand())
-	cmd.AddCommand(newDuckDBServeCommand())
-	cmd.AddCommand(newDuckDBQuackCommand())
-	return cmd
-}
-
-func newDuckDBPushCommand() *cobra.Command {
-	var cfg DuckDBPushConfig
-	cmd := &cobra.Command{
-		Use:          "push",
-		Short:        "Push local data to DuckDB",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cmd.Context(), cfg)
-		},
-	}
-	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
-	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
-	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
-	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
-	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Continue watching local files and pushing changes")
-	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
-	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
-	return cmd
-}
-
-func newDuckDBStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:          "status",
-		Short:        "Show DuckDB sync status",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus(cmd.Context())
-		},
-	}
-}
-
 // addPprofFlag registers the hidden --pprof flag shared by every command
 // that serves the web UI and API.
 func addPprofFlag(cmd *cobra.Command, enabled *bool) {
@@ -830,75 +810,6 @@ func addPprofFlag(cmd *cobra.Command, enabled *bool) {
 		"Serve net/http/pprof under /debug/pprof (developer use)",
 	)
 	_ = cmd.Flags().MarkHidden("pprof")
-}
-
-func newDuckDBServeCommand() *cobra.Command {
-	var pprofEnabled bool
-	cmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Serve from DuckDB (read-only)",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			appCfg, basePath, err := loadDuckDBServeConfig(cmd)
-			if err != nil {
-				fatal("%v", err)
-			}
-			runDuckDBServe(cmd.Context(), appCfg, basePath, pprofEnabled)
-			return nil
-		},
-	}
-	cmd.Flags().String(
-		"base-path",
-		"",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
-	)
-	addPprofFlag(cmd, &pprofEnabled)
-	config.RegisterServePFlags(cmd.Flags())
-	return cmd
-}
-
-func newDuckDBQuackCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "quack",
-		Short: "Quack remote protocol commands",
-		Long: "Expose a local DuckDB mirror through the Quack remote protocol. " +
-			"This listener is separate from the AgentsView HTTP API and requires its own configured authentication and bind settings.",
-		Example:      "  agentsview replica duckdb quack serve --help",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	var serveCfg DuckDBQuackServeConfig
-	serveCmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Expose local DuckDB over Quack",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(cmd.Context(), serveCfg)
-		},
-	}
-	serveCmd.Flags().StringVar(
-		&serveCfg.Bind, "bind", "quack:127.0.0.1:9494",
-		"Quack bind URI",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Path, "path", "",
-		"DuckDB mirror path (defaults to [duckdb].path)",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Token, "token", "",
-		"Quack authentication token (required unless configured)",
-	)
-	serveCmd.Flags().BoolVar(
-		&serveCfg.AllowInsecure, "allow-insecure", false,
-		"Allow non-loopback Quack binding",
-	)
-	cmd.AddCommand(serveCmd)
-	return cmd
 }
 
 func newVersionCommand() *cobra.Command {
@@ -967,6 +878,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CURSOR_PROJECTS_DIR     Cursor projects directory")
 	fmt.Fprintln(w, "  IFLOW_DIR               iFlow projects directory")
 	fmt.Fprintln(w, "  FX_SESSIONS_DIR         fx sessions directory")
+	fmt.Fprintln(w, "  FACTORY_DIR             Factory Droid sessions directory")
 	fmt.Fprintln(w, "  JUNIE_DIR               Junie sessions directory")
 	fmt.Fprintln(w, "  JUNIE_HOME              Junie home (re-roots sessions directory)")
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")
@@ -978,6 +890,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  DIRECT_API_DIR          Direct API sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  MUSE_SESSIONS_DIR       Muse Code sessions directory")
+	fmt.Fprintln(w, "  MUSE_PERSONAL_AGENTS_DIR")
+	fmt.Fprintln(w, "                          Muse Personal agents directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
 	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_HARNESS_SESSIONS_DIR")
@@ -997,11 +911,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_PATH  DuckDB mirror database path")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_URL   Quack connection URL for DuckDB serve")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_TOKEN Quack authentication token")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_MACHINE")
-	fmt.Fprintln(w, "                          Machine name for DuckDB sync")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Watcher excludes:")
 	fmt.Fprintln(w, "  Add \"watch_exclude_patterns\" to ~/.agentsview/config.toml")
@@ -1044,6 +953,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout applies to automatically started and serve --background daemons;")
 	fmt.Fprintln(w, "  \"0s\" keeps them alive. daemon start and daemon restart stay running until stopped.")
 	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
+	fmt.Fprintln(w, "  Top-level background_sync_interval = \"10m\" spaces out syncs while nobody is watching the archive;")
+	fmt.Fprintln(w, "  \"0s\" syncs at sync_interval all the time.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }

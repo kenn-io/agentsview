@@ -310,7 +310,7 @@ func contractSearchModesAndSecretFindings(
 
 	if store.HasFTS(ctx) {
 		search, err := store.Search(ctx, SearchFilter{
-			Query: "duckdb",
+			Query: "lattice",
 			Limit: 5,
 		})
 		require.NoError(t, err)
@@ -338,7 +338,7 @@ func contractSearchModesAndSecretFindings(
 	require.Equal(t, []string{"tool_input"}, contentLocations(substring.Matches))
 	assert.Equal(t, "mac", substring.Matches[0].Machine)
 	require.NotNil(t, substring.Matches[0].DisplayName)
-	assert.Equal(t, "Alpha DuckDB parity", *substring.Matches[0].DisplayName)
+	assert.Equal(t, "Alpha Lattice parity", *substring.Matches[0].DisplayName)
 
 	regex, err := store.SearchContent(ctx, ContentSearchFilter{
 		Pattern:        `trend\s+trend`,
@@ -366,7 +366,7 @@ func contractSearchModesAndSecretFindings(
 			if match.SessionID == fixture.alphaID {
 				assert.Equal(t, "mac", match.Machine)
 				require.NotNil(t, match.DisplayName)
-				assert.Equal(t, "Alpha DuckDB parity", *match.DisplayName)
+				assert.Equal(t, "Alpha Lattice parity", *match.DisplayName)
 			}
 		}
 	}
@@ -874,7 +874,7 @@ func seedStoreContractSQLite(
 
 	alphaSecret := "The contract secret is sk-contract-alpha-123."
 	alphaSecretStart := len("The contract secret is ")
-	toolInput := `{"query":"contract-input duckdb parity secret"}`
+	toolInput := `{"query":"contract-input lattice parity secret"}`
 	toolSecretStart := len(`{"query":"`)
 	callIndex := 0
 	alphaHealthScore := 88
@@ -888,15 +888,15 @@ func seedStoreContractSQLite(
 			project:      "alpha",
 			machine:      "mac",
 			agent:        "claude",
-			firstMessage: "Alpha parity investigation starts with duckdb parity keyword.",
-			sessionName:  "Alpha DuckDB parity",
+			firstMessage: "Alpha parity investigation starts with lattice parity keyword.",
+			sessionName:  "Alpha Lattice parity",
 			startedAt:    "2026-01-10T12:00:00Z",
 			endedAt:      "2026-01-10T12:06:00Z",
 			userMessages: 3,
 			outputTokens: 320,
 			peakTokens:   900,
 			messages: []Message{
-				contractMessage(fixture.alphaID, 0, "user", "Alpha parity investigation starts with duckdb parity keyword.", "2026-01-10T12:00:00Z"),
+				contractMessage(fixture.alphaID, 0, "user", "Alpha parity investigation starts with lattice parity keyword.", "2026-01-10T12:00:00Z"),
 				contractMessage(fixture.alphaID, 1, "assistant", "Running contract search for backend parity.", "2026-01-10T12:01:00Z",
 					withModel("claude-sonnet-contract"),
 					withTokenUsage(`{"input_tokens":200,"output_tokens":60,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`),

@@ -11,7 +11,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-COPY internal/importer/claude_ai_requests.txt /src/internal/importer/claude_ai_requests.txt
+COPY internal/importer/browser_requests/ /src/internal/importer/browser_requests/
 RUN npm run build
 
 FROM golang:1.27.4-bookworm AS build
@@ -59,7 +59,12 @@ FROM debian:bookworm-slim
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN mkdir -p /data /agents
 
+# Docbank, the content store under the data directory, finds its lock
+# directory through the passwd entry of the effective uid. Runtimes that pick
+# an arbitrary non-root uid (Kubernetes runAsUser, docker --user) have no such
+# entry, so point it at the data volume, which must already be writable.
 ENV AGENTSVIEW_DATA_DIR=/data \
+    DOCBANK_LOCK_DIR=/data/docbank-locks \
     AGENTSVIEW_MODE=serve \
     AGENTSVIEW_HOST=0.0.0.0 \
     AGENTSVIEW_REQUIRE_AUTH=true \

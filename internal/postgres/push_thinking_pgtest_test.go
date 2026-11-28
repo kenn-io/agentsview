@@ -20,9 +20,7 @@ import (
 // reject the entire batch and stall the push.
 func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

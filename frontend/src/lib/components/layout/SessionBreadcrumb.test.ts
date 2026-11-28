@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount as mountComponent, unmount as unmountComponent, tick } from "svelte";
 import { createClassComponent as createLegacyComponent } from "svelte/legacy";
 // @ts-ignore
@@ -340,6 +340,20 @@ async function flushPromises() {
   await tick();
 }
 
+async function submitMenuRename(value: string) {
+  await tick();
+  document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+  await tick();
+  [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
+    .find((button) => button.textContent?.trim() === "Rename")!
+    .click();
+  await tick();
+  const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+}
+
 beforeEach(() => {
   generateForSession.mockReset();
   vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
@@ -351,6 +365,7 @@ beforeEach(() => {
     .mockResolvedValue(makeToolSequences());
   messages.clear();
   sessionTiming.reset();
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
   getTiming.mockReset();
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
@@ -388,15 +403,82 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockRestore();
   for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
   document.body.innerHTML = "";
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+  ui.alwaysShowYear = false;
 });
 
 describe("SessionBreadcrumb", () => {
+  it("keeps a rejected rename for retry", async () => {
+    const rename = vi
+      .spyOn(sessions, "renameSession")
+      .mockRejectedValueOnce(new Error("retry shortly"))
+      .mockResolvedValueOnce(undefined);
+    onTestFinished(() => rename.mockRestore());
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await submitMenuRename("My new name");
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
+    document
+      .querySelector<HTMLInputElement>(".rename-input")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(rename).toHaveBeenLastCalledWith("run:123456789abcdef", "My new name");
+    expect(document.querySelector(".rename-input")).toBeNull();
+  });
+  it("does not restore a failed rename on another session", async () => {
+    const pending = deferred<void>();
+    const rename = vi.spyOn(sessions, "renameSession").mockReturnValueOnce(pending.promise);
+    onTestFinished(() => rename.mockRestore());
+    const component = createClassComponent({
+      component: SessionBreadcrumb,
+      target: document.body,
+      props: { session: makeSession("claude", { id: "first" }), onBack: () => {} },
+    });
+    await submitMenuRename("First title");
+    component.$set({ session: makeSession("claude", { id: "second" }) });
+    await tick();
+    pending.reject(new Error("retry shortly"));
+    await tick();
+    await tick();
+    expect(document.querySelector(".rename-input")).toBeNull();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rename).toHaveBeenCalledWith("first", "First title");
+  });
+
+  it("adds the year to the session date when enabled", async () => {
+    const dateSpy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockImplementation(function (_locale, options) {
+        return options?.year ? "20 Feb 2026" : "20 Feb";
+      });
+    onTestFinished(() => {
+      dateSpy.mockRestore();
+    });
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    const time = () =>
+      document.querySelector(".session-time")?.textContent?.replace(/\s+/g, " ").trim();
+    expect(time()).not.toContain("2026");
+    ui.toggleAlwaysShowYear();
+    await tick();
+    expect(time()).toContain("20 Feb 2026");
+  });
+
   it("places the desktop expand control to the left of the relocated filter", async () => {
     ui.sidebarOpen = false;
 
@@ -946,6 +1028,25 @@ describe("SessionBreadcrumb", () => {
 
     unmount(component);
     messages.clear();
+  });
+
+  it("omits the open/resume menu for a copied archive", async () => {
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(false);
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "" });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("codex", {
+          id: "codex:copied-session",
+        }),
+        onBack: () => {},
+      },
+    });
+    await flushPromises();
+    await tick();
+
+    expect(document.querySelector(".resume-btn")).toBeNull();
+    await unmount(component);
   });
 
   it("offers a Codex Desktop deep link for a local terminal-created session", async () => {
@@ -3085,4 +3186,53 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
   });
+});
+
+describe("diagnostics close action", () => {
+  it.each(["B", undefined])(
+    "closes without toggling and returns focus for grade %s",
+    async (health_grade) => {
+      const session = makeSession("claude", { health_grade, outcome: "unknown" });
+      showMessages(session.id, "revision-1");
+      let pendingSignal: AbortSignal | undefined;
+      sessionsService.getApiV1SessionsByIdToolSequences.mockImplementation((_args, options) => {
+        pendingSignal = options.signal;
+        return new Promise(() => {});
+      });
+      ui.signalPanelOpen = true;
+      mount(SessionBreadcrumb, { target: document.body, props: { session, onBack() {} } });
+      await vi.waitFor(() => expect(pendingSignal).toBeDefined());
+      const close = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Hide diagnostics",
+      )!;
+      expect(close).toBeDefined();
+      expect(document.querySelector(".signal-panel .friction-findings")).not.toBeNull();
+      // jsdom has no layout; the mounted breadcrumb controls are visible in a browser.
+      const rects = vi
+        .spyOn(HTMLElement.prototype, "getClientRects")
+        .mockReturnValue([{}] as unknown as DOMRectList);
+      onTestFinished(() => rects.mockRestore());
+      close.focus();
+      close.click();
+      close.click();
+      await tick();
+      expect(ui.signalPanelOpen).toBe(false);
+      expect(document.querySelector(".signal-panel")).toBeNull();
+      expect(document.querySelector(".tool-sequences-panel")).toBeNull();
+      expect(pendingSignal!.aborted).toBe(true);
+      await vi.waitFor(() =>
+        expect(document.activeElement).toBe(
+          document.querySelector(health_grade ? ".grade-badge" : ".actions-btn"),
+        ),
+      );
+      // A stale control cannot reopen the stack after unmount either.
+      close.click();
+      await tick();
+      expect(ui.signalPanelOpen).toBe(false);
+      ui.toggleSignalPanel();
+      await tick();
+      expect(document.querySelector(".signal-panel")).not.toBeNull();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+    },
+  );
 });

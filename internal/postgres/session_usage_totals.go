@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -30,7 +29,7 @@ CREATE TABLE IF NOT EXISTS session_usage_totals (
 // PG with the archive's row, or removes it when the archive has none. It
 // reports whether the PG table changed.
 func (s *Sync) replaceSessionUsageTotal(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx pgSessionExecer, sessionID string,
 ) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM session_usage_totals WHERE session_id = $1`, sessionID,
@@ -53,7 +52,7 @@ func (s *Sync) replaceSessionUsageTotal(
 }
 
 func insertSessionUsageTotal(
-	ctx context.Context, tx *sql.Tx, sessionID string, t *db.SessionUsageTotal,
+	ctx context.Context, tx pgSessionExecer, sessionID string, t *db.SessionUsageTotal,
 ) error {
 	values, err := db.SessionUsageTotalValues(t)
 	if err != nil {

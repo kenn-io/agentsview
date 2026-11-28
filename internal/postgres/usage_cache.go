@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -20,13 +21,28 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if s.readTx != nil || s.hostedRelations {
 		return nil
 	}
-	column, err := sessionVersionColumnPG(ctx, s.pg)
-	if err != nil || column != "xmin" {
-		return err
-	}
 	fingerprint, err := pgTargetFingerprint(targetURL, schema)
 	if err != nil {
 		return err
+	}
+	column, err := sessionVersionColumnPG(ctx, s.pg)
+	if err != nil {
+		return err
+	}
+	if err := s.trendsDisk.Open("postgres-trends", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 256<<20); err != nil {
+		log.Printf("opening trends cache: %v", err)
+	} else {
+		s.trendsDisk.Sweep(time.Now())
+		s.trendsIdentity = fingerprint
+		s.trendsVersion = column
+	}
+	if err := s.activityDisk.Open("postgres-activity", strings.ReplaceAll(fingerprint, ":", "-"), 256<<20, 256<<20); err != nil {
+		log.Printf("opening activity cache: %v", err)
+	} else {
+		s.activityDisk.Sweep(time.Now())
+	}
+	if column != "xmin" {
+		return nil
 	}
 	reader, err := db.NewUsageCacheReader(filepath.Join(directory, "usage-postgres", strings.ReplaceAll(fingerprint, ":", "-")), &pgUsageCacheSource{Store: s, target: fingerprint})
 	if err != nil {
@@ -40,6 +56,14 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	reader.DeferWork()
 	s.usageCache = reader
 	return nil
+}
+
+// WarmUsageCache queues launch-time fills for unready zones.
+func (s *Store) WarmUsageCache(ctx context.Context) error {
+	if s.usageCache == nil {
+		return nil
+	}
+	return s.usageCache.WarmUnready(ctx)
 }
 
 type pgUsageCacheSource struct {
@@ -65,6 +89,32 @@ func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {
 	return oid, err
 }
 
+func (s *Store) activitySourceIdentity(ctx context.Context, target string) (string, error) {
+	oid, err := usageJournalOID(ctx, s.pg)
+	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+		return "", db.ErrUsageSourceUnavailable
+	}
+	if err != nil {
+		return "", err
+	}
+	var systemID, timeline string
+	err = s.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
+ substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
+ WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
+	if isInsufficientPrivilege(err) {
+		s.runtimeState().usageIdentityDenied.Store(true)
+	} else if err == nil {
+		s.runtimeState().usageIdentityDenied.Store(false)
+	}
+	if errors.Is(err, sql.ErrNoRows) || isInsufficientPrivilege(err) {
+		return "", db.ErrUsageSourceUnavailable
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s|%d|%s|%s", target, oid, systemID, timeline), nil
+}
+
 func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db.UsageSourceSnapshot, error) {
 	snapshot := db.UsageSourceSnapshot{MissingTimestampsLast: true}
 	var err error
@@ -75,29 +125,10 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	if snapshot.ChangeRevision == 0 {
 		return snapshot, db.ErrUsageSourceUnavailable
 	}
-	oid, err := usageJournalOID(ctx, view.pg)
-	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return snapshot, db.ErrUsageSourceUnavailable
-	}
+	snapshot.DatabaseID, err = view.activitySourceIdentity(ctx, source.target)
 	if err != nil {
 		return snapshot, err
 	}
-	var systemID, timeline string
-	err = view.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
- substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
- WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
-	if isInsufficientPrivilege(err) {
-		source.runtimeState().usageIdentityDenied.Store(true)
-	} else if err == nil {
-		source.runtimeState().usageIdentityDenied.Store(false)
-	}
-	if errors.Is(err, sql.ErrNoRows) || isInsufficientPrivilege(err) {
-		return snapshot, db.ErrUsageSourceUnavailable
-	}
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.DatabaseID = fmt.Sprintf("%s|%d|%s|%s", source.target, oid, systemID, timeline)
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'), 0)`).Scan(&snapshot.CursorHighWater)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return snapshot, db.ErrUsageSourceUnavailable

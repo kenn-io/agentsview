@@ -252,10 +252,22 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
+		if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _orphaned_ids)`); err != nil {
+				return nil, err
+			}
+		}
 		if err := applyArchiveContentToCopiedSessionsTx(
 			ctx, tx, "_orphaned_ids", d.ArchiveContent(), sourceVersion,
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
+		}
+		if !d.usageOnlyStorage() {
+			for _, id := range ids {
+				if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+					return nil, fmt.Errorf("refreshing orphaned prompt PR links: %w", err)
+				}
+			}
 		}
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, err
@@ -412,10 +424,22 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	); err != nil {
 		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
+	if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _trashed_ids)`); err != nil {
+			return nil, err
+		}
+	}
 	if err := applyArchiveContentToCopiedSessionsTx(
 		ctx, tx, "_trashed_ids", d.ArchiveContent(), sourceVersion,
 	); err != nil {
 		return nil, fmt.Errorf("projecting trashed data: %w", err)
+	}
+	if !d.usageOnlyStorage() {
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+				return nil, fmt.Errorf("refreshing trashed prompt PR links: %w", err)
+			}
+		}
 	}
 	// Keep the archived transcript under its page ID before the upgrade loses
 	// the filename mapping. Retain an empty thread row for legacy trash scope;
@@ -516,6 +540,7 @@ func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
 			   OR key LIKE 'machine\_label:%' ESCAPE '\'
 			   OR key LIKE 'machine\_alias:%' ESCAPE '\'
+			   OR key LIKE 'machine\_origin:%' ESCAPE '\'
 			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
@@ -1511,6 +1536,20 @@ func (d *DB) CopySessionMetadataFrom(
 			return err
 		}
 	}
+	// A reparsed worker whose spawner is gone has no spawn edge left to link
+	// it, so it keeps the spawn record and subagent role the old archive held.
+	if oldDBHasColumn(ctx, tx, "sessions", "spawn_linked") {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET spawn_linked = 1,
+				relationship_type = IIF(COALESCE(relationship_type, '') = ''
+					AND COALESCE(parent_session_id, '') = ''
+					AND parser_relationship_type = 'subagent', 'subagent', relationship_type)
+			WHERE spawn_linked = 0
+			  AND id IN (SELECT id FROM old_db.sessions WHERE spawn_linked = 1)`); err != nil {
+			return fmt.Errorf("copying session spawn records: %w", err)
+		}
+	}
 
 	// Copy pinned messages (table may not exist in older DBs).
 	// Auto-increment message IDs differ between DBs, so old
@@ -1724,6 +1763,14 @@ func (d *DB) CopySessionMetadataFrom(
 		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "agent") {
 			agentColumn = "agent"
 		}
+		accountID, polledAt := "''", "''"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "account_user_id") {
+			accountID, polledAt = "account_user_id", "account_polled_at"
+		}
+		conversationID := "''"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "conversation_id") {
+			conversationID = "conversation_id"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
 				agent,
@@ -1731,23 +1778,28 @@ func (d *DB) CopySessionMetadataFrom(
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key
+				user_id, user_email, is_headless, dedup_key, account_user_id, account_polled_at, conversation_id
 			)
 			SELECT `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key
+				user_id, user_email, is_headless, dedup_key, `+accountID+`, `+polledAt+`, `+conversationID+`
 			FROM old_db.cursor_usage_events
 			ORDER BY occurred_at, id`); err != nil {
 			return fmt.Errorf("copying cursor usage events: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "cursor_account_polls") {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM main.cursor_account_polls; INSERT INTO main.cursor_account_polls SELECT account_user_id, hour_start, polled_at FROM old_db.cursor_account_polls`); err != nil {
+			return fmt.Errorf("copying Cursor account polls: %w", err)
+		}
+	}
 
 	// database_id identifies the new physical generation and is never
 	// copied: every mirror push keys its incremental cursors to it, so the
-	// first push after a resync (DuckDB, PostgreSQL and ClickHouse alike)
+	// first push after a resync (PostgreSQL and ClickHouse alike)
 	// republishes everything and drops rows missing locally. That also
 	// makes journal continuity across the swap worthless, which is why the
 	// publication-revision counters are not copied either — the fresh
@@ -1769,7 +1821,9 @@ func (d *DB) CopySessionMetadataFrom(
 				'usage_pricing_revision',
 				'conversation_publication_revision',
 				'conversation_pruned_revision',
+				'conversation_prune_mark',
 				'conversation_usage_revision',
+				'conversation_tool_revision',
 				'worktree_mapping_publication_revision'
 			)
 			AND key NOT GLOB 'remote_import_data_version:*'
@@ -2204,8 +2258,10 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
 		cols = append(cols, "parser_parent_session_id")
 	}
-	if oldDBHasColumn(ctx, tx, "sessions", "parser_relationship_type") {
-		cols = append(cols, "parser_relationship_type")
+	for _, c := range []string{"parser_relationship_type", "relationship_inferred", "spawn_linked"} {
+		if oldDBHasColumn(ctx, tx, "sessions", c) {
+			cols = append(cols, c)
+		}
 	}
 	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
@@ -2245,7 +2301,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "pr_links", "source_session_id",
+		"cwd", "git_branch", "pr_links", "structured_pr_links", "source_session_id",
 		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"termination_status", "transcript_revision",
@@ -2451,6 +2507,13 @@ func copySessionDataForIDs(
 			return fmt.Errorf("copying Codex fork provenance: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "codex_cloud_accounts") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO codex_cloud_accounts (session_id, account_key)
+ SELECT copied.id, account.account_key FROM old_db.codex_cloud_accounts account
+ JOIN `+tempIDsTable+` copied ON copied.source_id = account.session_id`); err != nil {
+			return fmt.Errorf("copying Codex cloud accounts: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT OR IGNORE INTO claude_subagent_sources (session_id, file_path) "+
@@ -2541,11 +2604,20 @@ func copySessionDataForIDs(
 			msgCols.WriteString(", " + c)
 		}
 	}
+	insertCols := msgCols.String()
+	selectCols := strings.TrimPrefix(insertCols, "session_id, ")
+	// Compute the stored usage counters from the copied JSON, so a source
+	// archive from before those columns copies the same values a write stores.
+	if oldDBHasColumn(ctx, tx, "messages", "token_usage") {
+		insertCols += ", usage_output_tokens, usage_web_search_requests"
+		selectCols += ", agentsview_usage_output_tokens(token_usage)" +
+			", agentsview_usage_web_search_requests(token_usage)"
+	}
 	// Restrict the source scan as well as mapping IDs. The join alone scans
 	// the whole archive even when only one session is missing.
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO messages ("+msgCols.String()+") "+
-			"SELECT copied.id, "+strings.TrimPrefix(msgCols.String(), "session_id, ")+" FROM old_db.messages old_m "+
+		"INSERT INTO messages ("+insertCols+") "+
+			"SELECT copied.id, "+selectCols+" FROM old_db.messages old_m "+
 			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_m.session_id "+
 			"WHERE old_m.session_id IN (SELECT source_id FROM "+tempIDsTable+")",
 	); err != nil {
@@ -2567,12 +2639,16 @@ func copySessionDataForIDs(
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key, occurred_at_us`
+		// Derive occurred_at_us from the text rather than copy it, so rows
+		// from an archive that predates the column get one too.
 		usageEventSelect += `,
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key,
+				CASE WHEN typeof(occurred_at) = 'text'
+					THEN agentsview_timestamp_unix_micro(occurred_at) END`
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO usage_events (`+usageEventCols+`)
 			SELECT `+usageEventSelect+`

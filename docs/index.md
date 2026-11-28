@@ -3,19 +3,20 @@ title: AgentsView Documentation
 description: Find the guide for browsing, searching, reporting on, and maintaining your agent session archive
 ---
 
-# AgentsView Documentation
+# AgentsView documentation
 
 AgentsView lets you browse, search, and track costs across your AI coding
 sessions. A background server imports recorded sessions into a SQLite database
-on your machine. The web interface, desktop app, command line, and APIs read
-that archive.
+on your machine, and the web interface, desktop app, command line, and APIs read
+from that archive.
 
-New here? The [product overview](/){target=_self} explains what AgentsView is for, and the
-[five-minute guide](/guide/){target=_self} walks the whole loop with screenshots. The pages
-here explain how to use and maintain each feature.
+If you are new to AgentsView, the [product overview](/){target=_self} explains
+what it is for, and the [five-minute guide](/guide/){target=_self} walks through
+the whole loop with screenshots. The pages here explain how to use and maintain
+each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.47.0**. Check the [changelog](/docs/changelog/) for what each
+release, **v0.48.0**. Check the [changelog](/docs/changelog/) to see what each
 release includes.
 
 <p class="hero-actions">
@@ -31,14 +32,14 @@ release includes.
 | Learn the web interface                           | [Usage Guide](/docs/usage/)                                                                                                                                                                                |
 | See when agents ran, overlapped, and what it cost | [Activity](/docs/activity/)                                                                                                                                                                                |
 | Get daily token and cost reports                  | [Token Usage & Costs](/docs/token-usage/)                                                                                                                                                                  |
-| Search transcripts by meaning, not just words     | [Semantic Search](/docs/semantic-search/)                                                                                                                                                                  |
+| Search transcripts by meaning as well as exact words | [Semantic Search](/docs/semantic-search/) |
 | Correct project names and worktree assignments | [Data](/docs/data/) |
 | Review each day's corrections, tool errors, and recurring problems | [Friction Log](/docs/quality/#friction-log) |
 | Score session health and outcomes                 | [Session Intelligence](/docs/session-intelligence/)                                                                                                                                                        |
 | Browse extracted, provenance-linked knowledge     | [Recall](/docs/recall/)                                                                                                                                                                                    |
 | Give agents and scripts access to the archive     | [MCP Server](/docs/mcp/) and [Session API](/docs/session-api/)                                                                                                                                             |
-| Share sessions across machines                    | [Local Session Archive](https://agentsview.io/docs/commands/#agentsview-archive), [Hosted Raw Sync](/docs/hosted-raw-sync/), [PostgreSQL Sync](/docs/pg-sync/), [ClickHouse Sync](/docs/clickhouse-sync/), [DuckDB Mirror](/docs/duckdb/), [Filesystem Session Sync](/docs/filesystem-sync/) |
-| Sync Claude.ai or import chat exports | [Chat Import](/docs/chat-import/) |
+| Share sessions across machines                    | [Local Session Archive](https://agentsview.io/docs/commands/#agentsview-archive), [Hosted Raw Sync](/docs/hosted-raw-sync/), [PostgreSQL Sync](/docs/pg-sync/), [ClickHouse Sync](/docs/clickhouse-sync/), [Filesystem Session Sync](/docs/filesystem-sync/) |
+| Sync web chats through Chrome or import chat exports | [Chat Import](/docs/chat-import/) |
 | Fetch Codex cloud chats | [Codex Cloud](/docs/configuration/#codex-cloud) |
 | Sync a remote machine over SSH | [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync) |
 | Configure discovery, paths, and settings          | [Configuration](/docs/configuration/)                                                                                                                                                                      |
@@ -48,40 +49,37 @@ release includes.
 
 **The daemon imports your sessions.** This background server owns the writable
 archive and watches your agents' directories for new messages. The desktop app
-and commands that need the server start it when required. Some diagnostic
+and commands that need the server start it when required, and some diagnostic
 commands can read the archive directly. See
 [`agentsview daemon`](/docs/commands/#agentsview-daemon).
 
 **SQLite keeps your session history.** Parsed sessions live in `~/.agentsview/`
-with full-text indexes. Optional backends extend it:
-[PostgreSQL](/docs/pg-sync/) or [ClickHouse](/docs/clickhouse-sync/) for a
-remote read-only copy and [DuckDB](/docs/duckdb/) for analytical reads. All
-three can receive mirrors pushed from SQLite. Alternatively,
+with full-text indexes. Optional backends extend it with a remote read-only copy
+pushed from SQLite to [PostgreSQL](/docs/pg-sync/) or
+[ClickHouse](/docs/clickhouse-sync/). Alternatively,
 [hosted raw sync](/docs/hosted-raw-sync/) can retain original provider files and
 parse them into PostgreSQL without a local SQLite archive or a separate push.
 
 <img src="/docs/assets/static/architecture.svg" alt="AgentsView architecture: agent sessions sync into SQLite with FTS5 search, served via REST API, SSE events, and embedded Svelte SPA" style="width: 100%; max-width: 960px; margin: 1.5rem auto; display: block;" />
 
-Use [Configuration](/docs/configuration/) to choose source directories and how
-much content to retain. Use [Data](/docs/data/#storage-maintenance) to manage
-archive size.
+To choose source directories and how much content to retain, see
+[Configuration](/docs/configuration/). To manage archive size, see
+[Data](/docs/data/#storage-maintenance).
 
 ## Privacy
 
 Session data stays on your machine by default. The server binds to `127.0.0.1`
-unless you explicitly configure [remote access](/docs/remote-access/). Data
-leaves the machine only for features you choose, such as hosted raw sync, a
-PostgreSQL or ClickHouse target, remote DuckDB access, Generated Insights, or
-publishing a session to GitHub. Telemetry is an anonymous, content-free daemon
-liveness ping plus app-open and core-action events the web UI reports through
-the server, and `AGENTSVIEW_TELEMETRY_ENABLED=0` disables all of them.
+unless you explicitly configure [remote access](/docs/remote-access/), and data
+leaves your machine only for features you choose, such as hosted raw sync, a
+PostgreSQL or ClickHouse target, Generated Insights, or publishing a session to
+GitHub.
 
 ## Human and machine-readable pages
 
-Every page has an HTML URL and a Markdown twin. For example:
+Every page has both an HTML URL and a Markdown twin. For example:
 
 - `https://agentsview.io/docs/token-usage/`
 - `https://agentsview.io/docs/token-usage.md`
 
-The complete machine-readable index is available at
+You can find the complete machine-readable index at
 [`https://agentsview.io/llms.txt`](https://agentsview.io/llms.txt).

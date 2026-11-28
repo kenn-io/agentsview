@@ -442,6 +442,113 @@ func TestCodexForkInventoryBatchDoesNotAllocatePerUnchangedDirectory(t *testing.
 	assert.Less(t, allocations[1], 2*allocations[0], "warm forks must not stat unrelated dated directories")
 }
 
+func TestCodexHasParentRollout(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const rollout = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+	liveRoot := t.TempDir()
+	archivedRoot := t.TempDir()
+	childPath := filepath.Join(liveRoot, "2026", "07", "08", "rollout-2026-07-08T10-00-00-"+child+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(childPath), 0o700))
+	require.NoError(t, os.WriteFile(childPath, []byte("{}\n"), 0o600))
+
+	registered, ok := ProviderFactoryByType(AgentCodex)
+	require.True(t, ok)
+	factory := newCodexProviderFactory(registered.Definition())
+	cfg := ProviderConfig{Roots: []string{liveRoot, archivedRoot}}
+	t.Cleanup(func() { factory.(*codexProviderFactory).threadFiles.invalidate(cfg.Roots) })
+	provider := factory.NewProvider(cfg)
+	checker, ok := provider.(CodexParentRolloutChecker)
+	require.True(t, ok)
+
+	has, err := checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.False(t, has, "missing parent must report false")
+
+	// A revert page alone cannot identify turns copied from the original rollout.
+	pagePath := filepath.Join(archivedRoot, "rollout-2026-07-08T09-00-00-"+parent+"_"+rollout+".jsonl")
+	require.NoError(t, os.WriteFile(pagePath, []byte("{}\n"), 0o600))
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.False(t, has, "revert page alone must not count as the original parent rollout")
+
+	// A compressed original rollout in archived_sessions resolves the parent.
+	compressedParent := filepath.Join(archivedRoot, "rollout-2026-07-08T08-00-00-"+parent+".jsonl.zst")
+	require.NoError(t, os.WriteFile(compressedParent, []byte("zst"), 0o600))
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.True(t, has, "compressed original rollout must resolve parent presence")
+
+	// A child path must never resolve itself as its own parent.
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, child)
+	require.NoError(t, err)
+	assert.False(t, has, "child rollout must not satisfy its own parent lookup")
+}
+
+func TestCodexHasParentRolloutInLabeledHome(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	root := t.TempDir()
+	sessions := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc", "sessions")
+	day := filepath.Join(sessions, "2026", "07", "08")
+	require.NoError(t, os.MkdirAll(day, 0o700))
+	childPath := filepath.Join(day, "rollout-2026-07-08T10-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.CodexSessionMetaJSON(child, "/work/project", "codex_exec", tsEarly)+"\n"), 0o600))
+	parentPath := filepath.Join(day, "rollout-2026-07-08T08-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.CodexSessionMetaJSON(parent, "/work/project", "codex_exec", tsEarly)+"\n"), 0o600))
+
+	registered, ok := ProviderFactoryByType(AgentCodex)
+	require.True(t, ok)
+	factory := newCodexProviderFactory(registered.Definition())
+	cfg := ProviderConfig{Roots: []string{root}}
+	t.Cleanup(func() { factory.(*codexProviderFactory).threadFiles.invalidate([]string{root, sessions}) })
+	checker := factory.NewProvider(cfg).(CodexParentRolloutChecker)
+
+	has, err := checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.True(t, has, "parent in the labeled home must resolve the fork")
+}
+
+func TestCodexLabeledForkResolvesAndCapturesParent(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions", "2026", "09", "01")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	parent := filepath.Join(sessions, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
+	child := filepath.Join(sessions, "rollout-2026-09-01T11-00-00-"+revertOther+".jsonl")
+	require.NoError(t, os.WriteFile(parent, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(revertThread, "/work/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", tsEarly),
+	)), 0o600))
+	require.NoError(t, os.WriteFile(child, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(revertOther, revertThread, "/work/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", tsEarly),
+		testjsonl.CodexMsgJSON("assistant", "copied answer", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "new answer", tsEarlyS1),
+	)), 0o600))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok := provider.(interface {
+		SourceRefForPath(string) (SourceRef, bool)
+	}).SourceRefForPath(child)
+	require.True(t, ok)
+	out, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	require.Len(t, out.Results[0].Result.Messages, 1)
+	assert.Equal(t, "new answer", out.Results[0].Result.Messages[0].Content)
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
+	require.NoError(t, err)
+	require.True(t, supported)
+	var paths []string
+	for _, entry := range plan.Entries {
+		paths = append(paths, entry.LocalPath)
+	}
+	assert.Contains(t, paths, parent)
+}
+
 func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
 	for _, days := range []int{10, 1000} {
 		b.Run(strconv.Itoa(days), func(b *testing.B) {

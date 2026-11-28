@@ -33,7 +33,7 @@ func identityQueryCounts(t *testing.T, store *Store) (probes, results uint64) {
 
 func usageQueryCountsOf(t *testing.T, store *Store, probe string) (probes, results uint64) {
 	t.Helper()
-	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT countIf(`+probe+`),
 			countIf(startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS') AND
@@ -77,7 +77,7 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 			require.Empty(t, slot)
 			require.Empty(t, version)
 			if failure == "parts timeout" {
-				execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+				execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 				var timeouts uint64
 				require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 			SELECT count() FROM system.query_log

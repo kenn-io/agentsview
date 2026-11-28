@@ -206,6 +206,8 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
+		} else if sessions := parser.CodexLabeledIndexSessions(agDir, path); sessions != "" {
+			sessionRoots = append(sessionRoots, sessions)
 		}
 	}
 	if len(sessionRoots) == 0 {
@@ -449,6 +451,11 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
+			if preferred, compared := parser.PreferLabeledCodexSource(*candidate.ProviderSource, *current.ProviderSource); compared {
+				return preferred
+			}
+		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {

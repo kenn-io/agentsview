@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -21,7 +20,7 @@ const openrouterURL = "https://openrouter.ai/api/v1/models"
 func FetchOpenRouterPricingContext(
 	ctx context.Context,
 ) ([]ModelPricing, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newClient()
 	return fetchOpenRouterPricing(ctx, client, openrouterURL)
 }
 

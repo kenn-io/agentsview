@@ -204,7 +204,7 @@ func inspectDoctorMemoryClient(
 }
 
 func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatus) doctorMemoryClientStatus {
-	report, err := agentsetup.Run(ctx, agentsetup.Options{SetupCommand: "agentsview agent setup", CheckOnly: true, Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, false) }})
+	report, err := agentsetup.Run(ctx, agentsetup.Options{SetupCommand: "agentsview agent setup", CheckOnly: true, Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, false, true) }})
 	if err != nil {
 		return client
 	}

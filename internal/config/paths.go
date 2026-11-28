@@ -44,7 +44,6 @@ func expandLocalPaths(cfg *Config) error {
 		{"proxy binary", &cfg.Proxy.Bin},
 		{"proxy TLS certificate", &cfg.Proxy.TLSCert},
 		{"proxy TLS key", &cfg.Proxy.TLSKey},
-		{"DuckDB path", &cfg.DuckDB.Path},
 		{"vector database path", &cfg.Vector.DBPath},
 		{"recall prompt directory", &cfg.Recall.Extract.Prompts.Dir},
 	}

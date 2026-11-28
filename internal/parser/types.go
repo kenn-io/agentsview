@@ -26,6 +26,7 @@ const (
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentGeminiApps     AgentType = "gemini-apps"
+	AgentGrokWeb        AgentType = "grok-web"
 	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
 	AgentOpenCodeReview AgentType = "opencodereview"
@@ -65,6 +66,7 @@ const (
 	AgentHermes         AgentType = "hermes"
 	AgentAugureDesktop  AgentType = "augure-desktop"
 	AgentGrok           AgentType = "grok"
+	AgentFactory        AgentType = "factory"
 	AgentGoose          AgentType = "goose"
 	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentCodeBuddy      AgentType = "codebuddy"
@@ -86,6 +88,7 @@ const (
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
 	AgentEvener         AgentType = "evener"
+	AgentMusePersonal   AgentType = "muse-personal"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
 	AgentCline          AgentType = "cline"
@@ -792,6 +795,12 @@ var Registry = []AgentDef{
 		FileBased:   false,
 	},
 	{
+		Type:        AgentGrokWeb,
+		DisplayName: "Grok Web",
+		IDPrefix:    "grok-web:",
+		FileBased:   false,
+	},
+	{
 		Type:        AgentKiro,
 		DisplayName: "Kiro",
 		EnvVar:      "KIRO_SESSIONS_DIR",
@@ -871,6 +880,18 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".grok/sessions"},
 		IDPrefix:    "grok:",
 		FileBased:   true,
+	},
+	{
+		Type:        AgentFactory,
+		DisplayName: "Factory Droid",
+		EnvVar:      "FACTORY_DIR",
+		ConfigKey:   "factory_dirs",
+		DefaultDirs: []string{".factory/sessions"},
+		IDPrefix:    "factory:",
+		FileBased:   true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
 	},
 	{
 		Type:              AgentGoose,
@@ -1103,6 +1124,16 @@ var Registry = []AgentDef{
 		FileBased:         true,
 		ShallowWatch:      true,
 		PeriodicReconcile: true,
+	},
+	{
+		Type:              AgentMusePersonal,
+		DisplayName:       "Muse Personal",
+		EnvVar:            "MUSE_PERSONAL_AGENTS_DIR",
+		DefaultDirs:       []string{"agents"},
+		IDPrefix:          "muse-personal:",
+		FileBased:         true,
+		PeriodicReconcile: true,
+		Usage:             UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
 		Type:              AgentEvener,
@@ -1495,6 +1526,10 @@ const SessionKindNonInteractive = "non-interactive"
 // is the roborev feature tag (`codex exec --thread-source roborev`).
 const SessionKindRoborev = "roborev"
 
+// SessionKindMuseBackground marks a Muse Personal scheduled job or upkeep
+// pass that Muse started itself, rather than a conversation with the person.
+const SessionKindMuseBackground = "muse-background"
+
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
 	Path   string
@@ -1532,13 +1567,14 @@ type CodexMessageOrigin struct {
 
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
-	CodexFork  *CodexForkInfo `json:"-"`
-	ID         string
-	Project    string
-	Machine    string
-	Agent      AgentType
-	AgentLabel string
-	Entrypoint string
+	RecordedProject bool           `json:"-"`
+	CodexFork       *CodexForkInfo `json:"-"`
+	ID              string
+	Project         string
+	Machine         string
+	Agent           AgentType
+	AgentLabel      string
+	Entrypoint      string
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
 	// interactive sessions and for agents that do not emit one.
@@ -1783,7 +1819,8 @@ type ParsedMessage struct {
 	IsCompactBoundary bool
 
 	// claudeChannelOrigin limits preview unwrapping to channel entries.
-	claudeChannelOrigin bool
+	claudeChannelOrigin    bool
+	antigravityTypedPrompt bool
 
 	// StopReason is the reason the assistant stopped generating
 	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";

@@ -1,13 +1,17 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type reportingSourceLoadStats struct {
@@ -20,11 +24,16 @@ type reportingSourceLoadStats struct {
 type reportingExportSource struct {
 	localMachineID      string
 	machineAliases      map[string]string
+	codexCloudAccounts  map[string]string
+	codexCloudRepeats   reportingCodexCloudRepeats
 	activitySessions    []reportingSourceSession
 	activityEvents      []activity.ActivityEvent
 	usageSessions       []activity.SessionMeta
 	usageCandidates     []activityReportUsageCandidate
 	standaloneUsage     []activity.UsageRow
+	accountUsage        []reportingAccountRow
+	cursorEvents        []reportingCursorEventRow
+	cursorPolls         []reportingCursorPollRow
 	pricing             []export.EffectivePricingRow
 	createdAt           map[string]time.Time
 	projectObservations []export.ProjectIdentityObservation
@@ -51,10 +60,29 @@ type reportingDaySource struct {
 	usageSessions    []activity.SessionMeta
 	usageCandidates  []activityReportUsageCandidate
 	standaloneUsage  []activity.UsageRow
+	accountUsage     []reportingAccountRow
+	cursorEvents     []reportingCursorEventRow
+	cursorPolls      []reportingCursorPollRow
 	pricing          []export.EffectivePricingRow
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
 	references       map[string]export.ProjectReference
+
+	// codexCloudAccounts maps each Codex cloud session ID to the account
+	// key it was fetched for, in schemas that report those sessions by
+	// account. codexCloudRepeats holds the copies of chats the archive
+	// holds more than once that no origin reports.
+	codexCloudAccounts map[string]string
+	codexCloudRepeats  reportingCodexCloudRepeats
+}
+
+// reportingCodexCloudRepeats records how a Codex cloud chat that the
+// archive holds more than once is reported. activity holds the copies whose
+// activity no origin reports. usageOwner maps every copy of such a chat to
+// the copy its usage reports under, or to empty when its usage is dropped.
+type reportingCodexCloudRepeats struct {
+	activity   map[string]bool
+	usageOwner map[string]string
 }
 
 func (db *DB) loadReportingExportSource(
@@ -129,7 +157,7 @@ func (db *DB) loadReportingExportSource(
 		return source, err
 	}
 	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
-		ctx, tx, query,
+		ctx, tx, query, schemaVersion, &source,
 	)
 	if err != nil {
 		return source, err
@@ -163,10 +191,16 @@ func (db *DB) loadReportingExportSource(
 	}
 
 	allSessions := mergeReportingSessions(sessions, usageSessions)
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		source.codexCloudAccounts, source.codexCloudRepeats, err = reportingCodexCloudAccountsFrom(ctx, tx, allSessions)
+		if err != nil {
+			return source, err
+		}
+	}
 	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
-	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
+	if len(labels) > 0 || export.IsJointReportingSchema(schemaVersion) {
 		archiveID, archiveSalt, scopeErr := reportingArchiveScope(ctx, tx)
 		if scopeErr != nil {
 			return source, scopeErr
@@ -185,7 +219,7 @@ func (db *DB) loadReportingExportSource(
 		}
 	}
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		references, err = db.reportingSessionReferences(ctx, tx, allSessions)
 		if err != nil {
 			return source, err
@@ -215,67 +249,59 @@ func (src reportingExportSource) forDate(
 	date, end time.Time,
 ) reportingDaySource {
 	startBound, endBound := reportingRangeStringBounds(date, end)
-	selectedSessions := make([]activity.SessionMeta, 0, len(src.activitySessions))
-	activityIDs := make([]string, 0, len(src.activitySessions))
-	selected := make(map[string]struct{}, len(src.activitySessions))
-	for _, candidate := range src.activitySessions {
-		eligible := candidate.effectiveEnd >= startBound
-		if !eligible && candidate.terminalTimestamp >= startBound {
-			eligible = true
-		}
-		if !eligible || candidate.effectiveStart >= endBound {
-			continue
-		}
-		selectedSessions = append(selectedSessions, candidate.meta)
-		activityIDs = append(activityIDs, candidate.meta.SessionID)
+	selectedSessions := filterReportingRows(src.activitySessions, func(candidate *reportingSourceSession) bool {
+		eligible := candidate.effectiveEnd >= startBound || candidate.terminalTimestamp >= startBound
+		return eligible && candidate.effectiveStart < endBound
+	})
+	activitySessions := make([]activity.SessionMeta, len(selectedSessions))
+	activityIDs := make([]string, len(selectedSessions))
+	selected := make(map[string]struct{}, len(selectedSessions))
+	for i, candidate := range selectedSessions {
+		activitySessions[i] = candidate.meta
+		activityIDs[i] = candidate.meta.SessionID
 		selected[candidate.meta.SessionID] = struct{}{}
 	}
 
-	activityEvents := make([]activity.ActivityEvent, 0, len(src.activityEvents))
-	for _, event := range src.activityEvents {
-		if _, ok := selected[event.SessionID]; ok {
-			activityEvents = append(activityEvents, event)
-		}
-	}
+	activityEvents := filterReportingRows(src.activityEvents, func(event *activity.ActivityEvent) bool {
+		_, ok := selected[event.SessionID]
+		return ok
+	})
 
 	lowerBound := PaddedUTCBound(date.Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(end.Format(time.RFC3339), 14)
-	usageCandidates := make([]activityReportUsageCandidate, 0, len(src.usageCandidates))
-	usageIDs := make(map[string]struct{}, len(src.usageCandidates))
-	for _, candidate := range src.usageCandidates {
-		if candidate.scan.ts < lowerBound || candidate.scan.ts > upperBound {
-			continue
-		}
-		usageCandidates = append(usageCandidates, candidate)
-		if candidate.scan.sessionID != "" {
-			usageIDs[candidate.scan.sessionID] = struct{}{}
+	usageCandidates := filterReportingRows(src.usageCandidates, func(candidate *activityReportUsageCandidate) bool {
+		return candidate.scan.ts >= lowerBound && candidate.scan.ts <= upperBound
+	})
+	usageIDs := make(map[string]struct{}, len(usageCandidates))
+	for i := range usageCandidates {
+		if id := usageCandidates[i].scan.sessionID; id != "" {
+			usageIDs[id] = struct{}{}
 		}
 	}
-	usageSessions := make([]activity.SessionMeta, 0, len(src.usageSessions))
-	for _, session := range src.usageSessions {
-		if _, ok := usageIDs[session.SessionID]; ok {
-			usageSessions = append(usageSessions, session)
-		}
-	}
-	standaloneUsage := make([]activity.UsageRow, 0, len(src.standaloneUsage))
-	for _, row := range src.standaloneUsage {
-		if row.Timestamp >= lowerBound && row.Timestamp <= upperBound {
-			standaloneUsage = append(standaloneUsage, row)
+	usageSessions := filterReportingRows(src.usageSessions, func(session *activity.SessionMeta) bool {
+		_, ok := usageIDs[session.SessionID]
+		return ok
+	})
+	standaloneUsage := filterReportingRows(src.standaloneUsage, func(row *activity.UsageRow) bool {
+		return row.Timestamp >= lowerBound && row.Timestamp <= upperBound
+	})
+	var accountUsage []reportingAccountRow
+	for _, row := range src.accountUsage {
+		if !row.at.Before(date) && row.at.Before(end) {
+			accountUsage = append(accountUsage, row)
 		}
 	}
 
-	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
+	allSessions := mergeReportingSessions(activitySessions, usageSessions)
 	labels := activity.ProjectLabels(allSessions)
 	labelSet := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
 		labelSet[label] = struct{}{}
 	}
-	observations := make([]export.ProjectIdentityObservation, 0, len(src.projectObservations))
-	for _, observation := range src.projectObservations {
-		if _, ok := labelSet[observation.Project]; ok {
-			observations = append(observations, observation)
-		}
-	}
+	observations := filterReportingRows(src.projectObservations, func(observation *export.ProjectIdentityObservation) bool {
+		_, ok := labelSet[observation.Project]
+		return ok
+	})
 	projects := export.BuildProjectsMapWithScope(
 		labels, observations, src.archiveScope,
 	)
@@ -295,17 +321,43 @@ func (src reportingExportSource) forDate(
 		localMachineID:   src.localMachineID,
 		machineAliases:   src.machineAliases,
 		archiveID:        src.archiveScope.ArchiveID,
-		activitySessions: selectedSessions,
+		activitySessions: activitySessions,
 		activityIDs:      activityIDs,
 		activityEvents:   activityEvents,
 		usageSessions:    usageSessions,
 		usageCandidates:  usageCandidates,
 		standaloneUsage:  standaloneUsage,
+		accountUsage:     accountUsage,
+		cursorEvents:     filterReportingRows(src.cursorEvents, func(row *reportingCursorEventRow) bool { return !row.at.Before(date) && row.at.Before(end) }),
+		cursorPolls:      filterReportingRows(src.cursorPolls, func(row *reportingCursorPollRow) bool { return !row.at.Before(date) && row.at.Before(end) }),
 		pricing:          src.pricing,
 		createdAt:        createdAt,
 		projects:         projects,
 		references:       references,
+
+		codexCloudAccounts: src.codexCloudAccounts,
+		codexCloudRepeats:  src.codexCloudRepeats,
 	}
+}
+
+// filterReportingRows copies the rows that keep accepts into a slice with no
+// spare capacity. A digest calls forDate once per date over source rows loaded
+// for the whole range, so sizing each date's copy by the source would allocate
+// about the range's rows for every date and multiply the digest's peak memory.
+func filterReportingRows[T any](rows []T, keep func(*T) bool) []T {
+	count := 0
+	for i := range rows {
+		if keep(&rows[i]) {
+			count++
+		}
+	}
+	out := make([]T, 0, count)
+	for i := range rows {
+		if keep(&rows[i]) {
+			out = append(out, rows[i])
+		}
+	}
+	return out
 }
 
 func reportingRangeStringBounds(start, end time.Time) (string, string) {
@@ -364,6 +416,131 @@ func reportingCreatedAtFrom(
 		return nil, nil, err
 	}
 	return rawValues, parsedValues, nil
+}
+
+// reportingCodexCloudAccountsFrom maps each Codex cloud session to its
+// account key: the directory of its mirror file, or for a chat imported
+// from another computer's artifacts, the key import recorded. A session
+// with neither is left out and stays under its machine.
+//
+// An archive that fetched a chat and also imported another computer's copy
+// holds it under several session IDs. Every copy in the archive is a
+// candidate, whatever range the export covers, so a daily export and a
+// multi-day digest choose the same copies. The account reports the
+// activity of the copy with the newest message, or the local copy when
+// they tie. Only the computer that watched a chat run captures its token
+// usage, and each copy's usage events add up to the running total that
+// computer saw. The account therefore reports the usage of the copy with
+// the most tokens, with the same tie-breaks, under the activity copy's ID.
+func reportingCodexCloudAccountsFrom(
+	ctx context.Context,
+	q sessionExportQuerier,
+	sessions []activity.SessionMeta,
+) (map[string]string, reportingCodexCloudRepeats, error) {
+	// Imported IDs are the origin, "~", and the fetching computer's ID.
+	native := func(id string) string { return id[strings.LastIndex(id, "~")+1:] }
+	inRange := make(map[string]bool)
+	for _, session := range sessions {
+		if session.Agent == string(parser.AgentCodexCloud) {
+			inRange[native(session.SessionID)] = true
+		}
+	}
+	accounts := make(map[string]string)
+	copies := make(map[[2]string][]string)
+	if len(inRange) == 0 {
+		return accounts, reportingCodexCloudRepeats{}, nil
+	}
+	rows, err := q.QueryContext(ctx,
+		`SELECT s.id, COALESCE(s.file_path, ''), COALESCE(a.account_key, '')
+		FROM sessions s LEFT JOIN codex_cloud_accounts a ON a.session_id = s.id
+		WHERE s.agent = ? AND s.deleted_at IS NULL`,
+		string(parser.AgentCodexCloud),
+	)
+	if err != nil {
+		return nil, reportingCodexCloudRepeats{}, fmt.Errorf("querying reporting Codex cloud accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, path, imported string
+		if err := rows.Scan(&id, &path, &imported); err != nil {
+			return nil, reportingCodexCloudRepeats{}, fmt.Errorf("scanning reporting Codex cloud account: %w", err)
+		}
+		account := cmp.Or(parser.CodexCloudAccountFromPath(path), imported)
+		if account == "" || !inRange[native(id)] {
+			continue
+		}
+		accounts[id] = account
+		chat := [2]string{account, native(id)}
+		copies[chat] = append(copies[chat], id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, reportingCodexCloudRepeats{}, fmt.Errorf("iterating reporting Codex cloud accounts: %w", err)
+	}
+	var repeated []string
+	for _, ids := range copies {
+		if len(ids) > 1 {
+			repeated = append(repeated, ids...)
+		}
+	}
+	newest := make(map[string]time.Time, len(repeated))
+	tokens := make(map[string]int64, len(repeated))
+	err = queryChunked(repeated, func(chunk []string) error {
+		placeholders, args := InPlaceholders(chunk)
+		rows, err := q.QueryContext(ctx,
+			`SELECT s.id,
+				COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id), ''),
+				(SELECT COALESCE(SUM(ue.input_tokens + ue.output_tokens +
+					ue.cache_creation_input_tokens + ue.cache_read_input_tokens), 0)
+					FROM usage_events ue WHERE ue.session_id = s.id)
+			FROM sessions s WHERE s.id IN `+placeholders,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying reporting Codex cloud copies: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, last string
+			var total int64
+			if err := rows.Scan(&id, &last, &total); err != nil {
+				return fmt.Errorf("scanning reporting Codex cloud copy: %w", err)
+			}
+			newest[id], _ = time.Parse(time.RFC3339Nano, last)
+			tokens[id] = total
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, reportingCodexCloudRepeats{}, err
+	}
+	// Each rank is positive when copy a should be reported over copy b.
+	activityRank := func(a, b string) int {
+		return cmp.Or(
+			newest[a].Compare(newest[b]),
+			cmp.Compare(strings.Count(b, "~"), strings.Count(a, "~")),
+			strings.Compare(b, a),
+		)
+	}
+	usageRank := func(a, b string) int {
+		return cmp.Or(cmp.Compare(tokens[a], tokens[b]), activityRank(a, b))
+	}
+	repeats := reportingCodexCloudRepeats{
+		activity:   make(map[string]bool),
+		usageOwner: make(map[string]string),
+	}
+	for _, ids := range copies {
+		if len(ids) < 2 {
+			continue
+		}
+		activityCopy := slices.MaxFunc(ids, activityRank)
+		usageCopy := slices.MaxFunc(ids, usageRank)
+		for _, id := range ids {
+			repeats.activity[id] = id != activityCopy
+			repeats.usageOwner[id] = ""
+		}
+		repeats.usageOwner[usageCopy] = activityCopy
+	}
+	return accounts, repeats, nil
 }
 
 func reportingTerminalTimestampsFrom(

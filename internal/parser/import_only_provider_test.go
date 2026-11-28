@@ -68,9 +68,8 @@ func TestImportOnlyProviderContentCapabilitiesMatchParsedExports(t *testing.T) {
 		]
 	}]`
 	geminiPath := filepath.Join(t.TempDir(), "activity.html")
-	require.NoError(t, os.WriteFile(geminiPath, []byte(geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted<br>",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>first prompt</p><p>answer</p>",
+	require.NoError(t, os.WriteFile(geminiPath, []byte(geminiAppsPromptedDocument(
+		geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM GMT", "first prompt", "<p>answer</p>"),
 	)), 0o644))
 
 	parse := map[AgentType]func(Provider, func(ParseResult) error) error{
@@ -84,6 +83,17 @@ func TestImportOnlyProviderContentCapabilitiesMatchParsedExports(t *testing.T) {
 		AgentGeminiApps: func(p Provider, fn func(ParseResult) error) error {
 			_, err := p.(GeminiAppsExportParser).ParseGeminiAppsExport(geminiPath, fn)
 			return err
+		},
+		// AgentsView reads no Grok web export; only Chrome Sync's parser fills
+		// its sessions.
+		AgentGrokWeb: func(_ Provider, fn func(ParseResult) error) error {
+			result, err := ParseGrokWebConversation(grokTestConversation(t, "Caps", "2026-10-21T08:00:05Z", nil,
+				grokTestResponse("r1", "", "human", "Why?", "2026-10-21T08:00:00Z"),
+				grokTestResponse("r2", "r1", "assistant", "Because.", "2026-10-21T08:00:05Z")))
+			if err != nil {
+				return err
+			}
+			return fn(result)
 		},
 	}
 	for agent, parseExport := range parse {

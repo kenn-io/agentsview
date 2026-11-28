@@ -19,7 +19,7 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
 	}
-	if err := installCJKFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer, false); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring prepared test CJK FTS: %w", err)
 	}

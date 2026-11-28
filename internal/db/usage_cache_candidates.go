@@ -127,6 +127,10 @@ func captureUsageQueryFrom(ctx context.Context, tx *sql.Tx, filter UsageFilter, 
 		return err
 	}
 	snapshot.Intervals = usageQueryIntervals(filter)
+	return loadUsageCursorHighWater(ctx, tx, snapshot)
+}
+
+func loadUsageCursorHighWater(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 	var hasCursorTable bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
 	SELECT 1 FROM sqlite_master
@@ -207,17 +211,11 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 	).Scan(&snapshot.DatabaseID); err != nil {
 		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot database id: %w", err)
 	}
-	pricingRows, err := db.loadPricingMapFrom(ctx, tx)
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot pricing: %w", err)
-	}
-	snapshot.PricingRows = pricingRows
-	snapshot.ChangeRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
+	snapshot.PricingRows, snapshot.PricingDigest, err = db.snapshotPricing(ctx, tx, snapshot.DatabaseID)
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
-
-	snapshot.PricingDigest, err = export.EffectivePricingDigest(snapshot.PricingRows)
+	snapshot.ChangeRevision, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
 	if err != nil {
 		return usageQuerySnapshot{}, err
 	}
@@ -230,6 +228,54 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 		return usageQuerySnapshot{}, fmt.Errorf("closing usage archive snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+// usagePricingEntry is the pricing catalog the last usage snapshot loaded.
+// Live syncing refreshes usage rollups after every watcher batch, and loading
+// and digesting a catalog of thousands of rows each time allocated tens of
+// megabytes per batch. The entry is reused while the archive generation, its
+// trigger-maintained usage_pricing_revision, and the in-memory pricing inputs
+// stay the same.
+type usagePricingEntry struct {
+	databaseID string
+	revision   int64
+	configGen  uint64
+	// rows is shared by every snapshot that reuses the entry. Readers copy
+	// it (export.NewPricingResolver) and never modify it.
+	rows   []export.EffectivePricingRow
+	digest string
+}
+
+// snapshotPricing returns the pricing catalog and its digest as seen by tx.
+func (db *DB) snapshotPricing(ctx context.Context, tx *sql.Tx, databaseID string) ([]export.EffectivePricingRow, string, error) {
+	configGen := db.pricingConfigGen.Load()
+	var revision int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = ?), 0)`,
+		archiveMetadataUsagePricingRevisionKey,
+	).Scan(&revision); err != nil {
+		return nil, "", fmt.Errorf("reading usage snapshot pricing revision: %w", err)
+	}
+	if cached := db.usagePricing.Load(); cached != nil && cached.databaseID == databaseID &&
+		cached.revision == revision && cached.configGen == configGen {
+		return cached.rows, cached.digest, nil
+	}
+	rows, err := db.loadPricingMapFrom(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading usage snapshot pricing: %w", err)
+	}
+	digest, err := export.EffectivePricingDigest(rows)
+	if err != nil {
+		return nil, "", err
+	}
+	// Clip so an append by any holder copies instead of writing into the
+	// shared array.
+	rows = slices.Clip(rows)
+	db.usagePricing.Store(&usagePricingEntry{
+		databaseID: databaseID, revision: revision, configGen: configGen,
+		rows: rows, digest: digest,
+	})
+	return rows, digest, nil
 }
 
 func discoverUsageCandidates(ctx context.Context, tx *sql.Tx, filter UsageFilter, kind usageQueryKind) ([]string, error) {
@@ -295,15 +341,18 @@ func usageCandidateDiscoverySQL(
 		branches = append(branches, prefix+"\n AND "+where)
 		args = append(args, branchArgs...)
 	}
-	appendRangeBranch := func(source, eligibility, column string) {
-		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
+	appendFilteredBranch := func(source, filter string, filterArgs []any) {
 		branch := `SELECT ranged.session_id
-			FROM (SELECT DISTINCT session_id FROM ` + source + ` WHERE ` + eligibility +
-			" AND " + column + " IS NOT NULL AND " + column + " != ''\n AND " + where + `) ranged
+			FROM (SELECT DISTINCT session_id FROM ` + source + ` WHERE ` + filter + `) ranged
 			JOIN sessions s ON s.id = ranged.session_id
 			WHERE s.deleted_at IS NULL`
 		branches = append(branches, branch)
-		args = append(args, branchArgs...)
+		args = append(args, filterArgs...)
+	}
+	appendRangeBranch := func(source, eligibility, column string) {
+		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
+		appendFilteredBranch(source, eligibility+
+			" AND "+column+" IS NOT NULL AND "+column+" != ''\n AND "+where, branchArgs)
 	}
 	appendRangeBranch("messages AS m INDEXED BY idx_messages_usage_timestamp",
 		usageMessageSourceEligibility, "m.timestamp")
@@ -317,8 +366,18 @@ func usageCandidateDiscoverySQL(
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")
-	appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred",
-		usageEventSourceEligibility, "ue.occurred_at")
+	// Parsed timestamps seek occurred_at_us; text that does not parse keeps
+	// the text range on its own small index.
+	if filter, filterArgs, ok := appendUsageEventMicroBounds(
+		usageEventSourceEligibility+" AND ue.occurred_at_us IS NOT NULL", bounds, nil,
+	); ok {
+		appendFilteredBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred_us",
+			filter, filterArgs)
+		appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred_unparsed",
+			usageEventSourceEligibility+" AND ue.occurred_at_us IS NULL", "ue.occurred_at")
+	} else {
+		appendRangeBranch("usage_events AS ue", usageEventSourceEligibility, "ue.occurred_at")
+	}
 	appendBranch(`SELECT ue.session_id
 		FROM usage_events ue
 		JOIN sessions s ON s.id = ue.session_id

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -335,4 +336,53 @@ func seedReportingLongRangeFixture(t *testing.T, d *DB) {
 		{Source: "long-source", Model: "long-model", OccurredAt: "2026-07-01T12:00:00Z", DedupKey: "first"},
 		{Source: "long-source", Model: "long-model", OccurredAt: "2026-07-30T12:00:00Z", DedupKey: "second"},
 	}))
+}
+
+// A digest calls forDate once per date over rows loaded for the whole range.
+// Each date's copies must be sized to that date's rows: buffers sized to the
+// range allocate about the whole source for every date of a 30-day digest.
+func TestReportingSourceForDateCopiesOnlyTheDatesRows(t *testing.T) {
+	var source reportingExportSource
+	for day := 1; day <= 30; day++ {
+		id := fmt.Sprintf("session-%02d", day)
+		start := fmt.Sprintf("2026-07-%02dT10:00:00Z", day)
+		meta := activity.SessionMeta{SessionID: id}
+		source.activitySessions = append(source.activitySessions, reportingSourceSession{
+			meta:           meta,
+			effectiveStart: start,
+			effectiveEnd:   fmt.Sprintf("2026-07-%02dT11:00:00Z", day),
+		})
+		source.usageSessions = append(source.usageSessions, meta)
+		for ordinal := range 2 {
+			source.activityEvents = append(source.activityEvents, activity.ActivityEvent{
+				SessionID: id, Ordinal: ordinal, Timestamp: start,
+			})
+			source.usageCandidates = append(source.usageCandidates, activityReportUsageCandidate{
+				scan: dailyUsageScanRow{
+					sessionID: id, ts: fmt.Sprintf("2026-07-%02dT10:30:00Z", day),
+				},
+			})
+		}
+	}
+
+	day := source.forDate(
+		time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC),
+	)
+
+	// Activity covers only the session active on July 15. Usage keeps the
+	// 14-hour padding, which reaches the July 14 and July 16 rows.
+	require.Len(t, day.activitySessions, 1)
+	assert.Equal(t, "session-15", day.activitySessions[0].SessionID)
+	assert.Equal(t, []string{"session-15"}, day.activityIDs)
+	require.Len(t, day.activityEvents, 2)
+	require.Len(t, day.usageCandidates, 6)
+	assert.Equal(t, "session-14", day.usageCandidates[0].scan.sessionID)
+	assert.Equal(t, "session-16", day.usageCandidates[5].scan.sessionID)
+	require.Len(t, day.usageSessions, 3)
+
+	assert.Equal(t, 1, cap(day.activitySessions), "activity sessions capacity")
+	assert.Equal(t, 2, cap(day.activityEvents), "activity events capacity")
+	assert.Equal(t, 6, cap(day.usageCandidates), "usage candidates capacity")
+	assert.Equal(t, 3, cap(day.usageSessions), "usage sessions capacity")
 }

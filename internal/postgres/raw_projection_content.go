@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"reflect"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
@@ -56,6 +58,11 @@ func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
 	return s.ID
 }
 
+type rawRelationshipProvenance struct {
+	ParserRelationship string
+	Inferred           bool
+}
+
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
 	// Dialogue belongs to mutable derived state, outside immutable content.
 	p.Messages = slices.Clone(p.Messages)
@@ -63,14 +70,58 @@ func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
 		p.Messages[i].DialogueText = nil
 	}
 	var b bytes.Buffer
-	err := gob.NewEncoder(&b).Encode(p)
-	return b.Bytes(), err
+	enc := gob.NewEncoder(&b)
+	if err := enc.Encode(p); err != nil {
+		return nil, err
+	}
+	if rel, inferred, ok := p.Session.RelationshipProvenance(); ok {
+		if err := enc.Encode(rawRelationshipProvenance{
+			ParserRelationship: rel,
+			Inferred:           inferred,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return b.Bytes(), nil
 }
 
 func decodeRawPayload(b []byte) (ingest.PreparedSession, error) {
 	var p ingest.PreparedSession
-	err := gob.NewDecoder(bytes.NewReader(b)).Decode(&p)
-	return p, err
+	dec := gob.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&p); err != nil {
+		return p, err
+	}
+	var prov rawRelationshipProvenance
+	err := dec.Decode(&prov)
+	if errors.Is(err, io.EOF) {
+		recoverLegacyRawRelationshipProvenance(&p.Session)
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	p.Session.RestoreRelationshipProvenance(prov.ParserRelationship, prov.Inferred)
+	return p, nil
+}
+
+// recoverLegacyRawRelationshipProvenance infers parser provenance for gob
+// payloads encoded before rawRelationshipProvenance existed, where parentless
+// headless workers already had RelationshipType promoted to "subagent".
+func recoverLegacyRawRelationshipProvenance(s *db.Session) {
+	if s.RelationshipType != string(parser.RelSubagent) ||
+		(s.ParentSessionID != nil && *s.ParentSessionID != "") ||
+		(s.ParserParentSessionID != nil && *s.ParserParentSessionID != "") {
+		return
+	}
+	_, rawID := parser.StripHostPrefix(s.ID)
+	_, rawSourceID := parser.StripHostPrefix(s.SourceSessionID)
+	if strings.HasPrefix(rawID, "agent-") || strings.HasPrefix(rawSourceID, "agent-") {
+		return
+	}
+	if s.Entrypoint == "sdk-cli" ||
+		(s.SessionKind == parser.SessionKindNonInteractive && s.Agent != string(parser.AgentGrok)) {
+		s.RestoreRelationshipProvenance(string(parser.RelSubagent), true)
+	}
 }
 
 // rawContentRevision hashes a versioned structural representation of every
@@ -219,7 +270,7 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
 				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
-				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
+				(v.Type() == rawSessionType && (f.Name == "SourceMachines" || f.Name == "RecordedProject")) ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
 				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() &&

@@ -128,6 +128,10 @@ func (Backend) OpenServeStore(
 	if err != nil {
 		return nil, err
 	}
+	if err := sizeServePool(ctx, store.DB(), store.cockroach); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	if err := prepareServeStore(ctx, store, target.Schema); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -305,6 +309,13 @@ func (Backend) OpenVectorSearcher(
 	if err != nil {
 		return nil, "", err
 	}
+	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pool)
+	if err != nil {
+		return nil, "", err
+	}
+	if reason := vectorUnavailableReason(hasHalfvec, version); reason != "" {
+		return nil, reason, nil
+	}
 	genID, dim, ok, err := LookupVectorGeneration(ctx, pool, gen.Fingerprint)
 	if err != nil {
 		return nil, "", fmt.Errorf("looking up PG vector generation: %w", err)
@@ -329,6 +340,9 @@ func (Backend) OpenVectorSearcher(
 // never imports this package; only this backend opens them, so any other
 // type is a programming error.
 func asStore(store storage.ReplicaStore) (*Store, error) {
+	if hosted, ok := store.(*HostedStore); ok {
+		return hosted.physical, nil
+	}
 	pgStore, ok := store.(*Store)
 	if !ok {
 		return nil, fmt.Errorf("pg store is %T, not *postgres.Store", store)

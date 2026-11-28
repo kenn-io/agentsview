@@ -45,9 +45,7 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 				require.NoError(t, os.WriteFile(olderPath, []byte("older claims"), 0o600))
 			}
 			require.NoError(t, c.MigrateTelemetryScreenClaims())
-			if tc.name == "invalid UTF-8 screen" {
-				assert.Contains(t, logs.String(), "skipping legacy telemetry screen claims: encoding claim key:")
-			}
+			assert.Empty(t, logs.String())
 			moved, err := filepath.Glob(path + ".unreadable-*")
 			require.NoError(t, err)
 			copies := 0
@@ -60,7 +58,6 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 				}
 				copies++
 				assert.Equal(t, tc.stored, string(data))
-				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable telemetry screen claims to "+filepath.ToSlash(movedPath))
 			}
 			if tc.name == "unchanged, no backup" {
 				assert.Empty(t, moved)

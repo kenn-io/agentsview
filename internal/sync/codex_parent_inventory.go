@@ -20,6 +20,7 @@ func (e *Engine) finishCodexParentInventoryBatch(ctx context.Context, stats *Syn
 		stats.recordDeferred(source.Path)
 		stats.recordRetryCause(retryCause{path: source.Path, reason: "Codex parent inventory changed"})
 		e.invalidateVerifiedSource(source.Agent, source.Path)
+		e.unresolvedCodexForks.invalidate(verifiedSourceKey{agent: source.Agent, path: source.Path})
 		target := e.effectiveSourcePath(source.Path)
 		ids, readErr := e.db.ListSessionIDsByFilePath(completionCtx, target, string(source.Agent))
 		err = errors.Join(err, readErr)

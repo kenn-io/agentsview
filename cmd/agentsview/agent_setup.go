@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agenthook"
 	"go.kenn.io/kit/agentmcp"
 	"go.kenn.io/kit/agentsetup"
 
@@ -14,14 +17,38 @@ import (
 )
 
 func newAgentCommand() *cobra.Command {
-	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills and registering the agentsview MCP server.", GroupID: groupMeta}
+	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills, a SessionStart hook, and the agentsview MCP server.", GroupID: groupMeta}
 	var force bool
+	mcp := true
 	cmd := agentsetup.NewCommand(agentsetup.Options{
 		SetupCommand: "agentsview agent setup",
 		Items: func(agent string) ([]agentsetup.Item, error) {
-			return setupItems(agent, force)
+			return setupItems(agent, force, true)
 		},
 	})
+	run := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if mcp {
+			return run(cmd, args)
+		}
+		if printOnly, _ := cmd.Flags().GetBool("print"); printOnly {
+			return errors.New("--print requires MCP setup; remove --mcp=false")
+		}
+		agents, _ := cmd.Flags().GetStringSlice("agent")
+		check, _ := cmd.Flags().GetBool("check")
+		setup := agentsetup.NewCommand(agentsetup.Options{
+			Agents: agents, CheckOnly: check, SetupCommand: "agentsview agent setup --mcp=false",
+			Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, force, false) },
+		})
+		if err := setup.Flags().Set("json", cmd.Flag("json").Value.String()); err != nil {
+			return err
+		}
+		setup.SetOut(cmd.OutOrStdout())
+		setup.SetContext(cmd.Context())
+		err := setup.RunE(setup, args)
+		cmd.SilenceUsage, cmd.SilenceErrors = setup.SilenceUsage, setup.SilenceErrors
+		return err
+	}
 	format := formatFlag("human")
 	cmd.Flags().Var(&format, "format", "Output format: human or json")
 	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -30,13 +57,14 @@ func newAgentCommand() *cobra.Command {
 		}
 		return nil
 	}
+	cmd.Flags().BoolVar(&mcp, "mcp", true, "Register and check the MCP server")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Overwrite edited skills and a different MCP entry")
 	group.AddCommand(cmd)
 	return group
 }
 
-func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
+func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 	var harness skills.Harness
 	switch agent {
 	case "claude":
@@ -75,10 +103,14 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 					state = agentsetup.StateOutdated
 				}
 			case "modified", "foreign":
+				next := fmt.Sprintf("agentsview agent setup --agent %s --force", agent)
+				if !withMCP {
+					next = fmt.Sprintf("agentsview agent setup --mcp=false --agent %s --force", agent)
+				}
 				return agentsetup.Status{
 					State:    agentsetup.StateModified,
-					Reason:   "Skill files were edited",
-					NextStep: "agentsview agent setup --force",
+					Reason:   "skill files were edited",
+					NextStep: next,
 				}, nil
 			}
 		}
@@ -88,9 +120,17 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 		Name:  "skill",
 		Check: checkSkills,
 		Install: func(context.Context) error {
-			return runSkillsInstall(
-				io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+			err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+			if _, refused := errors.AsType[skillInstallRefusalError](err); refused && !withMCP {
+				return errors.New("skill files were edited")
+			}
+			return err
 		},
+	}
+	hooks := setupHooks(agent, sessionStartHookOptions())
+
+	if !withMCP {
+		return []agentsetup.Item{skill, hooks}, nil
 	}
 	mcp := setupMCP(agent)
 	installMCP := mcp.Install
@@ -111,8 +151,24 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 		}
 		return installMCP(ctx)
 	}
-	return []agentsetup.Item{skill, mcp}, nil
+	return []agentsetup.Item{skill, hooks, mcp}, nil
 }
+
+// sessionStartHookOptions registers the command that refreshes memory and
+// records which session launched a new one.
+func sessionStartHookOptions() agenthook.InstallOptions {
+	return agenthook.InstallOptions{
+		Executable: "agentsview",
+		Arguments:  []string{"memory", "session-start", "--hook"},
+		Marker:     "agentsview memory session-start",
+		Hooks: []agenthook.Hook{{
+			Event:   agenthook.EventSessionStart,
+			Timeout: 10 * time.Second,
+		}},
+	}
+}
+
+var setupHooks = agentsetup.Hooks
 
 func setupMCP(agent string) agentsetup.Item {
 	return agentsetup.MCP(agent, "agentsview", memoryMCPServer())

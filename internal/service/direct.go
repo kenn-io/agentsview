@@ -86,6 +86,9 @@ func newEvidenceSource() string { return rand.Text() }
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
+// LocalContentScan reports whether this service searches a local SQLite archive.
+func (b *directBackend) LocalContentScan() bool { return b.local != nil }
+
 func (b *directBackend) MemoryStatus(ctx context.Context) (MemoryStatus, error) {
 	status, err := b.computeMemoryStatus(ctx)
 	if err != nil {
@@ -143,16 +146,20 @@ func (b *directBackend) memoryStatusForSearch(
 	ctx context.Context,
 ) (MemoryStatus, error) {
 	b.memoryStatusMu.Lock()
-	defer b.memoryStatusMu.Unlock()
 	if !b.memoryStatusAt.IsZero() && time.Since(b.memoryStatusAt) < memorySearchStatusTTL {
-		return b.memoryStatus, nil
+		status := b.memoryStatus
+		b.memoryStatusMu.Unlock()
+		return status, nil
 	}
+	b.memoryStatusMu.Unlock()
 	status, err := b.computeMemoryStatus(ctx)
 	if err != nil {
 		return MemoryStatus{}, err
 	}
+	b.memoryStatusMu.Lock()
 	b.memoryStatus = status
 	b.memoryStatusAt = time.Now()
+	b.memoryStatusMu.Unlock()
 	return status, nil
 }
 
@@ -213,6 +220,17 @@ func (b *directBackend) FindSessionIDsByPartial(
 func (b *directBackend) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
+	// An exact trashed ID must not resolve to another session's suffix.
+	session, err := b.db.GetSessionFull(ctx, raw)
+	if err != nil {
+		identity, ok := errors.AsType[*db.SessionIdentityError](err)
+		if !ok || identity.State != "ambiguous" {
+			return nil, err
+		}
+	}
+	if session != nil && session.ID == raw && session.DeletedAt != nil {
+		return nil, nil
+	}
 	return b.db.FindSessionIDsByRawSuffix(ctx, raw, limit)
 }
 
@@ -355,6 +373,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		AutomatedFilterSet:   f.AutomatedFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		Flat:                 f.Flat,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
@@ -409,7 +428,7 @@ const defaultAroundSpan = 5
 func (b *directBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
-	if f.Around != nil && (f.From != nil || f.Direction != "") {
+	if f.Around != nil && (f.From != nil || f.Direction != "" || f.CompactBoundaryOnly) {
 		return nil, ErrAroundMutuallyExclusive
 	}
 	if (f.Before != nil || f.After != nil) && f.Around == nil {
@@ -432,7 +451,7 @@ func (b *directBackend) Messages(
 		limit = db.MaxMessageLimit
 	}
 
-	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles}
+	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles, CompactBoundaryOnly: f.CompactBoundaryOnly}
 	if f.Around != nil {
 		w.Around = f.Around
 		w.Before = defaultAroundSpan
@@ -646,6 +665,20 @@ func (b *directBackend) Sync(
 
 	path := in.Path
 	if path == "" {
+		host, _ := parser.StripHostPrefix(in.ID)
+		if def, ok := parser.AgentByPrefix(in.ID); host == "" && ok && def.Type == parser.AgentCodex {
+			if err := b.engine.RefreshSessionByIDContext(ctx, in.ID); err != nil {
+				if errors.Is(err, sync.ErrSourceFileNotFound) && b.local.GetSessionFilePath(ctx, in.ID) != "" {
+					return b.Get(ctx, in.ID)
+				}
+				return nil, err
+			}
+			detail, err := b.Get(ctx, in.ID)
+			if err == nil && detail == nil {
+				return nil, syncSessionNotFoundError(in.ID)
+			}
+			return detail, err
+		}
 		storedPath := b.local.GetSessionFilePath(ctx, in.ID)
 		if storedPath == "" {
 			return nil, fmt.Errorf(
@@ -790,9 +823,7 @@ func (b *directBackend) resolveSessionIDByPath(
 	}
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf(
-			"sync: no session found for path %q", path,
-		)
+		return b.resolveCodexSessionIDByPath(ctx, path)
 	case 1:
 		return ids[0], nil
 	default:
@@ -802,6 +833,43 @@ func (b *directBackend) resolveSessionIDByPath(
 			len(ids), path, ids,
 		)
 	}
+}
+
+func (b *directBackend) resolveCodexSessionIDByPath(
+	ctx context.Context, path string,
+) (string, error) {
+	noSession := func() (string, error) {
+		return "", fmt.Errorf("sync: no session found for path %q", path)
+	}
+	uuid := parser.CodexSessionUUIDFromPath(path)
+	if uuid == "" {
+		return noSession()
+	}
+	plan, err := b.engine.PlanChangedPathsContext(ctx, []string{path})
+	if err != nil {
+		return "", fmt.Errorf("sync: classifying provider for path %q: %w", path, err)
+	}
+	codexSource := false
+	for _, file := range plan.Files {
+		if file.Agent != parser.AgentCodex || file.ProviderSource == nil ||
+			file.ProviderSource.Provider != parser.AgentCodex ||
+			parser.CodexSessionUUIDFromPath(file.Path) != uuid {
+			return noSession()
+		}
+		codexSource = true
+	}
+	if !codexSource {
+		return noSession()
+	}
+	id := parser.CodexSourceKey(parser.AgentCodex, uuid)
+	session, err := b.db.GetSession(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("sync: resolving Codex session for path %q: %w", path, err)
+	}
+	if session == nil {
+		return noSession()
+	}
+	return id, nil
 }
 
 func isVirtualSessionContainerPath(path string) bool {
@@ -1187,6 +1255,8 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := ContentSearchContext(ctx, b, req)
+	defer cancel()
 	var excludeActiveSince time.Time
 	if req.ExcludeActiveSince != "" {
 		excludeActiveSince, err = time.Parse(time.RFC3339, req.ExcludeActiveSince)
@@ -1265,9 +1335,7 @@ func (b *directBackend) SearchContent(
 			reason = unavailable.Reason
 		}
 		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only."
-		// SQLite keyword matches already rank messages holding fewer of the
-		// words, so shorter retries find nothing new there.
-		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() != "sqlite" {
+		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() == "cockroach" {
 			note += " Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 		}
 		if reason == "not set up" {
@@ -1278,6 +1346,8 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancelFollowup := ContentSearchFollowupContext(ctx, b, req)
+	defer cancelFollowup()
 	revisionBound := true
 	for i := range page.Matches {
 		if !matchRevisionBound(page.Matches[i]) {
@@ -1295,6 +1365,9 @@ func (b *directBackend) SearchContent(
 		revisionBound = revisionBound && contextBound
 	}
 	status, statusErr := b.memoryStatusForSearch(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	coverage := status.Coverage()
 	if statusErr != nil {
 		unknown := MemoryCapabilityStatus{Status: MemoryUnknown, Reason: "status_probe_failed"}
@@ -1451,15 +1524,27 @@ func (b *directBackend) ListRecallEntries(
 	if err := db.ValidateRecallQuery(query); err != nil {
 		return nil, err
 	}
+	query = db.NormalizeRecallQuery(query)
+	if err := ValidateRecallListQuery(query); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(f.Query) == "" {
-		entries, err := b.db.ListRecallEntries(ctx, query)
+		var cursor *RecallListCursor
+		if f.Cursor != "" {
+			decoded, err := DecodeRecallListCursor(f.Cursor)
+			if err != nil || decoded.FilterHash != RecallListFilterHash(query) {
+				return nil, db.ErrInvalidRecallQuery
+			}
+			cursor = &decoded
+		}
+		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, cursor)
 		if err != nil {
 			return nil, err
 		}
-		return &RecallList{
-			RecallEntries: recallResultsFromRecallEntries(entries),
-			TrustedOnly:   f.TrustedOnly,
-		}, nil
+		return &RecallList{RecallEntries: entries, TrustedOnly: f.TrustedOnly, NextCursor: next}, nil
+	}
+	if f.Cursor != "" {
+		return nil, db.ErrInvalidRecallQuery
 	}
 	page, err := b.db.QueryRecallEntries(ctx, query)
 	if err != nil {
@@ -1472,14 +1557,6 @@ func (b *directBackend) ListRecallEntries(
 		RecallEntries: page.RecallEntries,
 		TrustedOnly:   f.TrustedOnly,
 	}, nil
-}
-
-func recallResultsFromRecallEntries(entries []db.RecallEntry) []db.RecallResult {
-	out := make([]db.RecallResult, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, db.RecallResult{RecallEntry: entry})
-	}
-	return out
 }
 
 func (b *directBackend) GetRecallEntry(
@@ -1512,6 +1589,8 @@ func (b *directBackend) ImportRecallEntries(
 func recallFilterToDB(f RecallFilter) db.RecallQuery {
 	return db.RecallQuery{
 		Text:                f.Query,
+		UpdatedSince:        f.UpdatedSince,
+		CreatedSince:        f.CreatedSince,
 		Project:             f.Project,
 		CWD:                 f.CWD,
 		GitBranch:           f.GitBranch,

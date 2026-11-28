@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +25,31 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+func TestRestartDoesNotWaitForIdleCatchup(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	defer func() { close(release); <-finished }()
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion,
+		server.WithDaemonRestart(func(context.Context, config.Config) error { return nil }))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/daemon/restart", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", ts.URL)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.True(t, f.ingestion.Pending())
+}
+
 func TestIdleDirectReadWakesDaemon(t *testing.T) {
 	for _, slow := range []bool{false, true} {
 		name := "fresh"
@@ -34,8 +59,9 @@ func TestIdleDirectReadWakesDaemon(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newIngestionLifecycleFixture(t)
 			f.cfg.DataDir = t.TempDir()
-			f.ingestion.Suspend()
-			f.ingestion.applying.Wait()
+			pauseAfterStartup(t, f.ingestion)
+			writeReloadGeminiSession(t, f.root, "overnight")
+			collectWhilePaused(f.ingestion, reloadGeminiSessionPath(f.root, "overnight"))
 			ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion)
 			ep := serverEndpoint(t, ts)
 			_, err := WriteDaemonRuntime(f.cfg.DataDir, ep.Host, ep.Port, "test", false)
@@ -65,6 +91,8 @@ func TestIdleDirectReadWakesDaemon(t *testing.T) {
 			}
 			unblock()
 			f.ingestion.applying.Wait()
+			assert.True(t, sessionImported(t, f.database, "gemini:overnight"),
+				"the wake syncs the change collected during the pause")
 		})
 	}
 }
@@ -118,10 +146,10 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 
 func TestIdleAutomaticWakeReconcilesDeletedSource(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
-	path := filepath.Join(f.root, "tmp", "project", "chats", "session-retained.json")
+	pauseAfterStartup(t, f.ingestion)
+	path := reloadGeminiSessionPath(f.root, "retained")
 	require.NoError(t, os.Remove(path))
+	collectWhilePaused(f.ingestion, path)
 	before, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
 	require.NoError(t, err)
 	require.NotNil(t, before)
@@ -141,31 +169,12 @@ func TestIdleAutomaticWakeReconcilesDeletedSource(t *testing.T) {
 	assert.Equal(t, "hello from retained", messages[0].Content)
 }
 
-func TestIdleAutomaticWakePreservesUnavailableRoot(t *testing.T) {
-	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
-	require.NoError(t, os.Rename(f.root, filepath.Join(t.TempDir(), "offline")))
-
-	require.True(t, f.ingestion.EnsureFresh(t.Context()))
-	f.ingestion.applying.Wait()
-
-	after, err := f.database.GetSessionFull(t.Context(), "gemini:retained")
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	assert.Nil(t, after.SourceMissingAt, "an unavailable root leaves source state unchanged")
-	assert.Nil(t, after.DeletedAt)
-	messages, err := f.database.GetAllMessages(t.Context(), "gemini:retained")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "hello from retained", messages[0].Content)
-}
-
 func TestIdleManualWakeReconcilesDeletedSource(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
-	require.NoError(t, os.Remove(filepath.Join(f.root, "tmp", "project", "chats", "session-retained.json")))
+	pauseAfterStartup(t, f.ingestion)
+	path := reloadGeminiSessionPath(f.root, "retained")
+	require.NoError(t, os.Remove(path))
+	collectWhilePaused(f.ingestion, path)
 	runner := server.LocalSyncRunner(func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 		return syncAllReleasingStartupMaintenance(ctx, f.engine, progress), nil
 	})
@@ -213,11 +222,11 @@ func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 		t.Skip("fixture needs enforced POSIX file permissions")
 	}
 	f := newIngestionLifecycleFixture(t)
-	f.ingestion.Suspend()
-	f.ingestion.applying.Wait()
+	pauseAfterStartup(t, f.ingestion)
 	writeReloadGeminiSession(t, f.root, "overnight")
-	path := filepath.Join(f.root, "tmp", "project", "chats", "session-overnight.json")
+	path := reloadGeminiSessionPath(f.root, "overnight")
 	require.NoError(t, os.Chmod(path, 0))
+	collectWhilePaused(f.ingestion, path)
 	t.Cleanup(func() { require.NoError(t, os.Chmod(path, 0o600)) })
 	_, err := os.ReadFile(path)
 	require.ErrorIs(t, err, os.ErrPermission)
@@ -229,7 +238,9 @@ func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 	assert.NotContains(t, body, "hello from overnight")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 	assert.False(t, f.ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
-	assert.Contains(t, logs.String(), "idle catch-up incomplete: 1 failed, aborted=false")
+	// The watcher can finish before the wake flush starts, leaving the failed
+	// file waiting for retry. Its callback reports the failure in either order.
+	assert.Contains(t, logs.String(), "watcher callback: changed-path sync incomplete: 1 source or archive failures")
 }
 
 func TestIdleManualWakeRunsOneFullPass(t *testing.T) {

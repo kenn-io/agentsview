@@ -1,14 +1,14 @@
 package sync
 
 import (
-	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestMergeWatchDepth(t *testing.T) {
@@ -35,15 +35,6 @@ func TestMergeWatchDepth(t *testing.T) {
 	}
 }
 
-// depthLimitedTree builds root/{a,b} plus root/a/deep/deeper and returns root.
-func depthLimitedTree(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "a", "deep", "deeper"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "b"), 0o755))
-	return root
-}
-
 func TestMergeExtraDirectories(t *testing.T) {
 	assert.Nil(t, MergeExtraDirectories(nil, nil))
 	assert.Equal(t, []string{"*/logs"}, MergeExtraDirectories([]string{"*/logs"}, nil))
@@ -52,206 +43,128 @@ func TestMergeExtraDirectories(t *testing.T) {
 	))
 }
 
-func TestFSNotifyBackendAddRecursiveStopsAtMaxDepth(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := depthLimitedTree(t)
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-	}})
+func TestWatchDepthShouldDropEventAntigravityCLIContainer(t *testing.T) {
+	const id = "66666666-7777-8888-9999-aaaaaaaaaaaa"
 
-	// A budget that covers the depth-limited tree exactly must not be
-	// reported as exhausted by the unwatched deeper directories.
-	result := backend.AddRecursive(root, 3)
-
-	require.NoError(t, result.Err)
-	assert.False(t, result.BudgetExhausted)
-	assert.Equal(t, 3, result.Watched)
-	assert.ElementsMatch(t, []string{
-		root, filepath.Join(root, "a"), filepath.Join(root, "b"),
-	}, backend.watcher.WatchList())
-}
-
-func TestFSNotifyBackendRuntimeCreateHonorsMaxDepth(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := depthLimitedTree(t)
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-	}})
-	require.NoError(t, backend.AddRecursive(root, math.MaxInt).Err)
-
-	created := filepath.Join(root, "c")
-	require.NoError(t, os.MkdirAll(filepath.Join(created, "inner"), 0o755))
-	itemType, excluded := backend.watchCreatedPath(created)
-	assert.Equal(t, backendItemDirectory, itemType)
-	assert.False(t, excluded)
-
-	tooDeep := filepath.Join(root, "b", "new")
-	require.NoError(t, os.Mkdir(tooDeep, 0o755))
-	_, excluded = backend.watchCreatedPath(tooDeep)
-	assert.True(t, excluded, "a directory past the depth limit is not watched")
-
-	watched := backend.watcher.WatchList()
-	assert.Contains(t, watched, created)
-	assert.NotContains(t, watched, filepath.Join(created, "inner"))
-	assert.NotContains(t, watched, tooDeep)
-}
-
-func TestFSNotifyBackendCreatedSubtreeFilterHonorsMaxDepth(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := t.TempDir()
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-		ExtraDirectories: []string{"*/.system_generated/logs"},
-	}})
-	id := filepath.Join(root, "id")
-
-	assert.True(t, backend.includeCreatedSubtreePath(root, id, true))
-	assert.True(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(id, "plan.md"), false,
-	), "files inside the deepest watched directory stay covered")
-	assert.False(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(id, "generated"), true,
-	), "directories below the depth limit are not walked")
-	assert.False(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(id, "generated", "note.md"), false,
-	))
-
-	generated := filepath.Join(id, ".system_generated")
-	logs := filepath.Join(generated, "logs")
-	assert.True(t, backend.includeCreatedSubtreePath(root, generated, true),
-		"directories on the way to an extra directory are walked")
-	assert.False(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(generated, "noise.txt"), false,
-	), "files in an intermediate directory stay ignored")
-	assert.False(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(generated, "other"), true,
-	))
-	assert.True(t, backend.includeCreatedSubtreePath(root, logs, true))
-	assert.True(t, backend.includeCreatedSubtreePath(
-		root, filepath.Join(logs, "transcript.jsonl"), false,
-	))
-
-	unlimited := t.TempDir()
-	assert.True(t, backend.includeCreatedSubtreePath(
-		unlimited, filepath.Join(unlimited, "a", "b", "c"), true,
-	), "roots without a depth limit are unaffected")
-	assert.True(t, backend.includeCreatedSubtreePath(
-		unlimited, filepath.Join(unlimited, "a", "b", "c", "note.md"), false,
-	))
-}
-
-func TestFSNotifyBackendTranslateEventKeepsFilesAtMaxDepth(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := t.TempDir()
-	id := filepath.Join(root, "id")
-	require.NoError(t, os.MkdirAll(id, 0o755))
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-	}})
-	require.NoError(t, backend.AddRecursive(root, math.MaxInt).Err)
-
-	artifact := filepath.Join(id, "artifact.md")
-	for _, op := range []fsnotify.Op{
-		fsnotify.Create,
-		fsnotify.Write,
-		fsnotify.Remove,
-		fsnotify.Rename,
-	} {
-		event, relevant := backend.translateEvent(fsnotify.Event{Name: artifact, Op: op})
-		assert.Truef(t, relevant, "op %v", op)
-		assert.Equal(t, filepath.Clean(artifact), event.Path)
+	layouts := []struct {
+		name      string
+		setupRoot func(t *testing.T, base string) (container, instanceDir, sessionRoot string)
+	}{
+		{
+			name: "nested instance container (T3 Code)",
+			setupRoot: func(t *testing.T, base string) (string, string, string) {
+				t.Helper()
+				container := filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+				require.NoError(t, os.MkdirAll(container, 0o755))
+				instanceDir := filepath.Join(container, "insthash")
+				return container, instanceDir, filepath.Join(instanceDir, "antigravity-acp")
+			},
+		},
+		{
+			name: "direct instance container",
+			setupRoot: func(t *testing.T, base string) (string, string, string) {
+				t.Helper()
+				container := filepath.Join(base, "my-harness", "profiles")
+				require.NoError(t, os.MkdirAll(filepath.Join(container, "existing", "conversations"), 0o755))
+				instanceDir := filepath.Join(container, "work")
+				return container, instanceDir, instanceDir
+			},
+		},
+		{
+			name: "single profile container",
+			setupRoot: func(t *testing.T, base string) (string, string, string) {
+				t.Helper()
+				container := filepath.Join(base, "isolated-profile")
+				acp := filepath.Join(container, "antigravity-acp")
+				require.NoError(t, os.MkdirAll(acp, 0o755))
+				return container, acp, acp
+			},
+		},
 	}
 
-	generated := filepath.Join(id, "generated")
-	require.NoError(t, os.Mkdir(generated, 0o755))
-	_, relevant := backend.translateEvent(fsnotify.Event{
-		Name: generated, Op: fsnotify.Create,
-	})
-	assert.False(t, relevant, "a directory past the depth limit is not watched")
-	assert.NotContains(t, backend.watcher.WatchList(), generated)
+	for _, tc := range layouts {
+		t.Run(tc.name, func(t *testing.T) {
+			container, instanceDir, sessionRoot := tc.setupRoot(t, t.TempDir())
+			provider, ok := parser.NewProvider(parser.AgentAntigravityCLI, parser.ProviderConfig{
+				Roots: []string{container},
+			})
+			require.True(t, ok)
+			plan, err := provider.WatchPlan(t.Context())
+			require.NoError(t, err)
+			require.Len(t, plan.Roots, 1)
 
-	_, relevant = backend.translateEvent(fsnotify.Event{
-		Name: filepath.Join(generated, "note.md"), Op: fsnotify.Write,
-	})
-	assert.False(t, relevant, "a file below the deepest watched directory is ignored")
-}
+			limit := plan.Roots[0].MaxDepth
+			patterns := plan.Roots[0].ExtraDirectories
 
-func TestFSNotifyBackendExtraDirectoriesWatchOnlyTheListedPath(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := t.TempDir()
-	id := filepath.Join(root, "id")
-	logs := filepath.Join(id, ".system_generated", "logs")
-	sibling := filepath.Join(id, ".system_generated", "other")
-	gitDir := filepath.Join(id, ".git", "objects")
-	require.NoError(t, os.MkdirAll(logs, 0o755))
-	require.NoError(t, os.MkdirAll(sibling, 0o755))
-	require.NoError(t, os.MkdirAll(gitDir, 0o755))
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-		ExtraDirectories: []string{"*/.system_generated/logs"},
-	}})
+			brainSession := filepath.Join(sessionRoot, "brain", id)
+			generated := filepath.Join(brainSession, ".system_generated")
+			logsDir := filepath.Join(generated, "logs")
 
-	result := backend.AddRecursive(root, math.MaxInt)
-	require.NoError(t, result.Err)
-	assert.False(t, result.BudgetExhausted)
+			// Instance creation, session directories, conversations, artifacts,
+			// and transcripts must stay visible.
+			keepDirs := []string{
+				instanceDir,
+				sessionRoot,
+				filepath.Join(sessionRoot, "conversations"),
+				brainSession,
+				generated,
+				logsDir,
+			}
+			for _, dir := range keepDirs {
+				assert.False(t, watchDepthShouldDropEvent(dir, container, backendItemDirectory, limit, patterns),
+					"dir %s must not be dropped", dir)
+				assert.True(t, watchDepthIncludePath(container, dir, true, limit, patterns),
+					"dir %s must be included in created subtree walk", dir)
+			}
 
-	watched := backend.watcher.WatchList()
-	assert.Contains(t, watched, root)
-	assert.Contains(t, watched, id)
-	assert.Contains(t, watched, filepath.Join(id, ".system_generated"))
-	assert.Contains(t, watched, logs)
-	assert.NotContains(t, watched, sibling)
-	assert.NotContains(t, watched, filepath.Join(id, ".git"))
-	assert.NotContains(t, watched, gitDir)
+			keepFiles := []string{
+				filepath.Join(sessionRoot, "history.jsonl"),
+				filepath.Join(sessionRoot, "conversations", id+".db-wal"),
+				filepath.Join(sessionRoot, "implicit", id+".pb"),
+				filepath.Join(sessionRoot, "cache", "last_conversations.json"),
+				filepath.Join(brainSession, "plan.md"),
+				filepath.Join(brainSession, "plan.md.metadata.json"),
+				filepath.Join(logsDir, "transcript.jsonl"),
+			}
+			for _, file := range keepFiles {
+				assert.False(t, watchDepthShouldDropEvent(file, container, backendItemFile, limit, patterns),
+					"file %s must not be dropped", file)
+				assert.False(t, watchDepthShouldDropEvent(file, container, backendItemUnknown, limit, patterns),
+					"unknown-type file %s must not be dropped", file)
+				assert.True(t, watchDepthIncludePath(container, file, false, limit, patterns),
+					"file %s must be included in created subtree walk", file)
+			}
 
-	transcript := filepath.Join(logs, "transcript.jsonl")
-	event, relevant := backend.translateEvent(fsnotify.Event{
-		Name: transcript, Op: fsnotify.Write,
-	})
-	assert.True(t, relevant)
-	assert.Equal(t, filepath.Clean(transcript), event.Path)
+			// Excluded subtrees and noise in unlisted intermediate directories
+			// must be dropped so FSEvents never triggers unnecessary scans.
+			dropFiles := []string{
+				filepath.Join(sessionRoot, "log", "agent.log"),
+				filepath.Join(sessionRoot, "builtin", "skills", "guide.md"),
+				filepath.Join(brainSession, "scratch", "note.md"),
+				filepath.Join(generated, "noise.txt"),
+				filepath.Join(generated, "steps", "001.json"),
+				filepath.Join(logsDir, "chunks", "001.bin"),
+			}
+			for _, file := range dropFiles {
+				assert.True(t, watchDepthShouldDropEvent(file, container, backendItemFile, limit, patterns),
+					"file %s must be dropped", file)
+				assert.True(t, watchDepthShouldDropEvent(file, container, backendItemUnknown, limit, patterns),
+					"unknown-type file %s must be dropped", file)
+				assert.False(t, watchDepthIncludePath(container, file, false, limit, patterns),
+					"file %s must not be included in created subtree walk", file)
+			}
 
-	_, relevant = backend.translateEvent(fsnotify.Event{
-		Name: filepath.Join(id, ".system_generated", "noise.txt"), Op: fsnotify.Write,
-	})
-	assert.False(t, relevant, "files in an intermediate directory stay ignored")
-
-	_, relevant = backend.translateEvent(fsnotify.Event{
-		Name: filepath.Join(id, "plan.md"), Op: fsnotify.Write,
-	})
-	assert.True(t, relevant, "files inside the depth limit stay visible")
-}
-
-func TestFSNotifyBackendRuntimeCreateFollowsExtraDirectories(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := t.TempDir()
-	backend.setWatchRootPlan([]WatchRoot{{
-		Path: root, Recursive: true, MaxDepth: 1, Exists: true,
-		ExtraDirectories: []string{"*/.system_generated/logs"},
-	}})
-	require.NoError(t, backend.AddRecursive(root, math.MaxInt).Err)
-
-	id := filepath.Join(root, "new-id")
-	require.NoError(t, os.Mkdir(id, 0o755))
-	_, excluded := backend.watchCreatedPath(id)
-	assert.False(t, excluded)
-	assert.Contains(t, backend.watcher.WatchList(), id)
-
-	generated := filepath.Join(id, ".system_generated")
-	require.NoError(t, os.Mkdir(generated, 0o755))
-	_, excluded = backend.watchCreatedPath(generated)
-	assert.False(t, excluded)
-	assert.Contains(t, backend.watcher.WatchList(), generated)
-
-	logs := filepath.Join(generated, "logs")
-	require.NoError(t, os.Mkdir(logs, 0o755))
-	_, excluded = backend.watchCreatedPath(logs)
-	assert.False(t, excluded)
-	assert.Contains(t, backend.watcher.WatchList(), logs)
-
-	other := filepath.Join(generated, "other")
-	require.NoError(t, os.Mkdir(other, 0o755))
-	_, excluded = backend.watchCreatedPath(other)
-	assert.True(t, excluded)
-	assert.NotContains(t, backend.watcher.WatchList(), other)
+			dropDirs := []string{
+				filepath.Join(brainSession, "scratch"),
+				filepath.Join(generated, "steps"),
+				filepath.Join(logsDir, "chunks"),
+			}
+			for _, dir := range dropDirs {
+				assert.True(t, watchDepthShouldDropEvent(dir, container, backendItemDirectory, limit, patterns),
+					"dir %s must be dropped", dir)
+				assert.False(t, watchDepthIncludePath(container, dir, true, limit, patterns),
+					"dir %s must not be included in created subtree walk", dir)
+			}
+		})
+	}
 }

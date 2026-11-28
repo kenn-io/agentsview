@@ -76,6 +76,9 @@ type RecallExtractServerConfig struct {
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// [recall.extract] section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `toml:"api_key_file" json:"api_key_file,omitempty"`
 	// Timeout is a parseable duration string applied to each model call.
 	// Distillation calls on local models are slow; default "120s".
 	Timeout string `toml:"timeout" json:"timeout"`
@@ -89,15 +92,26 @@ type RecallExtractServerConfig struct {
 	// between parallel requests, while hosted endpoints and servers that
 	// batch concurrent requests finish a backlog faster with more.
 	Concurrency int `toml:"concurrency" json:"concurrency"`
+
+	// apiKey holds the key read from APIKeyFile.
+	apiKey string
 }
 
-// APIKey reads the API key from the environment variable named by
-// APIKeyEnv. Returns "" when APIKeyEnv is unset.
-func (s RecallExtractServerConfig) APIKey() string {
-	if s.APIKeyEnv == "" {
-		return ""
+// APIKey returns the key read when the config loaded. Otherwise it reads
+// APIKeyFile, which a command that loaded the config without the
+// [recall.extract] scope has not read yet, or the environment variable
+// APIKeyEnv names. It returns "" when no key is set.
+func (s RecallExtractServerConfig) APIKey() (string, error) {
+	if s.apiKey != "" {
+		return s.apiKey, nil
 	}
-	return os.Getenv(s.APIKeyEnv)
+	if strings.TrimSpace(s.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", s.APIKeyFile)
+	}
+	if s.APIKeyEnv == "" {
+		return "", nil
+	}
+	return os.Getenv(s.APIKeyEnv), nil
 }
 
 // RecallExtractPromptsConfig selects the prompt profile and optional
@@ -158,6 +172,32 @@ func (c RecallExtractConfig) AllowCandidateFindings() bool {
 // Validate checks the extraction config for internal consistency. When the
 // section is disabled, it validates only CandidateFindings because the
 // reconcile-only daemon path still applies that policy to a serving corpus.
+// resolveRecallExtractSecrets validates the section and, when extraction is
+// enabled, reads each server's api_key_file.
+func resolveRecallExtractSecrets(c *RecallExtractConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if !c.Enabled {
+		return nil
+	}
+	for _, name := range sortedRecallServerNames(c.Servers) {
+		server := c.Servers[name]
+		if strings.TrimSpace(server.APIKeyFile) == "" {
+			continue
+		}
+		key, err := readSettingSecretFile(
+			fmt.Sprintf("[recall.extract.servers.%s] api_key_file", name),
+			server.APIKeyFile)
+		if err != nil {
+			return err
+		}
+		server.apiKey = key
+		c.Servers[name] = server
+	}
+	return nil
+}
+
 func (c RecallExtractConfig) Validate() error {
 	switch c.CandidateFindings {
 	case "", RecallCandidateFindingsBlock, RecallCandidateFindingsAllow:
@@ -258,6 +298,10 @@ func (s RecallExtractServerConfig) validate(name string) error {
 	}
 	if err := ValidateExtractTransport(u, s.AllowHTTP); err != nil {
 		return fmt.Errorf("[recall.extract.servers.%s] %w", name, err)
+	}
+	if err := oneSecretSource(fmt.Sprintf("[recall.extract.servers.%s]", name),
+		"api_key_env", s.APIKeyEnv, "api_key_file", s.APIKeyFile); err != nil {
+		return err
 	}
 	timeout, err := time.ParseDuration(s.Timeout)
 	if err != nil {

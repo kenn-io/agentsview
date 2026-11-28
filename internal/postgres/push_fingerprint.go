@@ -117,23 +117,24 @@ func hashLocalDependencyPayload(
 // Values must match the per-session methods byte for byte — see the
 // batched twins in internal/db for the identity contract.
 type localPushDependencyState struct {
-	contentAgg     map[string]db.MessageContentAggregate
-	contentHashFP  map[string]string
-	roleTimeFP     map[string]string
-	flagsFP        map[string]string
-	dialogueFP     map[string]string
-	systemFP       map[string]string
-	tokenFP        map[string]string
-	toolCallCount  map[string]int
-	toolCallSum    map[string]int64
-	toolCallFP     map[string]string
-	toolResultFP   map[string]string
-	secretFindings map[string][]db.SecretFinding
-	pins           map[string][]db.PinnedMessage
-	planUsageFP    map[string]string
-	sessionTotalFP map[string]string
-	commitLinks    map[string][]db.CommitLinkRow
-	imageText      map[string][]db.ImageTextRow
+	contentAgg      map[string]db.MessageContentAggregate
+	contentHashFP   map[string]string
+	roleTimeFP      map[string]string
+	flagsFP         map[string]string
+	dialogueFP      map[string]string
+	systemFP        map[string]string
+	tokenFP         map[string]string
+	toolCallCount   map[string]int
+	toolCallSum     map[string]int64
+	toolCallFP      map[string]string
+	toolResultFP    map[string]string
+	secretFindings  map[string][]db.SecretFinding
+	pins            map[string][]db.PinnedMessage
+	planUsageFP     map[string]string
+	sessionTotalFP  map[string]string
+	commitLinks     map[string][]db.CommitLinkRow
+	imageText       map[string][]db.ImageTextRow
+	externalParents map[string]string
 }
 
 func readLocalPushDependencyState(
@@ -205,6 +206,9 @@ func readLocalPushDependencyState(
 	}
 	if st.imageText, err = local.SessionImageTextRowsBySession(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("reading local image text: %w", err)
+	}
+	if st.externalParents, err = local.SessionExternalParentsBySession(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("reading external parents: %w", err)
 	}
 	return st, nil
 }
@@ -900,7 +904,15 @@ func localToolResultEventPGFingerprint(ctx context.Context,
 	)
 }
 
-func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
+// usageFingerprintReader reads usage event fingerprints from the archive or
+// from a MessageSnapshot that a push already holds open.
+type usageFingerprintReader interface {
+	SortedUsageEventFingerprints(
+		ctx context.Context, sessionIDs []string, normalizeTimestamp func(string) string,
+	) (map[string]string, error)
+}
+
+func localUsageEventPGFingerprint(ctx context.Context, local usageFingerprintReader, sessionID string) (string, error) {
 	fingerprints, err := local.SortedUsageEventFingerprints(
 		ctx, []string{sessionID}, pgUsageEventTimestampFingerprintText,
 	)

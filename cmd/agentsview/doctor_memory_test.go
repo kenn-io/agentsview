@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,12 +12,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/agenthook"
+	"go.kenn.io/kit/agentsetup"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -254,6 +258,19 @@ func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 	} {
 		t.Setenv(name, "")
 	}
+	// Codex reports a new hook untrusted until the user reviews it, so tests
+	// of other setup rows stand in a ready hook. Hook tests restore kit's.
+	original := setupHooks
+	t.Cleanup(func() { setupHooks = original })
+	setupHooks = func(string, agenthook.InstallOptions) agentsetup.Item {
+		return agentsetup.Item{
+			Name: "hooks",
+			Check: func(context.Context) (agentsetup.Status, error) {
+				return agentsetup.Status{State: agentsetup.StateOK}, nil
+			},
+			Install: func(context.Context) error { return nil },
+		}
+	}
 }
 
 func fakeAgent(t *testing.T, name, response string) {
@@ -330,22 +347,30 @@ func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
 	require.NoError(t, err, out)
 	var report doctorMemoryReport
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	require.Len(t, report.Client.Rows, 4)
 	for _, row := range report.Client.Rows {
 		require.EqualValues(t, "ok", row.State)
 	}
-	for _, index := range []int{1, 3} {
-		require.Equal(t, "mcp agentsview", report.Client.Rows[index].Piece)
+	mcpRows := 0
+	for _, row := range report.Client.Rows {
+		if row.Piece == "mcp agentsview" {
+			mcpRows++
+		}
 	}
+	require.Equal(t, 2, mcpRows)
 	require.NoError(t, os.Remove(filepath.Join(home, ".claude.json")))
 	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "config.toml")))
 	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
 	require.NoError(t, err, out)
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	for _, index := range []int{1, 3} {
-		require.EqualValues(t, "missing", report.Client.Rows[index].State)
-		require.Equal(t, "agentsview agent setup", report.Client.Rows[index].NextStep)
+	mcpRows = 0
+	for _, row := range report.Client.Rows {
+		if row.Piece == "mcp agentsview" {
+			mcpRows++
+			require.EqualValues(t, "missing", row.State)
+			require.Equal(t, "agentsview agent setup", row.NextStep)
+		}
 	}
+	require.Equal(t, 2, mcpRows)
 	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL)
 	require.NoError(t, err, out)
 	require.Contains(t, out, "Client integration: partial")
@@ -367,8 +392,9 @@ func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0o600))
 			selection := doctorMemoryTargetSelection{Kind: "local"}
 			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
-			require.Len(t, client.Rows, 2)
-			require.EqualValues(t, tc.state, client.Rows[1].State)
+			mcp := slices.IndexFunc(client.Rows, func(row agentsetup.Row) bool { return row.Piece == "mcp agentsview" })
+			require.NotEqual(t, -1, mcp)
+			require.EqualValues(t, tc.state, client.Rows[mcp].State)
 			encoded, err := json.Marshal(client)
 			require.NoError(t, err)
 			require.NotContains(t, string(encoded), home)

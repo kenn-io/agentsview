@@ -9,6 +9,7 @@
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
+  import MessageLinkButton from "./MessageLinkButton.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import { collectSearchBlocks } from "../../search/block-text.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -87,7 +88,7 @@
       copiedTitle={m.tool_call_group_copied()}
       onclick={handleCopy}
     />
-    <span class="group-timestamp">{formatTimestamp(timestamp)}</span>
+    <span class="group-timestamp">{formatTimestamp(timestamp, ui.alwaysShowYear)}</span>
   </div>
   <div class="tool-group-body">
     {#each displayMessages as message (message.ordinal)}
@@ -96,7 +97,8 @@
       {/if}
       {@const calls = message.tool_calls ?? []}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
-      <div data-message-ordinal={message.ordinal}>
+      <div class="group-member" data-message-ordinal={message.ordinal}>
+        <div class="member-link"><MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} /></div>
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
             <ThinkingBlock content={block.text} searchKey={searchable ? block.key : undefined} />
@@ -161,6 +163,10 @@
     --tool-row-pad-block: 3px;
     --tool-row-copy-trim: -1px;
   }
+  .group-member { position: relative; }
+  .member-link { position: absolute; right: 100%; top: 0; }
+  /* Leave room for the tool input copy button and its margin. */
+  :global(.layout-skim) .member-link { right: 34px; }
   .read-progress-divider {
     display: flex;
     align-items: center;

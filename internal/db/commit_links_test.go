@@ -103,14 +103,25 @@ func TestCommitLinksAppendWithoutCandidatesSkipsInputScan(t *testing.T) {
 			var sqlite *sqlite3.SQLiteConn
 			require.NoError(t, conn.Raw(func(raw any) error {
 				sqlite = raw.(*sqlite3.SQLiteConn)
+				// The index trigger reads NEW.input_json during an insert, while scans use SELECT.
+				inSelect := false
 				sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-					if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
+					switch op {
+					case sqlite3.SQLITE_SELECT:
+						inSelect = true
+					case sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE:
+						inSelect = false
+					}
+					if inSelect && op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
 						return sqlite3.SQLITE_DENY
 					}
 					return sqlite3.SQLITE_OK
 				})
 				return nil
 			}))
+			var storedInput string
+			err = conn.QueryRowContext(t.Context(), `SELECT input_json FROM tool_calls LIMIT 1`).Scan(&storedInput)
+			require.Error(t, err)
 			require.NoError(t, conn.Close())
 			defer sqlite.RegisterAuthorizer(nil)
 			message := commitMessages("candidate", input, "")[2]
@@ -584,7 +595,7 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
 			require.NoError(t, d.Close())
-			needs, rebuild, err := ArchiveResyncState(t.Context(), path)
+			needs, rebuild, _, err := ArchiveResyncState(t.Context(), path)
 			require.NoError(t, err)
 			assert.True(t, needs)
 			assert.True(t, rebuild)

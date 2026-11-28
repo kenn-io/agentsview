@@ -9,16 +9,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
+func TestAnalyticsAndSearchChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	content := testInlineImageContent()
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read", ResultContent: content}}
 	insertMessages(t, d, message)
 	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
@@ -39,6 +42,44 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 		require.NoError(t, err)
 		analyticsBefore++
 		assert.Equal(t, analyticsBefore, analyticsAfter)
+	}
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	searchBefore, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		write                       func() error
+		analyticsDelta, searchDelta int64
+	}{
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'repaired' WHERE session_id = 'session'`)
+			return err
+		}, 0, 1},
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'repaired' WHERE id = 'session'`)
+			return err
+		}, 1, 1},
+		{func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false)
+		}, 0, 1},
+		{func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "receipt", false)
+		}, 0, 1},
+		{func() error { return d.ClearImageText(ctx) }, 0, 2},
+		{func() error { return d.BackfillImageTextOccurrences(ctx) }, 0, 1},
+	} {
+		require.NoError(t, tc.write())
+		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+		require.NoError(t, err)
+		analyticsBefore += tc.analyticsDelta
+		assert.Equal(t, analyticsBefore, analyticsAfter)
+		after, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		searchAfter, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+		require.NoError(t, err)
+		assert.Equal(t, searchBefore+tc.searchDelta, searchAfter)
+		searchBefore = searchAfter
 	}
 }
 
@@ -81,6 +122,26 @@ func TestUsageChangeJournal(t *testing.T) {
 					t.Helper()
 					s.SessionName = new("Agent title")
 					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
+				{"parent link", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parent_session_id = ? WHERE id = ?", "parent", s.ID)
+					require.NoError(t, err)
+				}},
+				{"parser parent", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parser_parent_session_id = ? WHERE id = ?", "parent", s.ID)
+					require.NoError(t, err)
+				}},
+				{"external parent insert", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_external_parents(session_id, parent_session_id) VALUES (?, 'parent')`, s.ID)
+					require.NoError(t, err)
+				}},
+				{"external parent delete", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = ?`, s.ID)
+					require.NoError(t, err)
 				}},
 				{"relationship", func(t *testing.T, s Session) {
 					t.Helper()
@@ -210,6 +271,10 @@ func TestUsageChangeJournal(t *testing.T) {
 					}
 					require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "Hello", TokenUsage: []byte(`{"output_tokens":1}`)}}))
 					switch tc.name {
+					case "external parent delete":
+						_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_external_parents(session_id, parent_session_id) VALUES (?, 'parent')`, s.ID)
+						require.NoError(t, err)
+
 					case "clear usage events":
 						before, err = d.UsageChangeRevision(ctx)
 						require.NoError(t, err)
@@ -230,6 +295,10 @@ func TestUsageChangeJournal(t *testing.T) {
 					case "reinsert":
 						require.NoError(t, d.DeleteSession(ctx, s.ID))
 					}
+					if tc.name == "external parent insert" || tc.name == "external parent delete" {
+						_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET sync_marker = '2000-01-01T00:00:00.000Z' WHERE id = ?`, s.ID)
+						require.NoError(t, err)
+					}
 					before, err = d.UsageChangeRevision(ctx)
 					require.NoError(t, err)
 					tc.write(t, s)
@@ -239,6 +308,11 @@ func TestUsageChangeJournal(t *testing.T) {
 					ids, err := d.LoadUsageChanges(ctx, before, after)
 					require.NoError(t, err)
 					assert.Equal(t, []string{s.ID}, ids)
+					if tc.name == "external parent insert" || tc.name == "external parent delete" {
+						var marker string
+						require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT sync_marker FROM sessions WHERE id = ?`, s.ID).Scan(&marker))
+						assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
+					}
 				})
 			}
 
@@ -282,6 +356,41 @@ func TestUsageChangeJournal(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestUsageChangeJournalSpawnEdgeUpdates(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"owner", "child-a", "child-b"} {
+		keptActivitySession(t, d, id, "project-a", "2026-06-14")
+	}
+	result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
+		SELECT id, 'owner', 'Task', 'Task', 'child-a' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+	require.NoError(t, err)
+	callID, err := result.LastInsertId()
+	require.NoError(t, err)
+	before, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child-b' WHERE id = ?`, callID)
+	require.NoError(t, err)
+	after, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	changed, err := d.LoadUsageChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"child-a", "child-b"}, changed)
+	before = after
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'owner' WHERE id = ?`, callID)
+	require.NoError(t, err)
+	after, err = d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	changed, err = d.LoadUsageChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"child-b"}, changed)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
+	require.NoError(t, err)
+	final, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, after, final)
 }
 
 func TestUsageChangeJournalUsageEventUpdates(t *testing.T) {
@@ -415,7 +524,7 @@ func TestUsageChangeJournalSurvivesCanceledMigration(t *testing.T) {
 		if progress.Detail == "Adding column excluded_sessions.include_codex_pages" {
 			cancel()
 		}
-	})
+	}, false)
 	require.Error(t, err)
 	require.ErrorIs(t, migrationCtx.Err(), context.Canceled)
 	_, err = other.ExecContext(ctx, `UPDATE sessions SET machine = 'machine-b' WHERE id = 'external'`)
@@ -436,11 +545,6 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-01T10:00:00Z"))
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-02T10:00:00Z"))
 	after, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM model_pricing WHERE model_pattern = '_last_fetch'`)
-	require.NoError(t, err)
-	after, err = d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 

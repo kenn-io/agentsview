@@ -183,8 +183,10 @@ func TestReplicaServeWatchFailureStopsHTTP(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	opts := serveRuntimeOptions{Mode: "pg-serve"}
-	cfg, err := prepareServeRuntimeConfig(ctx, cfg, opts)
+	cfg, listener, err := claimServeRuntimeConfig(ctx, cfg, opts)
 	require.NoError(t, err)
+	defer listener.Close()
+	opts.Listener = listener
 	startup := replicaServeStartup{cfg: cfg, ctx: ctx, rtOpts: opts, srv: server.New(cfg, nil, nil), cleanup: cancel}
 	url := fmt.Sprintf("http://%s:%d/", cfg.Host, cfg.Port)
 	client := &http.Client{Timeout: time.Second}
@@ -211,8 +213,10 @@ func TestReplicaServeWatchShutdownReturnsWorkerError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	opts := serveRuntimeOptions{Mode: "pg-serve"}
-	cfg, err := prepareServeRuntimeConfig(ctx, cfg, opts)
+	cfg, listener, err := claimServeRuntimeConfig(ctx, cfg, opts)
 	require.NoError(t, err)
+	defer listener.Close()
+	opts.Listener = listener
 	startup := replicaServeStartup{cfg: cfg, ctx: ctx, rtOpts: opts, srv: server.New(cfg, nil, nil), cleanup: cancel}
 	release := make(chan struct{})
 	stop := sync.OnceFunc(func() {

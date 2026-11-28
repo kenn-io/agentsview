@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/poller"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -28,12 +29,21 @@ const pricingResyncTestTimeout = 30 * time.Second
 type pricingCatalogTransport struct {
 	requests chan *http.Request
 	fail     func(*http.Request) bool
+	before   func(*http.Request)
 }
 
 func (t pricingCatalogTransport) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
-	t.requests <- req
+	if t.requests != nil {
+		t.requests <- req
+	}
+	if t.before != nil {
+		t.before(req)
+	}
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
 	if t.fail != nil && t.fail(req) {
 		return nil, errors.New("simulated pricing catalog transport failure")
 	}
@@ -220,7 +230,7 @@ func TestRunPricingRefreshRewarmsAfterCommittedWrites(t *testing.T) {
 			rewarmer := &fakeUsageCacheRewarmer{
 				digest: "before", digestErr: tt.digestErr, err: tt.rewarm,
 			}
-			err := runPricingRefresh(t.Context(), nil, func(context.Context) error {
+			err := runPricingRefresh(t.Context(), func(context.Context) error {
 				assert.Zero(t, rewarmer.calls, "re-warm must wait for the refresh")
 				if tt.writes {
 					rewarmer.digest = "after"
@@ -231,4 +241,148 @@ func TestRunPricingRefreshRewarmsAfterCommittedWrites(t *testing.T) {
 			assert.Equal(t, tt.wantCalls, rewarmer.calls)
 		})
 	}
+}
+
+func TestPricingRefreshReleasesSyncLockDuringNetworkFetch(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
+	t.Cleanup(engine.Close)
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseFetch) })
+	t.Cleanup(release)
+
+	withPricingCatalogTransport(t, pricingCatalogTransport{
+		requests: make(chan *http.Request, 3),
+		before: func(req *http.Request) {
+			if strings.Contains(req.URL.String(), "genai-prices") {
+				close(fetchStarted)
+				select {
+				case <-releaseFetch:
+				case <-req.Context().Done():
+				}
+			}
+		},
+	})
+
+	runDone := make(chan error, 1)
+	go func() {
+		job := pricingRefreshJob(database, engine)
+		runDone <- job.Run(t.Context())
+	}()
+
+	select {
+	case <-fetchStarted:
+	case <-time.After(pricingResyncTestTimeout):
+		stacktest.Dump(t)
+		require.FailNow(t, "pricing refresh did not begin fetching")
+	}
+
+	require.NoError(t, engine.TryRunExclusive(func() error { return nil }),
+		"sync lock must stay free while pricing refresh fetches upstream catalogs")
+
+	release()
+	awaitPricingResult(t, runDone)
+
+	price, err := database.GetModelPricing("scheduled-model")
+	require.NoError(t, err)
+	require.NotNil(t, price)
+}
+
+func TestPricingRefreshWritesReplacementDatabaseAfterSwapDuringFetch(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	dbtest.EnsureTestDBAt(t, engine.ResyncTempPath())
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseFetch) })
+	t.Cleanup(release)
+
+	withPricingCatalogTransport(t, pricingCatalogTransport{
+		requests: make(chan *http.Request, 3),
+		before: func(req *http.Request) {
+			if strings.Contains(req.URL.String(), "genai-prices") {
+				close(fetchStarted)
+				select {
+				case <-releaseFetch:
+				case <-req.Context().Done():
+				}
+			}
+		},
+	})
+
+	runDone := make(chan error, 1)
+	go func() {
+		job := pricingRefreshJob(database, engine)
+		runDone <- job.Run(t.Context())
+	}()
+
+	select {
+	case <-fetchStarted:
+	case <-time.After(pricingResyncTestTimeout):
+		stacktest.Dump(t)
+		require.FailNow(t, "pricing refresh did not begin fetching")
+	}
+
+	require.NoError(t, engine.RunExclusive(func() error {
+		if _, err := engine.SwapResyncDatabase(t.Context(), engine.ResyncTempPath()); err != nil {
+			return err
+		}
+		return engine.ResetCachesAfterSwap(t.Context())
+	}))
+
+	release()
+	awaitPricingResult(t, runDone)
+
+	price, err := database.GetModelPricing("scheduled-model")
+	require.NoError(t, err)
+	require.NotNil(t, price, "fetched pricing must land in the replacement database")
+}
+
+func TestPricingRefreshCancelsWhileWaitingForSyncLock(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
+	t.Cleanup(engine.Close)
+
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseLock) })
+	t.Cleanup(release)
+
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- engine.RunExclusive(func() error {
+			close(lockHeld)
+			<-releaseLock
+			return nil
+		})
+	}()
+	<-lockHeld
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		job := pricingRefreshJob(database, engine)
+		runDone <- job.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return testutil.GoroutineBlockedOnMutexIn("lockctx.Lock")
+	}, pricingResyncTestTimeout, 5*time.Millisecond)
+	cancel()
+	select {
+	case err := <-runDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		release()
+		stacktest.Dump(t)
+		require.FailNow(t, "canceled pricing refresh kept waiting for sync lock")
+	}
+
+	release()
+	awaitPricingResult(t, holderDone)
 }

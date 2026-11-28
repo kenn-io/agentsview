@@ -36,7 +36,7 @@ func (s *Sync) loadCurationSnapshot(ctx context.Context) (curationSnapshot, erro
 }
 
 // fingerprint hashes starred ids and pin id/note state so a note-only edit
-// still refreshes. It matches the DuckDB mirror's payload shape.
+// still refreshes.
 func (snap curationSnapshot) fingerprint() (string, error) {
 	pinned := make([]db.PinCurationEntry, 0, len(snap.pinsBySession))
 	for _, pins := range snap.pinsBySession {

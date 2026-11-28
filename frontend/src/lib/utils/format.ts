@@ -24,8 +24,12 @@ const DAY = 86400;
 const WEEK = 604800;
 
 /** Formats an ISO timestamp as a human-friendly relative time */
-export function formatRelativeTime(isoString: string | null | undefined): string {
+export function formatRelativeTime(
+  isoString: string | null | undefined,
+  alwaysShowYear = false,
+): string {
   if (!isoString) return "—";
+  if (alwaysShowYear) return formatTimestamp(isoString, true);
 
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -54,10 +58,11 @@ export function formatRelativeTime(isoString: string | null | undefined): string
 }
 
 /** Formats an ISO timestamp as a readable date/time string */
-export function formatTimestamp(isoString: string | null | undefined): string {
+export function formatTimestamp(isoString: string | null | undefined, showYear = false): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
   return formatDateTime(d, {
+    year: showYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
     hour: "2-digit",

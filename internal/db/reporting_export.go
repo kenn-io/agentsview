@@ -68,6 +68,9 @@ func (db *DB) ExportReportingDay(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
 	}
+	if export.IsAccountReportingSchema(schemaVersion) && !opts.ByMachine {
+		return export.ReportingDay{}, fmt.Errorf("reporting schema %d requires --by-machine", schemaVersion)
+	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return export.ReportingDay{}, err
 	}
@@ -104,6 +107,11 @@ func (db *DB) ExportReportingDay(
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
+			return export.ReportingDay{}, err
+		}
+	}
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
 	}
@@ -129,7 +137,7 @@ func (db *DB) ExportReportingDay(
 		Complete:      complete,
 		Hours:         hours,
 	}
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		day.BucketSeconds = int(bucket / time.Second)
 	}
 	day, _, err = export.FinalizeReportingDay(day)
@@ -153,6 +161,9 @@ func (db *DB) ExportReportingDigest(
 		return nil, fmt.Errorf(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
+	}
+	if export.IsAccountReportingSchema(schemaVersion) && !opts.ByMachine {
+		return nil, fmt.Errorf("reporting schema %d requires --by-machine", schemaVersion)
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return nil, err
@@ -220,6 +231,11 @@ func (db *DB) ExportReportingDigest(
 	if err != nil {
 		return nil, err
 	}
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, &source); err != nil {
+			return nil, err
+		}
+	}
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
 	}
@@ -255,7 +271,7 @@ func (db *DB) ExportReportingDigest(
 			Complete:      resolved.complete,
 			Hours:         hours,
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			day.BucketSeconds = int(bucket / time.Second)
 		}
 		day, _, err = export.FinalizeReportingDay(day)
@@ -302,15 +318,20 @@ func reportingHoursFromSource(
 	if err != nil || source.localMachineID == "" {
 		return hours, err
 	}
-	machines := map[string]bool{source.localMachineID: true}
+	localMachineID := source.machineID("local", schemaVersion)
+	machines := map[string]bool{localMachineID: true}
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
-		machines[source.machineID(session.Machine)] = true
+		for _, origin := range []string{source.sessionOrigin(session, schemaVersion), source.usageOrigin(session, schemaVersion)} {
+			if origin != "" {
+				machines[origin] = true
+			}
+		}
 	}
 	if len(source.standaloneUsage) > 0 {
-		machines[source.machineID("")] = true
+		machines[source.machineID("", schemaVersion)] = true
 	}
 	for i := range hours {
-		hours[i].LocalMachineID = source.localMachineID
+		hours[i].LocalMachineID = localMachineID
 		hours[i].Machines = make(map[string]export.ReportingHour, len(machines))
 	}
 	for machine := range machines {
@@ -324,6 +345,58 @@ func reportingHoursFromSource(
 				return nil, err
 			}
 			hours[i].Machines[machine] = part
+		}
+	}
+	if len(projectKeys) == 0 {
+		type accountHour struct {
+			account string
+			index   int
+		}
+		groups := map[accountHour][]activity.UsageRow{}
+		polled := map[accountHour]string{}
+		for _, row := range source.accountUsage {
+			index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at)
+			if !ok {
+				continue
+			}
+			key := accountHour{row.account, index}
+			if !row.empty {
+				groups[key] = append(groups[key], row.usage)
+			} else if _, ok := groups[key]; !ok {
+				groups[key] = nil
+			}
+			polled[key] = row.polledAt
+		}
+		for key, rows := range groups {
+			start := date.Add(time.Duration(key.index) * time.Hour)
+			part := quietReportingHour(start, schemaVersion, bucket)
+			part.BucketSeconds = int(bucket / time.Second)
+			part.Joint, err = jointReportingHour(start, bucket, nil, nil, rows, nil, nil, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			part.PolledAt = polled[key]
+			part.Usage, part.HasData, err = reportingUsageForHour(start, start.Add(time.Hour), rows, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			part, _, err = export.FinalizeReportingHour(part)
+			if err != nil {
+				return nil, err
+			}
+			hours[key.index].Machines[key.account] = part
+		}
+	}
+	if schemaVersion == export.ReportingCursorSchemaVersion && len(projectKeys) == 0 {
+		for _, row := range source.cursorEvents {
+			if index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at); ok {
+				hours[index].CursorEvents = append(hours[index].CursorEvents, row.event)
+			}
+		}
+		for _, row := range source.cursorPolls {
+			if index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at); ok {
+				hours[index].CursorPolls = append(hours[index].CursorPolls, row.poll)
+			}
 		}
 	}
 	for i := range hours {
@@ -368,6 +441,14 @@ func reportingHoursFromMachineSource(
 		return nil, err
 	}
 	standaloneUsage := source.standaloneUsage
+	if machine == "" {
+		standaloneUsage = slices.Clone(standaloneUsage)
+		for _, row := range source.accountUsage {
+			standaloneUsage = append(standaloneUsage, row.usage)
+		}
+	} else if schemaVersion == export.ReportingCursorSchemaVersion {
+		standaloneUsage = slices.DeleteFunc(slices.Clone(standaloneUsage), func(row activity.UsageRow) bool { return row.Agent == "cursor" })
+	}
 	usage := append(
 		append([]activity.UsageRow(nil), sessionUsage...),
 		standaloneUsage...,
@@ -389,19 +470,21 @@ func reportingHoursFromMachineSource(
 	}
 	projects := source.projects
 	if machine != "" {
-		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s activity.SessionMeta) bool { return source.machineID(s.Machine) != machine })
+		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s activity.SessionMeta) bool { return source.sessionOrigin(s, schemaVersion) != machine })
 		ids = make([]string, 0, len(sessions))
 		for _, session := range sessions {
 			ids = append(ids, session.SessionID)
 		}
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
-			return source.machineID(sessionByID[e.SessionID].Machine) != machine
+			return source.sessionOrigin(sessionByID[e.SessionID], schemaVersion) != machine
 		})
-		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool { return source.machineID(sessionByID[u.SessionID].Machine) != machine })
+		usage = slices.DeleteFunc(source.codexCloudUsage(slices.Clone(usage), sessionByID), func(u activity.UsageRow) bool {
+			return source.usageOrigin(sessionByID[u.SessionID], schemaVersion) != machine
+		})
 	}
 	var references map[string]export.ProjectReference
 	var groupLabels map[string]string
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		projects, references, groupLabels = partitionReportingProjects(sessionByID, projects, source.references)
 		sessions = slices.Clone(sessions)
 		for i := range sessions {
@@ -447,7 +530,7 @@ func reportingHoursFromMachineSource(
 			candidates = dayCandidates[first:last:last]
 		}
 		aggregate := activity.AggregateCandidates
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			aggregate = activity.AggregateCandidatesWithJointActivity
 		}
 		report, aggregateErr := aggregate(ctx, activity.Params{
@@ -491,7 +574,7 @@ func reportingHoursFromMachineSource(
 		if !hour.HasData {
 			hour = quietReportingHour(hourStart, schemaVersion, bucket)
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			hour.BucketSeconds = int(bucket / time.Second)
 			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, report.BySession, usage, sessionByID, projects, references, projectKeys)
 			if err != nil {
@@ -512,6 +595,11 @@ func (db *DB) reportingUsageSessionsFrom(
 	// A usage row is in range when its own timestamp is, or, when it has
 	// none, its session's start is. One branch per case lets the timestamp
 	// indexes seek the range instead of reading every usage row.
+	lowerTime, lowerErr := time.Parse(time.RFC3339Nano, lowerBound)
+	upperTime, upperErr := time.Parse(time.RFC3339Nano, upperBound)
+	if err := errors.Join(lowerErr, upperErr); err != nil {
+		return nil, nil, fmt.Errorf("parsing reporting usage bounds: %w", err)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		WITH usage_session_ids AS (
 			SELECT m.session_id
@@ -535,9 +623,16 @@ func (db *DB) reportingUsageSessionsFrom(
 				AND s.started_at >= ?1 AND s.started_at <= ?2
 			UNION
 			SELECT ue.session_id
-			FROM usage_events ue
+			FROM usage_events ue INDEXED BY idx_usage_events_occurred_us
 			JOIN sessions s ON s.id = ue.session_id
 			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at_us >= ?3 AND ue.occurred_at_us <= ?4
+			UNION
+			SELECT ue.session_id
+			FROM usage_events ue INDEXED BY idx_usage_events_occurred_unparsed
+			JOIN sessions s ON s.id = ue.session_id
+			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at_us IS NULL
 				AND ue.occurred_at >= ?1 AND ue.occurred_at <= ?2
 			UNION
 			SELECT ue.session_id
@@ -562,6 +657,7 @@ func (db *DB) reportingUsageSessionsFrom(
 		WHERE s.id != '' AND s.id IN usage_session_ids
 		ORDER BY s.id`,
 		lowerBound, upperBound,
+		lowerTime.UTC().UnixMicro(), upperTime.UTC().UnixMicro(),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
@@ -604,10 +700,70 @@ func (db *DB) reportingUsageSessionsFrom(
 	return sessions, ids, nil
 }
 
+type reportingAccountRow struct {
+	usage             activity.UsageRow
+	account, polledAt string
+	at                time.Time
+	empty             bool
+}
+
+const reportingCursorHour = `(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 - (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0)) * 3600`
+
+const reportingCursorPollWindow = `PARTITION BY agent, account_user_id, ` + reportingCursorHour
+
+const reportingEmptyCursorPollsQuery = `SELECT account_user_id, hour_start, polled_at FROM cursor_account_polls AS poll
+		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
+			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND ` + reportingCursorHour + ` = poll.hour_start AND account_polled_at >= poll.polled_at)`
+
+func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists || !start.Before(end) {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
+		SELECT *, max(account_polled_at) OVER (`+reportingCursorPollWindow+`) AS latest_poll FROM cursor_usage_events
+		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?)
+		AS event WHERE account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = `+reportingCursorHour+`),'')`,
+		start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
+	if err != nil {
+		return fmt.Errorf("querying Cursor account usage: %w", err)
+	}
+	defer rows.Close()
+	var result []reportingAccountRow
+	for rows.Next() {
+		var r reportingAccountRow
+		var input, output, write, read int
+		var occurredMicros int64
+		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
+			return err
+		}
+		r.account = cursorAccountPrefix + r.account
+		r.at = time.UnixMicro(occurredMicros).UTC()
+		r.usage.Agent = "cursor"
+		setStandaloneUsageFields(&r.usage, input, output, write, read)
+		result = append(result, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	polls, err := loadReportingCursorPolls(ctx, tx, start, end)
+	if err != nil {
+		return err
+	}
+	for _, poll := range polls {
+		result = append(result, reportingAccountRow{account: cursorAccountPrefix + poll.poll.Account, polledAt: poll.poll.PolledAt, at: poll.at, empty: true})
+	}
+	source.accountUsage = result
+	return nil
+}
+
 func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	ctx context.Context,
 	tx *sql.Tx,
-	query activity.Query,
+	query activity.Query, schemaVersion int, ledger *reportingExportSource,
 ) ([]activity.UsageRow, error) {
 	var tableExists int
 	err := tx.QueryRowContext(
@@ -624,20 +780,35 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		)
 	}
 
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		ledger.cursorPolls, err = loadReportingCursorPolls(ctx, tx, query.RangeStart, query.RangeEnd)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	lowerBound := PaddedUTCBound(
 		query.RangeStart.UTC().Format(time.RFC3339), -14,
 	)
 	upperBound := PaddedUTCBound(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
+	source := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
+	accountFilter := ""
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		source = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
+		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = " + reportingCursorHour + "),''))"
+	}
+	ledgerColumns := ""
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		ledgerColumns = ", account_user_id, account_polled_at, conversation_id, agentsview_timestamp_unix_micro(occurred_at)"
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT agent, occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'),
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
-			charged_microdollars, dedup_key
-		FROM cursor_usage_events
-		WHERE occurred_at >= ?
-			AND occurred_at <= ?`,
+			charged_microdollars, dedup_key`+ledgerColumns+`
+		FROM (`+source+`) AS event`+accountFilter,
 		lowerBound, upperBound,
 	)
 	if err != nil {
@@ -650,30 +821,27 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		var row activity.UsageRow
 		var inputTokens, outputTokens int
 		var cacheCreationTokens, cacheReadTokens int
-		if err := rows.Scan(
-			&row.Agent,
-			&row.Timestamp,
-			&row.Model,
-			&inputTokens,
-			&outputTokens,
-			&cacheCreationTokens,
-			&cacheReadTokens,
-			&row.Cost,
-			&row.UsageDedupKey,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"scanning standalone reporting usage: %w", err,
-			)
+		fields := []any{&row.Agent, &row.Timestamp, &row.Model, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &row.Cost, &row.UsageDedupKey}
+		var account, polledAt, conversationID string
+		var micros sql.NullInt64
+		if schemaVersion == export.ReportingCursorSchemaVersion {
+			fields = append(fields, &account, &polledAt, &conversationID, &micros)
 		}
-		row.InputTokens = max(inputTokens, 0)
-		row.OutputTokens = max(outputTokens, 0)
-		row.CacheCreationTokens = max(cacheCreationTokens, 0)
-		row.CacheReadTokens = max(cacheReadTokens, 0)
-		row.MessageOrdinal = -1
-		row.UsageSource = row.Agent
-		row.CostSource = export.CostSourceReported
-		row.Priced = true
-		row.Contributes = true
+		if err := rows.Scan(fields...); err != nil {
+			return nil, fmt.Errorf("scanning standalone reporting usage: %w", err)
+		}
+		setStandaloneUsageFields(&row, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
+		if schemaVersion == export.ReportingCursorSchemaVersion && row.Agent == "cursor" {
+			if micros.Valid && micros.Int64 >= query.RangeStart.UnixMicro() && micros.Int64 < query.RangeEnd.UnixMicro() {
+				at := time.UnixMicro(micros.Int64).UTC()
+				ledger.cursorEvents = append(ledger.cursorEvents, reportingCursorEventRow{at: at, event: export.ReportingCursorEvent{
+					At: at.Format(time.RFC3339Nano), Key: row.UsageDedupKey, Model: row.Model,
+					InputTokens: int64(row.InputTokens), OutputTokens: int64(row.OutputTokens),
+					CacheWriteTokens: int64(row.CacheCreationTokens), CacheReadTokens: int64(row.CacheReadTokens),
+					Cost: row.Cost, Account: account, PolledAt: polledAt, ConversationID: conversationID,
+				}})
+			}
+		}
 		loaded = append(loaded, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -682,6 +850,13 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		)
 	}
 	return loaded, nil
+}
+
+func setStandaloneUsageFields(row *activity.UsageRow, input, output, write, read int) {
+	row.InputTokens, row.OutputTokens = max(input, 0), max(output, 0)
+	row.CacheCreationTokens, row.CacheReadTokens = max(write, 0), max(read, 0)
+	row.MessageOrdinal, row.UsageSource = -1, row.Agent
+	row.CostSource, row.Priced, row.Contributes = export.CostSourceReported, true, true
 }
 
 func sortReportingUsage(rows []activity.UsageRow) {

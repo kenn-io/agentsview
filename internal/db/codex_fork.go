@@ -95,6 +95,55 @@ func (db *DB) HasCodexForkSource(ctx context.Context, agent, path string) (bool,
 	return found, err
 }
 
+// UnresolvedCodexForkSource identifies an active Codex-format fork session
+// whose replay parent has not yet been resolved.
+type UnresolvedCodexForkSource struct {
+	Agent    string
+	FilePath string
+	ParentID string
+}
+
+// ListUnresolvedCodexForkSources returns active Codex-format fork sessions
+// still below the current data version so sync can wake them when their
+// missing parent rollout appears on disk.
+func (db *DB) ListUnresolvedCodexForkSources(ctx context.Context) ([]UnresolvedCodexForkSource, error) {
+	var exists bool
+	if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
+	 SELECT 1 FROM sqlite_master WHERE type='table' AND name='codex_fork_state')`).Scan(&exists); err != nil || !exists {
+		return nil, err
+	}
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.agent, s.file_path, f.state_json
+	 FROM codex_fork_state f
+	 JOIN sessions s ON s.id = f.session_id
+	 WHERE s.data_version < ?
+	   AND s.file_path IS NOT NULL
+	   AND s.file_path != ''
+	   AND s.deleted_at IS NULL`, CurrentDataVersion())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sources []UnresolvedCodexForkSource
+	for rows.Next() {
+		var agent, filePath, encoded string
+		if err := rows.Scan(&agent, &filePath, &encoded); err != nil {
+			return nil, err
+		}
+		var header struct {
+			ParentID string `json:"ParentID"`
+		}
+		if err := json.Unmarshal([]byte(encoded), &header); err != nil || header.ParentID == "" {
+			continue
+		}
+		sources = append(sources, UnresolvedCodexForkSource{
+			Agent:    agent,
+			FilePath: filePath,
+			ParentID: header.ParentID,
+		})
+	}
+	return sources, rows.Err()
+}
+
 // HasCodexForkToolHistory identifies retained calls whose result payloads are
 // not bounded by the size of the current source file.
 func (db *DB) HasCodexForkToolHistory(ctx context.Context, agent, path string) (bool, error) {

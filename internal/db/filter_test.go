@@ -190,6 +190,26 @@ func TestSessionFilterActiveSince(t *testing.T) {
 	}
 }
 
+func TestSessionFilterFlatActiveChildren(t *testing.T) {
+	d := testDB(t)
+	for _, row := range []struct{ id, parent, ended string }{
+		{"active-parent", "", "2024-06-15T00:00:00Z"},
+		{"stale-child", "active-parent", "2024-01-01T00:00:00Z"},
+		{"stale-parent", "", "2024-01-01T00:00:00Z"},
+		{"active-child", "stale-parent", "2024-06-15T00:00:00Z"},
+		{"orphan", "missing", "2024-06-15T00:00:00Z"},
+	} {
+		insertSession(t, d, row.id, "project", func(s *Session) {
+			s.EndedAt = &row.ended
+			if row.parent != "" {
+				s.ParentSessionID = &row.parent
+				s.RelationshipType = "subagent"
+			}
+		})
+	}
+	requireSessions(t, d, SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", IncludeChildren: true, Flat: true}, []string{"active-parent", "active-child", "orphan"})
+}
+
 func TestSessionFilterMinUserMessages(t *testing.T) {
 	d := testDB(t)
 
@@ -1795,4 +1815,45 @@ func TestListSessionsParentlessChildrenRespectFilters(t *testing.T) {
 	requireSessions(t, d, f, []string{"worker", "nested", "dangling"})
 	f.IncludeChildren, f.IncludeOrphans = false, false
 	requireSessions(t, d, f, nil)
+}
+
+func TestSidebarShowsLaunchedAutomatedRun(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "launcher", "proj", func(s *Session) { s.MessageCount = 4; s.UserMessageCount = 2 })
+	insertSession(t, d, "run", "proj", func(s *Session) {
+		s.FirstMessage = new("You are a code reviewer. Review the code.")
+		s.Entrypoint = "sdk-cli"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "native", "proj", func(s *Session) {
+		s.FirstMessage = new("You are a code reviewer. Review the code.")
+		s.ParentSessionID = new("launcher")
+		s.RelationshipType = "subagent"
+		s.Entrypoint = "sdk-cli"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "spawned", "proj", func(s *Session) {
+		s.FirstMessage = new("You are a code reviewer. Review the code.")
+		s.Entrypoint = "sdk-cli"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+		SessionID: "launcher", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+		ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "spawned"}},
+	}}))
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"launcher"})
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "run", "launcher")
+	require.NoError(t, err)
+	for _, limit := range []int{0, 1} {
+		index, err := d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, Limit: limit})
+		require.NoError(t, err)
+		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher", "run"})
+		index, err = d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, AutomatedFilterSet: true, Limit: limit})
+		require.NoError(t, err)
+		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher"})
+	}
 }

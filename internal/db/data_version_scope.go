@@ -67,6 +67,21 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	177: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	178: {parser.AgentGrok},
 	179: {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate},
+
+	usageEventMicrosDataVersion: {}, // Older binaries cannot maintain usage_events.occurred_at_us; nothing to reparse.
+	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
+	182:                         {parser.AgentEvener},
+	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
+	184:                         {}, // Existing prompts are indexed on open; nothing to reparse.
+	185:                         {}, // Account stamps are written by the next usage sync; nothing to reparse.
+	186:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
+	187:                         {parser.AgentHermes, parser.AgentAugureDesktop},
+	188:                         {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentPrimeAgent},
+	189:                         {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate, parser.AgentOpenClaude, parser.AgentAmp, parser.AgentCursor, parser.AgentFactory, parser.AgentIflow, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands, parser.AgentZCode, parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentTau, parser.AgentCommandCode, parser.AgentQwen, parser.AgentQwenPaw, parser.AgentGemini, parser.AgentGoose, parser.AgentGrok, parser.AgentFx, parser.AgentCline, parser.AgentZencoder, parser.AgentWorkBuddy, parser.AgentDeepSeekTUI, parser.AgentKiro, parser.AgentCodebuff, parser.AgentPositAssistant},
+	190:                         {}, // Retained tool calls are indexed on open.
+	191:                         {}, // Native title reconciliation backfills Antigravity CLI titles without reparsing.
+	192:                         {parser.AgentCodex},
+	193:                         {parser.AgentMusePersonal},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
@@ -77,6 +92,28 @@ const firstScopedDataVersion = 131
 // scopedUpgradePendingKey is the stats key that keeps startup sync and cold
 // reads waiting until a full sync pass has reparsed affected sources.
 const scopedUpgradePendingKey = "scoped_upgrade_pending"
+
+// ScopedUpgradePending reports whether a successful full sync pass still needs
+// to reparse the sources affected by a scoped parser upgrade.
+func (db *DB) ScopedUpgradePending(ctx context.Context) (bool, error) {
+	pending, err := scopedUpgradePending(ctx, db.getReader())
+	if err != nil {
+		return false, fmt.Errorf("checking pending scoped upgrade: %w", err)
+	}
+	return pending, nil
+}
+
+func scopedUpgradePending(ctx context.Context, conn interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+},
+) (bool, error) {
+	var pending bool
+	err := conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
+		scopedUpgradePendingKey,
+	).Scan(&pending)
+	return pending, err
+}
 
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any

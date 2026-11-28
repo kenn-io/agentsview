@@ -12,15 +12,6 @@ import (
 // MaxSQLVars bounds mirror ID batches below driver parameter limits.
 const MaxSQLVars = 900
 
-// VisitChunkedSessionIDs implements AnalyticsBackend.VisitSessionIDSets with
-// placeholder lists of at most MaxSQLVars ids each.
-func VisitChunkedSessionIDs(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
-	return db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
-		idSet, args := db.InPlaceholders(chunk)
-		return visit(ctx, idSet, args)
-	})
-}
-
 func analyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	t, ok := ParseAnalyticsTime(ts)
 	if !ok {

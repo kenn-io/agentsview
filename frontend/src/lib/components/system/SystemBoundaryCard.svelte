@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Disclosure } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { formatTimestamp } from "../../utils/format.js";
 
   interface Props {
@@ -41,7 +42,7 @@
   <span class="label">{label}</span>
   {#if timestamp}
     <span class="timestamp">
-      &middot; {formatTimestamp(timestamp)}
+      &middot; {formatTimestamp(timestamp, ui.alwaysShowYear)}
     </span>
   {/if}
   {#if preview}

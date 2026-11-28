@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 )
@@ -51,6 +52,9 @@ func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
 		if def.EnvVar != "" {
 			t.Setenv(def.EnvVar, "")
 		}
+	}
+	for _, envVar := range config.MetaHarnessEnvVars() {
+		t.Setenv(envVar, "")
 	}
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dataDir, "config.toml"),
@@ -397,6 +401,62 @@ func TestResolveTargetsIncludesFlatCustomHermesRoot(t *testing.T) {
 
 	assert.Equal(t, []string{root}, targets.Dirs[parser.AgentHermes])
 	assert.Empty(t, targets.ExtraFiles)
+}
+
+func TestResolveTargetsExpandsAntigravityCLIMetaHarnessContainer(t *testing.T) {
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	acpA := filepath.Join(container, "inst-a", "antigravity-acp")
+	acpB := filepath.Join(container, "inst-b", "antigravity-acp")
+	cfgA := filepath.Join(container, "inst-a", "config")
+	for _, dir := range []string{
+		filepath.Join(acpA, "conversations"),
+		filepath.Join(acpB, "conversations"),
+		cfgA,
+	} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+	}
+	// Put a config file in sibling config/ and real SQLite summary DBs in each instance.
+	require.NoError(t, os.WriteFile(filepath.Join(cfgA, "config.json"), []byte(`{}`), 0o600))
+	for _, root := range []string{acpA, acpB} {
+		dbtest.SetAntigravityTitle(t, root, "Session Title")
+	}
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {container},
+		},
+	})
+
+	assert.Equal(t, []string{acpA, acpB}, targets.Dirs[parser.AgentAntigravityCLI])
+	manifest, err := remotesync.BuildManifest(t.Context(), targets)
+	require.NoError(t, err)
+	paths := make([]string, 0, len(manifest.Files))
+	for _, entry := range manifest.Files {
+		paths = append(paths, entry.Path)
+	}
+	assert.Contains(t, paths, filepath.Join(acpA, parser.AntigravitySummariesDBName))
+	assert.Contains(t, paths, filepath.Join(acpB, parser.AntigravitySummariesDBName))
+	assert.NotContains(t, paths, filepath.Join(acpA, parser.AntigravitySummariesDBName+"-wal"),
+		"snapshotted summary DB WAL must not appear as a loose manifest entry")
+	assert.NotContains(t, paths, filepath.Join(cfgA, "config.json"),
+		"sibling instance config directory must stay out of antigravity-cli remote sync targets")
+}
+
+func TestResolveTargetsFailsClosedOnUnreadableAntigravityCLIContainer(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod 000 requires non-root unix")
+	}
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	require.NoError(t, os.MkdirAll(container, 0o755))
+	require.NoError(t, os.Chmod(container, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(container, 0o755) })
+
+	_, err := remotesync.ResolveTargets(t.Context(), config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {container},
+		},
+	})
+	require.Error(t, err)
 }
 
 func TestResolveTargetsSkipsSessionlessHermesProfileCredentials(t *testing.T) {

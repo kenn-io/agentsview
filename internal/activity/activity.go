@@ -1,7 +1,7 @@
 // Package activity aggregates a resolved time range of agent activity into a
 // concurrency- and usage-oriented report. It operates on in-memory input
 // streams supplied by a storage backend, so the same aggregation runs
-// identically across SQLite, PostgreSQL, and DuckDB. Export contract types are
+// identically across SQLite, PostgreSQL, and ClickHouse. Export contract types are
 // referenced only for optional report metadata.
 package activity
 
@@ -28,20 +28,24 @@ type Params struct {
 	Partial       bool
 	GapCapSeconds float64
 	Bucket        BucketSpec
+	Waiting       map[string]string
+	Evidence      map[string]bool
 }
 
 // SessionMeta is one candidate session whose window intersects the day.
 type SessionMeta struct {
-	SessionID   string
-	Title       string
-	Project     string
-	ProjectKey  string // optional canonical key for joint export grouping
-	Agent       string
-	Machine     string
-	StartedAt   string // RFC3339 or ""
-	EndedAt     string // RFC3339 or ""
-	IsAutomated bool   // automation flag, independent of delegation
-	IsSubagent  bool   // delegation takes precedence over automation
+	SessionID       string
+	Title           string
+	Project         string
+	ProjectKey      string // optional canonical key for joint export grouping
+	Agent           string
+	Machine         string
+	StartedAt       string // RFC3339 or ""
+	EndedAt         string // RFC3339 or ""
+	IsAutomated     bool   // automation flag, independent of delegation
+	IsSubagent      bool   // delegation takes precedence over automation
+	IsLaunched      bool   // eligible to extend a launcher's activity
+	ParentSessionID string
 }
 
 // ActivityEvent is one timestamped message (backends send only timestamped rows).
@@ -1060,7 +1064,7 @@ func buildSessionsTableFromDedupedUsage(
 	// float addition is not associative, so the unspecified per-backend row
 	// order (no activityReportSessions query imposes ORDER BY) would otherwise
 	// yield 1-ULP-different breakdown costs across SQLite, PostgreSQL, and
-	// DuckDB for identical data.
+	// ClickHouse for identical data.
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].SessionID < sessions[j].SessionID
 	})

@@ -4,12 +4,12 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Public PostHog ingest key. Builds without it send no telemetry.
+# Public PostHog ingest key.
 POSTHOG_PROJECT_KEY ?= phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf
 
 # Who ships the binary: a package manager such as "homebrew", or "kenn" for
 # official direct downloads. Package-manager builds refuse to self-update and
-# point users at the package manager. Telemetry reports the value too.
+# point users at the package manager.
 DISTRIBUTION ?=
 BINDIR ?= .
 
@@ -47,6 +47,7 @@ PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 # queries, caught by the bench gate). Caller-provided flags stay last so
 # they can still override.
 SQLITE_INCLUDE_DIR := .sqlite-include
+
 export CGO_CFLAGS := -O2 -g -I$(CURDIR)/$(SQLITE_INCLUDE_DIR) $(CGO_CFLAGS)
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
@@ -68,7 +69,7 @@ override GOFLAGS += -trimpath
 endif
 export GOFLAGS
 
-.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-api-version test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-api-version test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -352,11 +353,30 @@ desktop-app: desktop-macos-app
 GO_TEST_P ?= 4
 GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 
+.PHONY: test-frontend
+test-frontend:
+	cd frontend && npm test -- $(TEST_ARGS)
+
 # Run the cacheable unit/integration suite. The external-service lanes below
 # intentionally retain `-count=1` because they require fresh state.
 test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
+
+# Keep this focused target separate: `make test` also runs perfsim's
+# unrelated TestActiveAppendGrowth case.
+.PHONY: test-scoped-upgrade-startup
+test-scoped-upgrade-startup: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./internal/server ./cmd/agentsview -run '^(TestArchiveResyncState|TestScopedUpgradePending|TestScopedUpgradeWaitsForAuthoritativeFullPass|TestScopedUpgradePendingAllowsReadCatchup|TestScopedUpgradeDiagnosticRejectsWriterHandoff|TestScopedUpgradeSessionSyncRejectsWriterHandoff|TestScopedUpgradeFreshnessStatusAndHeader|TestScopedUpgradeQueryErrorKeepsFreshnessWarning|TestLocalDailyUsageWarnsForScopedUpgrade|TestLocalSessionUsageRefreshesSubagentTranscripts|TestLocalSessionUsageStaleArchiveReturnsStoredUsage|TestServeLegacyImageTextAfterRestart|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive|TestSessionUsageResolvesMissingIDsBySyncStatus|TestSessionUsageWaitPendingFallback)$$' -count=1
+
+.PHONY: test-scoped-upgrade-frontend
+test-scoped-upgrade-frontend:
+	cd frontend && npm run check
+	cd frontend && npm run test -- src/lib/components/layout/StatusBar.test.ts src/lib/stores/sync.test.ts
+
+.PHONY: test-cursor-account-reporting
+test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview ./internal/cursorusage -run '^(TestCursorAccount|TestCursorSync|TestExportReportingCursorAccount|TestListDailyUsageUsers|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID|TestAccountUsageAgentMigrationPreservesCursorRows|TestOpenReadOnlyDBRejectsStaleArchive)' -count=1
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
@@ -388,7 +408,7 @@ test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 $(call gotestsum,evalingest,./internal/server) \
 		-tags "fts5,evalingest" -count=1
 
-# Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
+# Compare db.Store read-query performance across SQLite and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
 BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
 BENCH_BACKENDS_SESSIONS ?= 1000
@@ -448,9 +468,13 @@ postgres-up:
 	docker compose -f docker-compose.test.yml up -d --wait
 
 # Run opt-in PostgreSQL usage benchmarks against the pinned PG16 service.
+# Indirection keeps make -n from executing the service wrapper.
+.PHONY: bench-pg-usage-run test-postgres-run test-clickhouse-run
+TEST_SERVICE_MAKE = $(MAKE)
 bench-pg-usage: pricing-snapshot
-	docker compose -f docker-compose.test.yml up -d --wait postgres
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) bench-pg-usage-run
+
+bench-pg-usage-run:
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres \
 		-run '^$$' -bench 'BenchmarkPGUsage(Read|Refresh)' -benchmem -count=5
 
@@ -459,15 +483,13 @@ postgres-down:
 	docker compose -f docker-compose.test.yml down
 
 # Run PostgreSQL integration tests (starts postgres automatically)
-test-postgres: pricing-snapshot ensure-embed-dir postgres-up
-	@echo "Waiting for postgres to be ready..."
-	@sleep 2
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
+test-postgres: pricing-snapshot
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) test-postgres-run
+
+test-postgres-run: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
@@ -489,7 +511,7 @@ test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
 # Three processes split the internal/postgres tests and run them in parallel,
 # each test in its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
+	CGO_ENABLED=1 TEST_TAGS='fts5' bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "fts5,pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
@@ -506,18 +528,29 @@ clickhouse-down:
 	docker compose -f docker-compose.test.yml down clickhouse
 
 # Run ClickHouse integration tests (starts clickhouse automatically)
-test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
-	@echo "Waiting for clickhouse to be ready..."
-	@sleep 2
-	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
-	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+test-clickhouse: pricing-snapshot
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh clickhouse 9000 $(TEST_SERVICE_MAKE) test-clickhouse-run
+
+test-clickhouse-run: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+
+# The usage lane moves these reporting tests to the other integration job.
+# The rest lane runs every test outside these prefixes.
+CLICKHOUSE_LANE ?=
+CLICKHOUSE_USAGE_TESTS := ^(TestPreparedUsage|TestUsageRollup|TestDailyUsage|TestUsagePairwise|TestUsageReadersSkipPairwiseEvidence|TestUsageSnapshotRanking)
+ifeq ($(CLICKHOUSE_LANE),usage)
+CLICKHOUSE_TEST_FILTER = -run '$(CLICKHOUSE_USAGE_TESTS)'
+else ifeq ($(CLICKHOUSE_LANE),rest)
+CLICKHOUSE_TEST_FILTER = -skip '$(CLICKHOUSE_USAGE_TESTS)'
+endif
 
 # ClickHouse integration tests for CI (clickhouse already running as service)
 test-clickhouse-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" $(CLICKHOUSE_TEST_FILTER) -count=1 -timeout=20m
+ifneq ($(CLICKHOUSE_LANE),usage)
 	CGO_ENABLED=1 $(call gotestsum,clickhouse-service,./internal/service) -tags "fts5,chtest" -run '^TestPlanUsageCountsParity$$' -count=1
+endif
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker
@@ -535,14 +568,6 @@ e2e:
 		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
 		npx playwright test
 
-# Run focused Playwright smoke tests against duckdb serve.
-e2e-duckdb:
-	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
-		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
-		npx playwright test \
-		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
-		e2e/session-list.spec.ts --project=chromium
-
 # Run the opt-in native-client conversation-memory release gate. This uses the
 # caller's authenticated Claude Code and Codex installations and writes traces
 # only under an ignored .test-data-memory-e2e-* directory.
@@ -553,6 +578,7 @@ memory-e2e: pricing-snapshot ensure-embed-dir
 # Vet
 vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
+	go vet -tags "fts5" ./...
 
 # Lint Go code and auto-fix where possible (local development)
 lint: lint-config-check lint-sql lint-golangci nilaway
@@ -624,6 +650,10 @@ nilaway-golangci-build:
 # exceeded the pipe's atomic-write size. NILAWAY_JOBS must be a positive
 # integer: `xargs -P 0` means "unlimited" and would remove the memory bound
 # this whole arrangement depends on.
+#
+# The case pattern inside the package-list $(...) keeps its leading "(":
+# macOS /bin/sh is bash 3.2, which otherwise reads the pattern's ")" as the
+# end of the command substitution and fails with a syntax error.
 NILAWAY_JOBS ?= 4
 
 # Compile exports once before the workers apply their CPU and memory limits.
@@ -643,7 +673,7 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	dirs=$$(go list -export -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
 		case "$${dir#$$root/}" in \
-			node_modules/*|*/node_modules/*) continue ;; \
+			(node_modules/*|*/node_modules/*) continue ;; \
 		esac; \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \
@@ -709,8 +739,14 @@ docs-preview:
 docs-check:
 	bash scripts/check-docs.sh
 
+# With DOCS_SCREENSHOTS_OUTPUT and DOCS_SCREENSHOTS_CORPUS set, capture this
+# commit and write the docs-generated-assets tree and website preview there.
 docs-screenshots:
+ifdef DOCS_SCREENSHOTS_OUTPUT
+	bash docs/screenshots/capture-commit.sh
+else
 	bash docs/screenshots/run.sh
+endif
 
 docs-assets-branch:
 	bash docs/assets/update-static-assets-branch.sh
@@ -785,7 +821,7 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
-	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
+	@echo "  bench-backends - Benchmark SQLite and PostgreSQL stores"
 	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
@@ -796,7 +832,6 @@ help:
 	@echo "  clickhouse-up  - Start test ClickHouse container"
 	@echo "  clickhouse-down - Stop test ClickHouse container"
 	@echo "  e2e            - Run Playwright E2E tests"
-	@echo "  e2e-duckdb     - Run DuckDB-backed Playwright smoke tests"
 	@echo "  memory-e2e     - Run opt-in Claude Code and Codex memory recall gate"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"

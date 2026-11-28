@@ -68,7 +68,10 @@ const (
 	// price a row only when the catalog cannot.
 	// Version 24 separates snapshot ranking from billed output and stores priced
 	// totals for external account rows that cannot deduplicate against other usage.
-	usageCacheFormatVersion             = 24
+	usageCacheFormatVersion = 24
+	// Formats 21 through 23 are audited sources for format 24.
+	usageCacheUpgradeFrom               = 21
+	usageCacheUpgradeTo                 = 24
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -220,9 +223,7 @@ CREATE TABLE usage_facts (
     ranking_output_tokens INTEGER,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
-CREATE INDEX usage_facts_claude_identity
-    ON usage_facts (claude_message_id, claude_request_id)
-    WHERE claude_message_id != '';
+` + usageCacheClaudeIdentityIndexSQL + `
 CREATE INDEX usage_facts_source_uuid
     ON usage_facts (source_uuid) WHERE source_uuid != '';
 CREATE INDEX usage_facts_usage_dedup_key
@@ -392,7 +393,13 @@ CREATE INDEX usage_rollup_exceptions_window
     ON usage_rollup_exceptions (
         local_date, rollup_install_id, group_kind, group_key
     );
-CREATE TABLE usage_rollup_account_totals (
+` + usageCacheAccountTotalsSQL
+
+const usageCacheClaudeIdentityIndexSQL = `CREATE INDEX usage_facts_claude_identity
+    ON usage_facts (claude_message_id, claude_request_id)
+    WHERE claude_message_id != '';`
+
+const usageCacheAccountTotalsSQL = `CREATE TABLE usage_rollup_account_totals (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
     local_date TEXT NOT NULL,
@@ -492,6 +499,74 @@ func usageCacheGenerationPath(
 	return filepath.Join(filepath.Dir(archivePath), name)
 }
 
+// UsageCacheFiles returns supported generation paths for an archive identity.
+func UsageCacheFiles(archivePath, databaseID string) []string {
+	var paths []string
+	for version := usageCacheUpgradeFrom; version <= usageCacheFormatVersion; version++ {
+		paths = append(paths, usageCacheGenerationPath(archivePath, version, databaseID))
+	}
+	return paths
+}
+
+// UsableCopiedUsageCache reports whether a cache can seed the copied archive.
+func UsableCopiedUsageCache(ctx context.Context, path, databaseID string) (bool, error) {
+	probe := probeUsageCache(ctx, path)
+	if probe.Err != nil {
+		if unusableUsageCache(probe.Err, false) {
+			return false, nil
+		}
+		return false, probe.Err
+	}
+	if !probe.Recognized || probe.SourceDatabaseID != databaseID || probe.FormatVersion < usageCacheUpgradeFrom || probe.FormatVersion > usageCacheFormatVersion || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion || filepath.Base(path) != filepath.Base(usageCacheGenerationPath(path, probe.FormatVersion, databaseID)) || (probe.FormatVersion == usageCacheFormatVersion && !probe.Compatible) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// UnusableCopiedUsageCacheError identifies corruption or an incomplete cache schema.
+func UnusableCopiedUsageCacheError(err error, conversion bool) bool {
+	return unusableUsageCache(err, conversion)
+}
+
+// RelabelCopiedUsageRollups keeps cached summaries under the detached archive's labels.
+func RelabelCopiedUsageRollups(ctx context.Context, path, archivePath string) (retErr error) {
+	database, err := openUsageCacheDatabase(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, database.Close()) }()
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, conn.Close()) }()
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS copied_archive`, makeDSN(archivePath, true)); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, query := range []string{
+		`DELETE FROM usage_rollup_installs WHERE session_id != ? AND session_id NOT IN (SELECT id FROM copied_archive.sessions)`,
+		`CREATE TEMP TABLE copied_daily_rollups AS SELECT d.* FROM usage_daily_rollups d JOIN usage_rollup_installs i ON i.id=d.rollup_install_id JOIN copied_archive.sessions s ON s.id=i.session_id WHERE i.project != s.project`,
+		`DELETE FROM usage_daily_rollups WHERE rollup_install_id IN (SELECT i.id FROM usage_rollup_installs i JOIN copied_archive.sessions s ON s.id=i.session_id WHERE i.project != s.project)`,
+		`UPDATE usage_rollup_installs SET project=(SELECT project FROM copied_archive.sessions WHERE id=usage_rollup_installs.session_id) WHERE session_id IN (SELECT id FROM copied_archive.sessions)`,
+		`INSERT INTO usage_daily_rollups SELECT * FROM copied_daily_rollups`,
+		`DROP TABLE copied_daily_rollups`,
+	} {
+		var args []any
+		if strings.Contains(query, "session_id != ?") {
+			args = append(args, usageRollupCursorSessionID)
+		}
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (m *usageCacheManager) Generation(
 	ctx context.Context, databaseID string,
 ) (*usageCache, error) {
@@ -518,10 +593,7 @@ func (m *usageCacheManager) Generation(
 
 	cache, err := m.openPersistentGeneration(ctx, databaseID)
 	if err != nil {
-		log.Printf(
-			"warning: usage cache is non-persistent because %s is unavailable: %v",
-			filepath.Dir(m.archivePath), err,
-		)
+		log.Printf("warning: opening persistent usage cache in %s failed; using a temporary cache: %v", filepath.Dir(m.archivePath), err)
 		cache, err = openTemporaryUsageCache(ctx, databaseID)
 		if err != nil {
 			return nil, fmt.Errorf("opening temporary usage cache: %w", err)
@@ -633,7 +705,7 @@ func (m *usageCacheManager) openPersistentGeneration(
 		return nil, probe.Err
 	}
 	if !probe.Exists {
-		cache, published, err := publishUsageCache(ctx, path, databaseID)
+		cache, published, err := publishUsageCache(ctx, m.archivePath, path, databaseID)
 		if err != nil {
 			return nil, err
 		}
@@ -685,7 +757,7 @@ func acquireUsageCacheLease(path string) (*flock.Flock, error) {
 }
 
 func publishUsageCache(
-	ctx context.Context, path, databaseID string,
+	ctx context.Context, archivePath, path, databaseID string,
 ) (*usageCache, bool, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".usage-cache-init-*.db")
 	if err != nil {
@@ -696,8 +768,17 @@ func publishUsageCache(
 		_ = os.Remove(temporaryPath)
 		return nil, false, err
 	}
-	_ = os.Remove(temporaryPath)
-	cache, err := initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	seeded, err := seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
+	if err != nil {
+		_ = removeUsageCacheFiles(temporaryPath)
+		return nil, false, err
+	}
+	var cache *usageCache
+	if seeded {
+		cache, err = openUsageCache(ctx, temporaryPath, databaseID, false)
+	} else {
+		cache, err = initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	}
 	if err != nil {
 		_ = removeUsageCacheFiles(temporaryPath)
 		return nil, false, err
@@ -934,14 +1015,14 @@ func probeUsageCacheWithBusyTimeout(
 		return probe
 	}
 	probe.RetirementProtocolVersion, _ = strconv.Atoi(retirementProtocolText)
-	probe.Compatible = probe.FormatVersion == usageCacheFormatVersion &&
-		probe.SourceDatabaseID != "" &&
-		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion &&
-		usageCacheSchemaComplete(ctx, database)
+	if probe.FormatVersion == usageCacheFormatVersion && probe.SourceDatabaseID != "" &&
+		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion {
+		probe.Compatible, probe.Err = usageCacheSchemaComplete(ctx, database)
+	}
 	return probe
 }
 
-func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
+func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) (bool, error) {
 	var metadataCount int
 	if err := database.QueryRowContext(ctx, `
 		SELECT count(*) FROM usage_cache_metadata
@@ -951,8 +1032,11 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
 			'backfill_completed_at', 'retirement_protocol_version', 'reset_epoch'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 10 {
-		return false
+		)`).Scan(&metadataCount); err != nil {
+		return usageCacheSchemaCheckError(err)
+	}
+	if metadataCount != 10 {
+		return false, nil
 	}
 	queries := []string{
 		`SELECT key, value FROM usage_cache_metadata LIMIT 0`,
@@ -1019,7 +1103,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 	}
 	for _, query := range queries {
 		if _, err := database.ExecContext(ctx, query); err != nil {
-			return false
+			return usageCacheSchemaCheckError(err)
 		}
 	}
 	for _, index := range []string{
@@ -1031,11 +1115,21 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		if err := database.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)`,
 			index,
-		).Scan(&exists); err != nil || !exists {
-			return false
+		).Scan(&exists); err != nil {
+			return usageCacheSchemaCheckError(err)
+		}
+		if !exists {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+func usageCacheSchemaCheckError(err error) (bool, error) {
+	if unusableUsageCache(err, true) {
+		return false, nil
+	}
+	return false, err
 }
 
 func removeUsageCacheFiles(path string) error {

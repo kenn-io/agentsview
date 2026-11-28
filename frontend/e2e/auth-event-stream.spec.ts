@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import http from "node:http";
 import { AUTH_SERVER_TOKEN, authServerURL, waitForAuthServer } from "./helpers/auth-server";
 
 const authHeaders = { Authorization: `Bearer ${AUTH_SERVER_TOKEN}` };
@@ -29,9 +30,39 @@ for (const remote of [true, false]) {
     const slot = (testInfo.project.name === "webkit" ? 2 : 0) + (remote ? 1 : 0);
     const sessionId = sessions[slot]!.id;
     const sessionURL = `${server}/api/v1/sessions/${encodeURIComponent(sessionId)}`;
-    expect((await request.delete(sessionURL, { headers: authHeaders })).status()).toBe(204);
+    const upstream = new URL(server);
+    const streams: { url: string; authorization?: string; status?: number }[] = [];
+    const proxy = http.createServer((req, res) => {
+      const url = req.url ?? "/";
+      const stream = url.startsWith("/api/v1/events")
+        ? { url, authorization: req.headers.authorization, status: undefined as number | undefined }
+        : undefined;
+      if (stream) streams.push(stream);
+      const target = http.request(
+        {
+          hostname: upstream.hostname,
+          port: upstream.port,
+          path: url,
+          method: req.method,
+          headers: { ...req.headers, host: upstream.host },
+        },
+        (response) => {
+          if (stream) stream.status = response.statusCode;
+          res.writeHead(response.statusCode ?? 500, response.headers);
+          response.pipe(res);
+        },
+      );
+      target.on("error", () => res.destroy());
+      res.on("close", () => target.destroy());
+      req.pipe(target);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const address = proxy.address();
+    if (!address || typeof address === "string") throw new Error("proxy did not bind");
+    const proxyURL = `http://127.0.0.1:${address.port}`;
 
     try {
+      expect((await request.delete(sessionURL, { headers: authHeaders })).status()).toBe(204);
       await page.addInitScript(
         ({ server, token, remote }) => {
           localStorage.setItem("agentsview-locale", "en");
@@ -42,19 +73,16 @@ for (const remote of [true, false]) {
             localStorage.setItem("agentsview-auth-token", token);
           }
         },
-        { server, token: AUTH_SERVER_TOKEN, remote },
+        { server: proxyURL, token: AUTH_SERVER_TOKEN, remote },
       );
-      const isStream = (url: string) => url.startsWith(`${server}/api/v1/events`);
-      const streamRequest = page.waitForRequest((req) => isStream(req.url()));
-      const streamResponse = page.waitForResponse((res) => isStream(res.url()));
 
-      await page.goto(remote ? "/" : server);
+      await page.goto(remote ? "/" : proxyURL);
       await expect(page.locator(".session-item").first()).toBeVisible();
 
-      const req = await streamRequest;
-      expect(await req.headerValue("authorization")).toBe(`Bearer ${AUTH_SERVER_TOKEN}`);
-      expect(new URL(req.url()).searchParams.has("token")).toBe(false);
-      expect((await streamResponse).status()).toBe(200);
+      await expect.poll(() => streams.some((stream) => stream.status === 200)).toBe(true);
+      const stream = streams.find((entry) => entry.status === 200)!;
+      expect(stream.authorization).toBe(`Bearer ${AUTH_SERVER_TOKEN}`);
+      expect(new URL(stream.url, proxyURL).searchParams.has("token")).toBe(false);
 
       const row = page.locator(`.session-item[data-session-id="${sessionId}"]`);
       await expect(row).toHaveCount(0);
@@ -66,6 +94,11 @@ for (const remote of [true, false]) {
     } finally {
       // Leave the shared server as it started if the test failed mid-way.
       await request.post(`${sessionURL}/restore`, { headers: authHeaders });
+      await page.close();
+      proxy.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        proxy.close((err) => (err ? reject(err) : resolve())),
+      );
     }
   });
 }

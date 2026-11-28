@@ -34,12 +34,16 @@ type markerPrompt struct {
 func seedMarkerPrompts(t *testing.T, url, schema string, prompts []markerPrompt) (*Store, []string) {
 	t.Helper()
 	ctx := t.Context()
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	fresh := takeFreshSchemaCopy(t, url, schema)
+	if !fresh {
+		cleanNamedPGSchema(t, url, schema)
+	}
 	pg, err := Open(ctx, url, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	if !fresh {
+		require.NoError(t, EnsureSchema(ctx, pg, schema))
+	}
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
@@ -73,7 +77,7 @@ func scanMarkers(t *testing.T, store *Store, ids []string) []int {
 	for i, id := range ids {
 		rows[i].ID = id
 	}
-	require.NoError(t, store.populateFrustrationMarkers(ctx, rows, nil, versionColumn))
+	require.NoError(t, store.populateFrustrationMarkers(ctx, rows, nil, versionColumn, false))
 	counts := make([]int, len(rows))
 	for i := range rows {
 		counts[i] = rows[i].FrustrationMarkerCount
@@ -178,7 +182,7 @@ func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
 	for i, c := range cases {
 		prompts[i] = c.prompt
 	}
-	store, ids := seedMarkerPrompts(t, testPGURL(t), "agentsview_frustration_edges", prompts)
+	store, ids := seedMarkerPrompts(t, testPGSchemaURL(t, "agentsview"), "agentsview", prompts)
 
 	counts := scanMarkers(t, store, ids)
 	shipped := shippedContent(t, store, ids)
@@ -244,7 +248,7 @@ func TestFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 			prompts[i].content = b.String()
 		}
 	}
-	store, ids := seedMarkerPrompts(t, testPGURL(t), "agentsview_frustration_random", prompts)
+	store, ids := seedMarkerPrompts(t, testPGSchemaURL(t, "agentsview"), "agentsview", prompts)
 
 	counts := scanMarkers(t, store, ids)
 	shipped := shippedContent(t, store, ids)

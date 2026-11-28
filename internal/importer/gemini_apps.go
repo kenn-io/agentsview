@@ -46,7 +46,7 @@ func ImportGeminiApps(
 				result.Session.Machine, machine,
 			)
 			status, err := upsertConversation(
-				ctx, store, result, fts,
+				ctx, store, result, fts, claudeAIMessages,
 			)
 			stats.record(result.Session.ID, status, err)
 			cb.progress(stats)

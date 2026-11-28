@@ -18,7 +18,7 @@ func (readOnlyError) Error() string { return "not available in remote mode" }
 
 // Store is the interface the HTTP server uses for all data access.
 // Any new server-visible query or mutation belongs here, not only on
-// the SQLite *DB type, so PostgreSQL and DuckDB fail compilation until
+// the SQLite *DB type, so PostgreSQL and ClickHouse fail compilation until
 // they implement the same capability surface. The backendcontract package
 // centralizes compile-time assertions for every concrete provider.
 type Store interface {
@@ -52,6 +52,7 @@ type Store interface {
 	// Search.
 	HasFTS(ctx context.Context) bool
 	HasSemantic() bool
+	// Search pages may be shared; callers must not modify them.
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 	SearchContent(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error)
@@ -60,6 +61,7 @@ type Store interface {
 
 	// SSE change detection.
 	GetSessionVersion(ctx context.Context, id string) (count int, version int64, ok bool)
+	GetSessionTreeMarker(ctx context.Context, id string) (SessionTreeSnapshot, error)
 
 	// Metadata.
 	GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (Stats, error)

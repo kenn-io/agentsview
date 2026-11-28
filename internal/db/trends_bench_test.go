@@ -12,7 +12,7 @@ import (
 // alternating user and assistant messages of about 400 bytes; every fourth
 // message mentions the term. It measures a month inside the archive, the
 // default one-year range narrowed to one project, and the whole archive.
-// The PostgreSQL, DuckDB and ClickHouse trends benchmarks use the same shape.
+// The PostgreSQL and ClickHouse trends benchmarks use the same shape.
 func BenchmarkSQLiteTrendsTerms(b *testing.B) {
 	d := testDB(b)
 	ctx := b.Context()

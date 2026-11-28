@@ -20,9 +20,11 @@ const fingerprintProgressStride = 200
 // fingerprint, archive, and dashboard facts already match. content covers
 // everything outside the session row and is stored as
 // agentsview_content_fingerprint; a push that finds only the content
-// unchanged rewrites just the session row.
+// unchanged rewrites just the session row. messages is how many message
+// rows a push stores for the session.
 type sessionFingerprint struct {
 	full, content string
+	messages      int
 }
 
 // sessionFingerprints hashes each candidate's local content: the mirrored
@@ -98,7 +100,7 @@ func (s *Sync) snapshotFingerprint(
 		SessionFields  []any
 		SessionContent `json:",inline"`
 	}{
-		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
+		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine), snapshot.IsLaunched),
 		SessionContent: content,
 	})
 	if err != nil {
@@ -108,7 +110,7 @@ func (s *Sync) snapshotFingerprint(
 	if err != nil {
 		return sessionFingerprint{}, err
 	}
-	return sessionFingerprint{full: full, content: contentHash}, nil
+	return sessionFingerprint{full: full, content: contentHash, messages: len(snapshot.Messages)}, nil
 }
 
 func hashJSON(sessionID string, value any) (string, error) {
@@ -125,7 +127,7 @@ func hashJSON(sessionID string, value any) (string, error) {
 // keeps this list and the sessions table spec in step: a column left out
 // here could go stale while the fingerprint still reports the session as
 // unchanged.
-func sessionFingerprintFields(sess db.Session, machine string) []any {
+func sessionFingerprintFields(sess db.Session, machine string, launched bool) []any {
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned, machine, sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
@@ -134,7 +136,7 @@ func sessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.MessageCount, sess.UserMessageCount,
 		sess.FilePath, sess.FileSize, sess.FileMtime, sess.FileInode, sess.FileDevice, sess.FileHash,
 		sess.LocalModifiedAt, sess.TranscriptRevision,
-		sess.ParentSessionID, sess.RelationshipType,
+		sess.ParentSessionID, sess.RelationshipType, launched,
 		sess.TotalOutputTokens, sess.PeakContextTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens, sess.IsAutomated,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount, sess.EditChurnCount,
@@ -168,7 +170,7 @@ var sessionFingerprintColumns = []string{
 	"message_count", "user_message_count",
 	"file_path", "file_size", "file_mtime", "file_inode", "file_device", "file_hash",
 	"local_modified_at", "transcript_revision",
-	"parent_session_id", "relationship_type",
+	"parent_session_id", "relationship_type", "is_launched",
 	"total_output_tokens", "peak_context_tokens",
 	"has_total_output_tokens", "has_peak_context_tokens", "is_automated",
 	"tool_failure_signal_count", "tool_retry_count", "edit_churn_count",
@@ -196,8 +198,13 @@ var derivedSessionColumns = map[string]string{
 	// A push writes both with the content; they describe it.
 	"agentsview_content_fingerprint": "the content fingerprint itself",
 	"content_version":                "push bookkeeping",
-	"source_archive_id":              "push bookkeeping",
-	"stored_message_count":           "derived from the messages the fingerprint hashes",
+	"rows_version":                   "push bookkeeping",
+	// It hashes the rendered dependent rows, which the content
+	// fingerprint already covers.
+	"agentsview_message_rows_fingerprint":         "push bookkeeping",
+	"agentsview_leading_message_rows_fingerprint": "push bookkeeping",
+	"source_archive_id":                           "push bookkeeping",
+	"stored_message_count":                        "derived from the messages the fingerprint hashes",
 	// A push rewrites the session rows of sessions below the current
 	// dashboardFactsVersion; otherwise these change only with the messages.
 	"dashboard_facts_version":       "push bookkeeping",

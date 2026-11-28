@@ -24,10 +24,12 @@
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
   import { settingsPanels } from "./settingsPanels.js";
 
   let authTokenInput: string = $state("");
-  let active = $state(router.params.panel ?? "appearance");
+  let active = $derived(router.params.panel ?? "appearance");
   let searchQuery = $state("");
   let pageElement: HTMLElement;
   const panels = $derived(settingsPanels());
@@ -118,8 +120,24 @@
         <h2 class="settings-title">{m.settings_title()}</h2>
       </div>
 
-      {#if settings.loading || !settings.loaded}
-        <div class="settings-loading">{m.settings_loading()}</div>
+      {#if settings.error}
+        <div class="settings-error">
+          <LoadError message={settings.error} onRetry={() => void settings.load()} />
+          {#if isRemoteConnection()}
+            <button
+              class="auth-disconnect"
+              onclick={() => {
+                setAuthToken("");
+                setServerUrl("");
+                window.location.reload();
+              }}
+            >
+              {m.app_auth_disconnect_reset()}
+            </button>
+          {/if}
+        </div>
+      {:else if settings.loading || !settings.loaded}
+        <LoadingState label={m.settings_loading()} />
       {:else if settings.needsAuth}
         <div class="auth-prompt">
           <h3 class="auth-title">{m.app_auth_title()}</h3>
@@ -155,26 +173,10 @@
             {m.app_auth_disconnect_reset()}
           </button>
         </div>
-      {:else if settings.error}
-        <div class="settings-error">
-          <p>{settings.error}</p>
-          {#if isRemoteConnection()}
-            <button
-              class="auth-disconnect"
-              onclick={() => {
-                setAuthToken("");
-                setServerUrl("");
-                window.location.reload();
-              }}
-            >
-              {m.app_auth_disconnect_reset()}
-            </button>
-          {/if}
-        </div>
       {/if}
     </div>
   {:else}
-    <SettingsLayout categories={layoutCategories} bind:active title={m.settings_title()}>
+    <SettingsLayout categories={layoutCategories} bind:active={() => active, (value) => router.replaceParams({ ...router.params, panel: value })} title={m.settings_title()}>
       {#snippet sidebarHeader()}
         <SearchInput
           bind:value={searchQuery}
@@ -527,24 +529,15 @@
     font-size: var(--font-size-sm);
   }
 
-  .settings-loading,
   .settings-error {
-    font-size: 13px;
-    color: var(--text-muted);
-    padding: 40px 0;
-    text-align: center;
-  }
-
-  .settings-error {
-    color: var(--accent-red, #ef4444);
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
   }
 
-  .settings-error p {
-    margin: 0;
+  .settings-error .auth-disconnect {
+    align-self: flex-start;
   }
 
   .settings-actions-hint {

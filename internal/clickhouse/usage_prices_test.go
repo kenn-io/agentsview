@@ -41,6 +41,28 @@ func TestUsageLookupModelResolvesCodexAutoReview(t *testing.T) {
 		chUsageLookupModel("openai/codex-auto-review", ""))
 }
 
+func TestUsageLookupModelResolvesGemini4(t *testing.T) {
+	assert.Equal(t, "gemini/gemini-4-neon",
+		chUsageLookupModel("gemini-4-neon", "2026-11-21T12:00:00Z"))
+	assert.Equal(t, "vertex_ai/gemini-4-neon",
+		chUsageLookupModel("vertex_ai/gemini-4-neon", "2026-11-21T12:00:00Z"))
+}
+
+func TestUsagePriceContextCustomPricedDetectsGeminiDisplayNameTarget(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "gemini/gemini-4-neon",
+		Rates: export.ModelRates{
+			InputPerMTok: money.MustParseDollars("9"),
+			Source:       export.PricingRowSourceCustom,
+		},
+	}})
+	ctx := chUsagePriceContext{
+		ReportedModel:  "Gemini 4 Neon (High)",
+		CanonicalModel: "Gemini 4 Neon (High)",
+	}
+	assert.True(t, ctx.customPriced(resolver))
+}
+
 func usagePriceTestDigest(
 	t *testing.T, rows []export.EffectivePricingRow, models ...chUsagePriceModel,
 ) string {
@@ -250,9 +272,9 @@ func chBillable(in chUsagePriceInput, tokens int) int {
 // reload pays this.
 func BenchmarkUsagePricingDigest(b *testing.B) {
 	embedded := db.EmbeddedGenAIPricingDocument()
-	genAI, err := genAIEffectivePricingRow(&embedded)
+	genAI, err := db.GenAIEffectivePricingRow(&embedded)
 	require.NoError(b, err)
-	rows := append(db.MirrorPricingRows(db.FallbackPricingMap()), genAI)
+	rows := append(db.MirrorPricingRows(db.FallbackRateMap()), genAI)
 	patterns := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.ModelPattern != "" {
@@ -300,7 +322,7 @@ func genAIHistoryDocument(t *testing.T, histBase, otherBase string) db.GenAIPric
 func genAIHistoryRows(t *testing.T, histBase, otherBase string) []export.EffectivePricingRow {
 	t.Helper()
 	document := genAIHistoryDocument(t, histBase, otherBase)
-	genAI, err := genAIEffectivePricingRow(&document)
+	genAI, err := db.GenAIEffectivePricingRow(&document)
 	require.NoError(t, err)
 	return []export.EffectivePricingRow{genAI}
 }

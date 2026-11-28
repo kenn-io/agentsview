@@ -1,0 +1,12 @@
+name: Delete waiting runs
+on:
+  pull_request_target:
+    types: [closed]
+permissions:
+  actions: write
+jobs:
+  delete:
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kenn-io/actions/delete-waiting-runs@main

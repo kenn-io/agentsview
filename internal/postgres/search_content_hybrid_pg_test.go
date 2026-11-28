@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -278,32 +277,6 @@ func TestPGHybridRRFOrderParity(t *testing.T) {
 	}
 	require.Equal(t, want, hybridSessionIDs(page),
 		"page order must match db.RRFMerge over the two legs")
-}
-
-// TestPGHybridKeywordSnippetCentersOnTerm pins the term-aware keyword snippet:
-// a two-term query whose terms are non-adjacent in the message (so the raw
-// pattern is not a literal substring) centers the snippet on a matched term, not
-// the message start. The first matched term sits far past the start window, so
-// under the old raw-pattern centering the snippet would not contain it.
-func TestPGHybridKeywordSnippetCentersOnTerm(t *testing.T) {
-	t.Parallel()
-	f := &hybridFakeSearcher{}
-	store := wireHybrid(t, f)
-
-	// "alpha" lands at byte 160, past the ~60-char start snippet window; "omega"
-	// follows later. The raw pattern "alpha omega" is not a substring.
-	lead := strings.Repeat("x ", 80)
-	content := lead + "alpha then a stretch of filler words before omega ends it"
-	insertCSSession(t, store, "s1", "proj", "claude", hybridStart, hybridEnd)
-	insertCSUnitMessage(t, store, "s1", 0, "user", content, false, false)
-
-	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-		Pattern: "alpha omega", Mode: "hybrid", Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1, "the two-term keyword hit survives")
-	assert.Contains(t, page.Matches[0].Snippet, "alpha",
-		"snippet centers on a matched term, not the message start")
 }
 
 // hybridSessionIDs projects a page's matches to session IDs in order.

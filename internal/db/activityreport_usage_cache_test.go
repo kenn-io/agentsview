@@ -286,6 +286,15 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		TokenUsage:      jsontext.Value(`{"input_tokens":1,"output_tokens":17}`),
 		ClaudeMessageID: "m5", ClaudeRequestID: "r5",
 	})
+	insertSession(t, d, "new", "proj-b", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T12:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "new", Role: "assistant", Timestamp: "2026-06-16T10:42:00Z",
+		Model: "claude-x", TokenUsage: jsontext.Value(`{"input_tokens":2,"output_tokens":19}`),
+	})
 	compare(t, AnalyticsFilter{}, queries["utc day"])
 	report, err := d.GetActivityReport(ctx, AnalyticsFilter{Project: "proj-a", Timezone: "UTC"}, queries["utc day"])
 	require.NoError(t, err)

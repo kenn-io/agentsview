@@ -471,3 +471,25 @@ func TestCodexCloudDelegatedParent(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexCloudAccountFromPath(t *testing.T) {
+	const key = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"mirror under its account", "/data/sources/codex-cloud/" + key + "/thread.jsonl.zstd", key},
+		{"Windows separators", `C:\data\codex-cloud\` + key + `\thread.jsonl.zstd`, key},
+		{"relative capture path", key + "/thread.jsonl.zstd", key},
+		{"bare file name", "thread.jsonl.zstd", ""},
+		{"directory is not a key", "/data/sources/codex-cloud/thread.jsonl.zstd", ""},
+		{"uppercase hex", "/data/0F1E2D3C4B5A69788796A5B4C3D2E1F0/thread.jsonl.zstd", ""},
+		{"short key", "/data/0f1e2d3c4b5a6978/thread.jsonl.zstd", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CodexCloudAccountFromPath(tt.path))
+		})
+	}
+}

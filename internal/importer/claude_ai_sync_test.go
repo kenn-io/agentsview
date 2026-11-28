@@ -48,11 +48,11 @@ func TestSyncClaudeAIResyncRestoresTranscript(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	source := testDB(t)
 	details := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 		details++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	_, err := SyncClaudeAI(t.Context(), source, fetch, nil, nil)
+	_, err := syncClaudeAI(t.Context(), source, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
 	path := filepath.Join(t.TempDir(), "archive.db")
@@ -67,7 +67,7 @@ func TestSyncClaudeAIResyncRestoresTranscript(t *testing.T) {
 	destination, err = db.OpenWithArchiveContent(t.Context(), path, config.ArchiveContentFull)
 	require.NoError(t, err)
 	t.Cleanup(func() { destination.Close() })
-	_, err = SyncClaudeAI(t.Context(), destination, fetch, nil, nil)
+	_, err = syncClaudeAI(t.Context(), destination, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, details)
 	after, err := destination.GetAllMessages(t.Context(), id)
@@ -88,20 +88,20 @@ func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
 			t.Run(path+"/"+strconv.Itoa(status), func(t *testing.T) {
 				d := testDB(t)
 				calls := 0
-				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, got string) (ClaudeAIResponse, error) {
+				stats, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, got string) (BrowserResponse, error) {
 					require.Less(t, calls, len(paths))
 					require.Equal(t, paths[calls], got)
 					calls++
 					if got == path {
-						return ClaudeAIResponse{Status: status, Body: body}, nil
+						return BrowserResponse{Status: status, Body: body}, nil
 					}
 					if got == paths[0] {
-						return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+						return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 					}
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
-				}, nil, nil)
-				require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
-				require.EqualError(t, err, "claude.ai sign-in required")
+					return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
+				}, BrowserSyncOptions{}, nil)
+				require.ErrorIs(t, err, ErrBrowserAuthRequired)
+				require.EqualError(t, err, "Claude.ai sign-in required")
 				assert.Equal(t, stage+1, calls)
 				assert.Zero(t, stats.Imported+stats.Errors+stats.Skipped)
 				session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -118,9 +118,9 @@ func TestSyncClaudeAI(t *testing.T) {
 		const machine = "installation-a"
 		_, err := d.EnsureInstallationIdentity(t.Context(), machine)
 		require.NoError(t, err)
-		stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-		}), nil, nil, machine)
+		stats, err := syncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
+			return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		}), BrowserSyncOptions{Machine: machine}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Imported)
 		assert.Zero(t, stats.Errors)
@@ -133,9 +133,9 @@ func TestSyncClaudeAI(t *testing.T) {
 		d := testDB(t)
 		_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+strings.Replace(syncDetail, "10:05:00.123456Z", "10:04:00Z", 1)+"]"), nil)
 		require.NoError(t, err)
-		stats, err := SyncClaudeAI(t.Context(), trashDuringImportStore{d}, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-		}), nil, nil)
+		stats, err := syncClaudeAI(t.Context(), trashDuringImportStore{d}, syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
+			return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		}), BrowserSyncOptions{}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Skipped)
 		assert.Zero(t, stats.Errors)
@@ -143,13 +143,13 @@ func TestSyncClaudeAI(t *testing.T) {
 		assert.True(t, d.IsSessionTrashed(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222"))
 	})
 	t.Run("empty page with more fails", func(t *testing.T) {
-		_, err := SyncClaudeAI(t.Context(), testDB(t), func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		_, err := syncClaudeAI(t.Context(), testDB(t), func(ctx context.Context, path string) (BrowserResponse, error) {
 			if path == "/api/organizations" {
-				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			}
 			require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0", path)
-			return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":true}`)}, nil
-		}, nil, nil)
+			return BrowserResponse{Status: 200, Body: []byte(`{"data":[],"has_more":true}`)}, nil
+		}, BrowserSyncOptions{}, nil)
 		require.EqualError(t, err, "claude list returned an empty page with has_more: true")
 	})
 	t.Run("trash exclusion and missing detail are skipped", func(t *testing.T) {
@@ -161,19 +161,19 @@ func TestSyncClaudeAI(t *testing.T) {
 				_, err := d.DeleteSessionIfTrashed(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 				require.NoError(t, err)
 			}
-			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			stats, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 				switch path {
 				case "/api/organizations":
-					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+					return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
+					return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
 				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=1":
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":false}`)}, nil
+					return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":false}`)}, nil
 				default:
 					require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222223?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
-					return ClaudeAIResponse{Status: 404, Body: nil}, nil
+					return BrowserResponse{Status: 404, Body: nil}, nil
 				}
-			}, nil, nil)
+			}, BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 2, stats.Skipped)
 			assert.Zero(t, stats.Errors)
@@ -183,25 +183,25 @@ func TestSyncClaudeAI(t *testing.T) {
 	t.Run("overlapping pages import later chats", func(t *testing.T) {
 		d := testDB(t)
 		details := 0
-		stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		stats, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 			switch path {
 			case "/api/organizations":
-				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=1":
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(strings.Replace(syncSummary, `"is_archived":false`, `"is_archived":true`, 1), "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":true}`)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(strings.Replace(syncSummary, `"is_archived":false`, `"is_archived":true`, 1), "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":true}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=3":
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 				details++
-				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			default:
 				require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222223?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 				details++
-				return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"))}, nil
+				return BrowserResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"))}, nil
 			}
-		}, nil, nil)
+		}, BrowserSyncOptions{}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, stats.Imported)
 		assert.Equal(t, 1, stats.Skipped)
@@ -214,13 +214,13 @@ func TestSyncClaudeAI(t *testing.T) {
 	t.Run("missing data fails", func(t *testing.T) {
 		for _, page := range []string{`{}`, `{"items":[]}`, `{"conversations":[]}`, `{"results":[]}`} {
 			d := testDB(t)
-			_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			_, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 				if path == "/api/organizations" {
-					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+					return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				}
 				require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0", path)
-				return ClaudeAIResponse{Status: 200, Body: []byte(page)}, nil
-			}, nil, nil)
+				return BrowserResponse{Status: 200, Body: []byte(page)}, nil
+			}, BrowserSyncOptions{}, nil)
 			require.EqualError(t, err, "claude list had no data")
 		}
 	})
@@ -231,10 +231,10 @@ func TestSyncClaudeAI(t *testing.T) {
 					d := testDB(t)
 					calls := 0
 					start := time.Now()
-					_, err := SyncClaudeAI(t.Context(), d, func(context.Context, string) (ClaudeAIResponse, error) {
+					_, err := syncClaudeAI(t.Context(), d, func(context.Context, string) (BrowserResponse, error) {
 						calls++
-						return ClaudeAIResponse{Status: status, RetryAfter: "120"}, nil
-					}, nil, nil)
+						return BrowserResponse{Status: status, RetryAfter: "120"}, nil
+					}, BrowserSyncOptions{}, nil)
 					require.Error(t, err)
 					assert.Equal(t, 5, calls)
 					assert.Equal(t, 4*time.Minute, time.Since(start))
@@ -279,7 +279,7 @@ func TestSyncClaudeAIHistory(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) { return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil }), nil, nil)
+			stats, err := syncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (BrowserResponse, error) { return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil }), BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, stats.Imported)
 			before, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -289,11 +289,11 @@ func TestSyncClaudeAIHistory(t *testing.T) {
 			if tt.name == "grown history" {
 				summary = strings.Replace(summary, "reply", "a2", 1)
 			}
-			fetch := syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			fetch := syncOneFetch(t, summary, func() (BrowserResponse, error) {
 				details++
-				return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(tt.detail, "10:05:00.123456Z", "10:06:00Z"))}, nil
+				return BrowserResponse{Status: 200, Body: []byte(strings.ReplaceAll(tt.detail, "10:05:00.123456Z", "10:06:00Z"))}, nil
 			})
-			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+			stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			after, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 			require.NoError(t, err)
@@ -323,7 +323,7 @@ func TestSyncClaudeAIHistory(t *testing.T) {
 				require.NotNil(t, session.DisplayName)
 				assert.Equal(t, "Renamed", *session.DisplayName)
 			}
-			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+			stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 1, stats.Skipped)
 			assert.Equal(t, 1, details)
@@ -331,14 +331,14 @@ func TestSyncClaudeAIHistory(t *testing.T) {
 	}
 }
 
-func syncOneFetch(t *testing.T, summary string, detail func() (ClaudeAIResponse, error)) func(context.Context, string) (ClaudeAIResponse, error) {
+func syncOneFetch(t *testing.T, summary string, detail func() (BrowserResponse, error)) func(context.Context, string) (BrowserResponse, error) {
 	t.Helper()
-	return func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+	return func(ctx context.Context, path string) (BrowserResponse, error) {
 		switch path {
 		case "/api/organizations":
-			return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+			return BrowserResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 		case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-			return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + summary + `],"has_more":false}`)}, nil
+			return BrowserResponse{Status: 200, Body: []byte(`{"data":[` + summary + `],"has_more":false}`)}, nil
 		default:
 			require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 			return detail()
@@ -354,7 +354,7 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 		wantCalls int
 	}{
 		{name: "bad request", status: 400, wantCalls: 1},
-		{name: "oversize", err: ErrClaudeAIResponseTooLarge, wantCalls: 1},
+		{name: "oversize", err: ErrBrowserResponseTooLarge, wantCalls: 1},
 		{name: "forbidden", status: 403, wantCalls: 1},
 		{name: "transport", err: errors.New("transport failed"), wantCalls: 1},
 		{name: "host cancelled", err: context.Canceled, wantCalls: 1},
@@ -365,17 +365,17 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 				d := testDB(t)
 				calls := 0
 				later := 0
-				fetch := syncOneFetch(t, syncSummary+","+strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"), func() (ClaudeAIResponse, error) {
+				fetch := syncOneFetch(t, syncSummary+","+strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"), func() (BrowserResponse, error) {
 					calls++
-					return ClaudeAIResponse{Status: tt.status, RetryAfter: "1"}, tt.err
+					return BrowserResponse{Status: tt.status, RetryAfter: "1"}, tt.err
 				})
-				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				stats, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 					if strings.Contains(path, "/chat_conversations/22222222-2222-4222-8222-222222222223?") {
 						later++
-						return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"))}, nil
+						return BrowserResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223"))}, nil
 					}
 					return fetch(ctx, path)
-				}, nil, nil)
+				}, BrowserSyncOptions{}, nil)
 				assert.Equal(t, tt.wantCalls, calls)
 				require.NoError(t, err)
 				assert.Equal(t, 1, later)
@@ -413,7 +413,7 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 		wantError   string
 		wantStored  [3]bool
 	}{
-		{name: "two retry ladders stop sync", statuses: [3]int{503, 503, 200}, wantCalls: 10, wantErrors: 2, wantStop: true, wantError: "claude returned HTTP 503"},
+		{name: "two retry ladders stop sync", statuses: [3]int{503, 503, 200}, wantCalls: 10, wantErrors: 2, wantStop: true, wantError: "Claude.ai returned HTTP 503"},
 		{name: "success resets failure streak", statuses: [3]int{503, 200, 503}, wantCalls: 11, wantErrors: 2, wantImport: 1, wantThird: 5, wantStored: [3]bool{false, true, false}},
 		{name: "two oversized host responses continue", statuses: [3]int{413, 413, 200}, wantCalls: 3, wantErrors: 2, wantImport: 1, wantThird: 1, wantStored: [3]bool{false, false, true}},
 		{name: "malformed details stop after second", details: [3]string{"null", "null", "null"}, wantStop: true, wantCalls: 2, wantErrors: 2},
@@ -429,12 +429,12 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 				d := testDB(t)
 				ids := []string{"22222222-2222-4222-8222-222222222223", "22222222-2222-4222-8222-222222222224", "22222222-2222-4222-8222-222222222225"}
 				if tt.unchanged {
-					_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+					_, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 						if strings.Contains(path, "/chat_conversations/") {
-							return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", ids[1]))}, nil
+							return BrowserResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", ids[1]))}, nil
 						}
 						return syncOneFetch(t, strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", ids[1]), nil)(ctx, path)
-					}, nil, nil)
+					}, BrowserSyncOptions{}, nil)
 					require.NoError(t, err)
 				}
 				var summaries []string
@@ -443,9 +443,9 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 				}
 				calls, third := 0, 0
 				var progress ImportStats
-				fetch := syncOneFetch(t, strings.Join(summaries, ","), func() (ClaudeAIResponse, error) {
+				fetch := syncOneFetch(t, strings.Join(summaries, ","), func() (BrowserResponse, error) {
 					require.FailNow(t, "detail must use its own response")
-					return ClaudeAIResponse{}, nil
+					return BrowserResponse{}, nil
 				})
 				var store interface {
 					db.Store
@@ -457,7 +457,7 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 				if tt.failWrite {
 					store = failedSyncStore{d}
 				}
-				stats, err := SyncClaudeAI(t.Context(), store, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				stats, err := syncClaudeAI(t.Context(), store, func(ctx context.Context, path string) (BrowserResponse, error) {
 					for i, id := range ids {
 						if strings.Contains(path, "/chat_conversations/"+id+"?") {
 							calls++
@@ -472,11 +472,11 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 							if detail == "" {
 								detail = strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", id)
 							}
-							return ClaudeAIResponse{Status: status, Body: []byte(detail), RetryAfter: "1"}, nil
+							return BrowserResponse{Status: status, Body: []byte(detail), RetryAfter: "1"}, nil
 						}
 					}
 					return fetch(ctx, path)
-				}, nil, &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
+				}, BrowserSyncOptions{}, &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
 				if tt.wantStop {
 					require.Error(t, err)
 					if tt.wantError != "" {
@@ -510,12 +510,12 @@ func TestSyncClaudeAIMalformedRetries(t *testing.T) {
 	for _, detail := range []string{"null", `{"uuid":"22222222-2222-4222-8222-222222222222"}`, strings.ReplaceAll(syncDetail, "10:05:00.123456Z", "bad")} {
 		d := testDB(t)
 		calls := 0
-		fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 			calls++
-			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+			return BrowserResponse{Status: 200, Body: []byte(detail)}, nil
 		})
 		for range 2 {
-			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+			stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 1, stats.Errors)
 			session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -530,11 +530,11 @@ func TestSyncClaudeAIZipSameCountFreshness(t *testing.T) {
 	d := testDB(t)
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	exported := strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)
 	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
@@ -543,13 +543,13 @@ func TestSyncClaudeAIZipSameCountFreshness(t *testing.T) {
 	messages, err := d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Hello", "Zip reply"}, messageContents(messages))
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Updated)
 	messages, err = d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Equal(t, 2, calls)
@@ -559,13 +559,13 @@ func TestSyncClaudeAIDetailNewerThanListNotCached(t *testing.T) {
 	d := testDB(t)
 	changed := regexp.MustCompile(`"updated_at":\s*"[^"]*"`).ReplaceAllString(syncDetail, `"updated_at":"2099-01-01T00:00:00Z"`)
 	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(changed)}, nil
+		return BrowserResponse{Status: 200, Body: []byte(changed)}, nil
 	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
 }
@@ -574,16 +574,16 @@ func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
 	d := testDB(t)
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
 	require.NoError(t, err)
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Updated: 1}, stats)
 	assert.Equal(t, 2, calls)
@@ -591,7 +591,7 @@ func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "Chat", *session.SessionName)
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Skipped: 1}, stats)
 	assert.Equal(t, 2, calls)
@@ -615,17 +615,17 @@ func TestSyncClaudeAIFullArchiveKeepsPreBranchCountFreshness(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	d := testDB(t)
 	detailCalls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 		detailCalls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	session, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(session)))
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Skipped: 1}, stats)
 	assert.Equal(t, 1, detailCalls)
@@ -638,14 +638,14 @@ func TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts(t *testing.T) {
 	t.Cleanup(func() { d.Close() })
 	selected := "q2"
 	detailCalls := 0
-	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+	fetch := func(ctx context.Context, path string) (BrowserResponse, error) {
 		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
-		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
+		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (BrowserResponse, error) {
 			detailCalls++
-			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+			return BrowserResponse{Status: 200, Body: []byte(detail)}, nil
 		})(ctx, path)
 	}
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	_, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	messages, err := d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
@@ -668,7 +668,7 @@ func TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts(t *testing.T) {
 	// against the unchanged 3-turn archive. Keep this old hash format frozen.
 	require.NoError(t, d.UpsertProviderStatHash(t.Context(), parser.AgentClaudeAI, id, preBranchCountFreshness(initial)))
 	selected = "reply"
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Updated)
 	assert.Zero(t, stats.Errors)
@@ -684,7 +684,7 @@ func TestSyncClaudeAIUsageArchiveShorterBranchUpdatesCounts(t *testing.T) {
 	assert.Equal(t, pinID, pins[0].ID)
 	assert.Equal(t, messages[0].ID, pins[0].MessageID)
 	assert.Nil(t, pins[0].Note)
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+	stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Skipped: 1}, stats)
 	assert.Equal(t, 2, detailCalls)
@@ -710,10 +710,10 @@ func TestSyncClaudeAIUsageArchiveShorterBranchExcludedDuringWrite(t *testing.T) 
 	longer := strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+longer+"]"), nil)
 	require.NoError(t, err)
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	stats, err := SyncClaudeAI(t.Context(), excludedSyncStore{d}, fetch, nil, nil)
+	stats, err := syncClaudeAI(t.Context(), excludedSyncStore{d}, fetch, BrowserSyncOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ImportStats{Skipped: 1}, stats)
 	assert.True(t, d.IsSessionExcluded(t.Context(), id))
@@ -744,9 +744,9 @@ func TestSyncClaudeAINewChatCancellationIsAtomic(t *testing.T) {
 	d := testDB(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	stats, err := SyncClaudeAI(ctx, cancelNewSyncStore{d, cancel}, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	}), nil, nil)
+	stats, err := syncClaudeAI(ctx, cancelNewSyncStore{d, cancel}, syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
+		return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	}), BrowserSyncOptions{}, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Zero(t, stats.Imported+stats.Updated)
 	session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -787,9 +787,9 @@ func TestSyncClaudeAICommittedContentCountsOnFreshnessFailure(t *testing.T) {
 					store.cancel = cancel
 				}
 				var progress ImportStats
-				stats, err := SyncClaudeAI(ctx, store, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-					return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-				}), nil, &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
+				stats, err := syncClaudeAI(ctx, store, syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
+					return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
+				}), BrowserSyncOptions{}, &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
 				} else {
@@ -818,20 +818,20 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	t.Run("zip changes stored count", func(t *testing.T) {
 		d := testDB(t)
 		calls := 0
-		fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 			calls++
-			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			return BrowserResponse{Status: 200, Body: []byte(syncDetail)}, nil
 		})
-		_, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+		_, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 		require.NoError(t, err)
 		exported := strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`
 		stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
 		require.NoError(t, err)
 		require.Equal(t, 1, stats.Updated)
-		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+		stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Updated)
-		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+		stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Skipped)
 		assert.Equal(t, 2, calls)
@@ -865,12 +865,12 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			require.NotNil(t, initial)
 			require.NotNil(t, initial.TranscriptRevision)
 			calls := 0
-			fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+			fetch := syncOneFetch(t, syncSummary, func() (BrowserResponse, error) {
 				calls++
-				return ClaudeAIResponse{Status: 200, Body: []byte(tt.detail)}, nil
+				return BrowserResponse{Status: 200, Body: []byte(tt.detail)}, nil
 			})
 			for run := range 2 {
-				stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+				stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 				require.NoError(t, err)
 				if run == 0 && tt.updated {
 					assert.Equal(t, 1, stats.Updated)
@@ -912,7 +912,7 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			require.NotNil(t, session)
 			assert.Nil(t, session.LastEntryUUID)
 			for range 2 {
-				stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+				stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 				require.NoError(t, err)
 				assert.Equal(t, 1, stats.Skipped)
 			}
@@ -929,13 +929,13 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 		t.Run(leaf, func(t *testing.T) {
 			d := testDB(t)
 			selected := "a2"
-			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			fetch := func(ctx context.Context, path string) (BrowserResponse, error) {
 				detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+extra, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
-				return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
-					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+				return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (BrowserResponse, error) {
+					return BrowserResponse{Status: 200, Body: []byte(detail)}, nil
 				})(ctx, path)
 			}
-			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+			stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, stats.Imported)
 			before, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -950,7 +950,7 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				if flip%2 == 1 {
 					selected = "a2"
 				}
-				stats, err = SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+				stats, err = syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 				require.NoError(t, err)
 				assert.Equal(t, 1, stats.Updated)
 				assert.Zero(t, stats.Errors)
@@ -988,7 +988,7 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 		skipped     int
 		existing    bool
 	}{
-		{"absent", "", 0, false},
+		{"absent", "", 1, false},
 		{"empty", `"current_leaf_message_uuid":"",`, 0, false},
 		{"number", `"current_leaf_message_uuid":42,`, 0, false},
 		{"null without archive", `"current_leaf_message_uuid":null,`, 1, false},
@@ -1006,12 +1006,12 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 			before, err := d.GetAllMessages(t.Context(), id)
 			require.NoError(t, err)
 			summary := strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, tt.field, 1)
-			fetch := syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			fetch := syncOneFetch(t, summary, func() (BrowserResponse, error) {
 				require.FailNow(t, "invalid list leaf fetched its detail")
-				return ClaudeAIResponse{}, nil
+				return BrowserResponse{}, nil
 			})
 			for range 2 {
-				stats, err := SyncClaudeAI(t.Context(), d, fetch, nil, nil)
+				stats, err := syncClaudeAI(t.Context(), d, fetch, BrowserSyncOptions{}, nil)
 				require.NoError(t, err)
 				assert.Equal(t, tt.skipped, stats.Skipped)
 				assert.Equal(t, 1-tt.skipped, stats.Errors)
@@ -1039,11 +1039,11 @@ func TestSyncClaudeAIInvalidOrganizations(t *testing.T) {
 		t.Run(body, func(t *testing.T) {
 			d := testDB(t)
 			calls := 0
-			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			stats, err := syncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (BrowserResponse, error) {
 				calls++
 				require.Equal(t, "/api/organizations", path)
-				return ClaudeAIResponse{Status: 200, Body: []byte(body)}, nil
-			}, nil, nil)
+				return BrowserResponse{Status: 200, Body: []byte(body)}, nil
+			}, BrowserSyncOptions{}, nil)
 			require.Error(t, err)
 			if body == "null" {
 				require.EqualError(t, err, "claude organizations must be an array")
@@ -1074,17 +1074,17 @@ func TestSyncClaudeAIOrganizationAllowlist(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var listed []string
-			_, err := SyncClaudeAI(t.Context(), testDB(t), func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			_, err := syncClaudeAI(t.Context(), testDB(t), func(ctx context.Context, path string) (BrowserResponse, error) {
 				if path == "/api/organizations" {
-					return ClaudeAIResponse{Status: 200, Body: []byte(orgs)}, nil
+					return BrowserResponse{Status: 200, Body: []byte(orgs)}, nil
 				}
 				org, ok := strings.CutPrefix(path, "/api/organizations/")
 				require.True(t, ok, path)
 				org, _, ok = strings.Cut(org, "/chat_conversations_v2?")
 				require.True(t, ok, path)
 				listed = append(listed, org)
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
-			}, tt.allow, nil)
+				return BrowserResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
+			}, BrowserSyncOptions{ClaudeAIOrganizations: tt.allow}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, listed)
 		})

@@ -9,7 +9,7 @@ import (
 // (messagescope_reducer.go) and these projections turn a backend's candidate
 // message rows into per-session stats and timing. The user-turn pairing
 // semantics live here so analytics and trends across the SQLite, PostgreSQL,
-// and DuckDB backends share one implementation instead of duplicating it per
+// and ClickHouse backends share one implementation instead of duplicating it per
 // panel. This code is pure (no SQL, timezone, or AnalyticsFilter dependency)
 // and is unit-tested without a database in messagescope_test.go.
 

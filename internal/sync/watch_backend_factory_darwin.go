@@ -109,6 +109,8 @@ type darwinWatchRoot struct {
 	logicalPath string
 	nativePath  string
 	recursive   bool
+	maxDepth    int
+	extraDirs   []string
 	state       *darwinLogicalRoot
 	generation  uint64
 }
@@ -268,9 +270,19 @@ type darwinWatchBackend struct {
 // Watcher.loop through the direct sink, so this method never puts filesystem
 // work on the FSEvents callback queue.
 func (b *darwinWatchBackend) includeCreatedSubtreePath(
-	root, path string, _ bool,
+	root, path string, isDir bool,
 ) bool {
-	return !shouldExcludeForRoot(b.excludes, path, root)
+	if shouldExcludeForRoot(b.excludes, path, root) {
+		return false
+	}
+	snapshot := b.roots.Load()
+	owner, ok := snapshot.mostSpecificRecursiveRoot(path)
+	if !ok || owner.logicalPath != filepath.Clean(root) {
+		return true
+	}
+	return watchDepthIncludePath(
+		owner.logicalPath, path, isDir, owner.maxDepth, owner.extraDirs,
+	)
 }
 
 func (b *darwinWatchBackend) shouldEnumerateCreatedSubtree(root, path string) bool {
@@ -383,6 +395,7 @@ func (b *darwinWatchBackend) RegisterRoots(
 	streamCreationFailed := false
 	for i, plan := range roots {
 		plan.Path = filepath.Clean(plan.Path)
+		plan.ExtraDirectories = append([]string(nil), plan.ExtraDirectories...)
 		plan.Scopes = append([]WatchScope(nil), plan.Scopes...)
 		if b.lifecycle == darwinBackendStopped {
 			results[i] = RecursiveWatchResult{
@@ -675,7 +688,14 @@ func (b *darwinWatchBackend) consumeFSEvents(
 				continue
 			}
 			if translated.Op&backendOpReconcileRootChange == 0 &&
-				shouldExcludeForRoot(b.excludes, translated.Path, owner.logicalPath) {
+				(shouldExcludeForRoot(b.excludes, translated.Path, owner.logicalPath) ||
+					watchDepthShouldDropEvent(
+						translated.Path,
+						owner.logicalPath,
+						translated.ItemType,
+						owner.maxDepth,
+						owner.extraDirs,
+					)) {
 				continue
 			}
 			// FSEvents accompanies descendant changes with an ordinary modified
@@ -1465,6 +1485,8 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 					logicalPath: state.plan.Path,
 					nativePath:  canonicalWatchRoot(state.plan.Path),
 					recursive:   true,
+					maxDepth:    state.plan.MaxDepth,
+					extraDirs:   state.plan.ExtraDirectories,
 					state:       state,
 					generation:  state.generation,
 				},
@@ -1478,6 +1500,8 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 			logicalPath: state.plan.Path,
 			nativePath:  canonicalWatchRoot(state.plan.Path),
 			recursive:   true,
+			maxDepth:    state.plan.MaxDepth,
+			extraDirs:   state.plan.ExtraDirectories,
 			state:       state,
 			generation:  generation,
 		}
@@ -1900,6 +1924,8 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 		logicalPath: root,
 		nativePath:  canonicalWatchRoot(root),
 		recursive:   state.plan.Recursive,
+		maxDepth:    state.plan.MaxDepth,
+		extraDirs:   state.plan.ExtraDirectories,
 		state:       state,
 		generation:  state.generation,
 	}

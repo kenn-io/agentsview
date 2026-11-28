@@ -207,7 +207,7 @@ func TestSQLiteActivityReportMemoCountsMatchSQLCounts(t *testing.T) {
 		artifacts, err := d.BuildActivityReportArtifacts(t.Context(), AnalyticsFilter{Timezone: "UTC"}, q, nil)
 		activityMemoMaxBytes = old
 		require.NoError(t, err)
-		require.Equal(t, keep, len(d.activityMemo.entries) > 0)
+		require.Equal(t, keep, d.activityMemo.Len() > 0)
 		var out []int
 		for _, bucket := range artifacts.Report.Buckets {
 			out = append(out, bucket.UserMessages, bucket.AssistantMessages)

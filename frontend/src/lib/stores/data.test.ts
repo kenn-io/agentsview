@@ -232,7 +232,7 @@ describe("load", () => {
     expect(data.loading).toBe(false);
   });
 
-  it("keeps existing inventory and suppresses the error when a background load fails", async () => {
+  it("keeps existing inventory and reports the error when a background load fails", async () => {
     const inventory = makeInventory([makeRow()]);
     api.getApiV1DataProjects.mockResolvedValueOnce(inventory);
     await expect(data.load()).resolves.toBe(true);
@@ -242,12 +242,42 @@ describe("load", () => {
     await expect(data.load({ background: true })).resolves.toBe(false);
 
     expect(data.inventory).toEqual(inventory);
-    expect(data.error).toBe("");
+    expect(data.error).toBe("network down");
     expect(data.loading).toBe(false);
   });
 });
 
 describe("attach", () => {
+  it.each([
+    { view: "rules", enabled: true },
+    { view: "rules", enabled: false },
+    { view: "inventory", enabled: true },
+  ])("refreshes visible $view without events (workspace: $enabled)", async ({ view, enabled }) => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const updated = makeInventory([makeRow({ project_key: "updated" })]);
+    api.getApiV1DataProjects.mockResolvedValue(updated);
+    (routerMod.router as unknown as { params: Record<string, string> }).params = { view };
+    detach = data.attach(enabled);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    if (view === "rules") {
+      expect(data.rulesRefreshVersion).toBe(1);
+      expect(api.getApiV1DataProjects).not.toHaveBeenCalled();
+    } else {
+      expect(data.inventory).toEqual(updated);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(true);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(false);
+      detach();
+      detach = null;
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    }
+    hidden.mockRestore();
+  });
+
   it("hydrates from the URL on attach, then re-hydrates and reloads on popstate", async () => {
     const initial = makeInventory([makeRow({ project_key: "k1" })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(initial);

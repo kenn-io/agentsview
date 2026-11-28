@@ -20,13 +20,23 @@ func EffectivePricingDigest(rows []EffectivePricingRow) (string, error) {
 }
 
 func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
-	copied := make([]EffectivePricingRow, len(rows))
-	copy(copied, rows)
-	sort.SliceStable(copied, func(i, j int) bool {
-		return canonicalPricingRowLess(copied[i], copied[j])
+	// Usage snapshots digest the whole pricing catalog, thousands of rows, on
+	// every refresh. Build each row's sort values once rather than in every
+	// comparison, which allocated tens of megabytes per digest.
+	type keyedRow struct {
+		values []string
+		row    *EffectivePricingRow
+	}
+	keyed := make([]keyedRow, len(rows))
+	for i := range rows {
+		keyed[i] = keyedRow{canonicalPricingRowSortValues(rows[i]), &rows[i]}
+	}
+	sort.SliceStable(keyed, func(i, j int) bool {
+		return canonicalPricingValuesLess(keyed[i].values, keyed[j].values)
 	})
-	out := make([]any, 0, len(copied))
-	for _, row := range copied {
+	out := make([]any, 0, len(keyed))
+	for _, k := range keyed {
+		row := *k.row
 		if row.GenAI != nil {
 			var updatedAt any
 			if row.GenAIUpdatedAt != nil {
@@ -127,9 +137,7 @@ func digestCanonicalBytes(canonical []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func canonicalPricingRowLess(a, b EffectivePricingRow) bool {
-	aValues := canonicalPricingRowSortValues(a)
-	bValues := canonicalPricingRowSortValues(b)
+func canonicalPricingValuesLess(aValues, bValues []string) bool {
 	for i := range aValues {
 		if aValues[i] != bValues[i] {
 			return aValues[i] < bValues[i]

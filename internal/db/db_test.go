@@ -318,6 +318,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	if err := os.Setenv("CACHE_DIRECTORY", filepath.Join(testDBFixtureTempDir, "cache")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(testDBFixtureTempDir)
 	if testDBTemplateDir != "" {
@@ -778,10 +781,12 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	d.Close()
 
 	// Remove result_content via raw SQL: recreate tool_calls
-	// without the column to simulate a legacy schema.
+	// without the column to simulate a legacy schema. Session triggers
+	// read tool_calls, so the rename must not check them while it is gone.
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
 	_, err = conn.ExecContext(t.Context(), `
+		PRAGMA legacy_alter_table=ON;
 		CREATE TABLE tool_calls_old AS
 			SELECT id, message_id, session_id, tool_name,
 			       category, tool_use_id, input_json,
@@ -843,6 +848,7 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	path := filepath.Join(dir, "test.db")
 	d := testDBAtPath(t, path, "schema-only upgrade db")
 	insertSession(t, d, "schema-only", "project")
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7}}))
 	requireNoError(t, d.Close(), "close schema-only upgrade db")
 
 	conn, err := sql.Open("sqlite3", path)
@@ -856,6 +862,11 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		DELETE FROM archive_metadata;
 		ALTER TABLE project_identity_observations DROP COLUMN checkout_state;
 		DROP TABLE remote_skipped_files;
+		DROP TABLE cursor_account_polls;
+		DROP INDEX idx_cursor_usage_events_account_time;
+		ALTER TABLE cursor_usage_events DROP COLUMN account_user_id;
+		ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at;
+		ALTER TABLE cursor_usage_events DROP COLUMN conversation_id;
 		DROP TABLE session_project_identity_snapshots;
 	`)
 	requireNoError(t, err, "prepare schema-only upgrade fixture")
@@ -901,6 +912,17 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		  AND trim(value) != ''
 	`).Scan(&metadataCount), "read initialized export metadata")
 	assert.Equal(t, 3, metadataCount)
+	var tokens int
+	var account, stamp, conversation string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at, conversation_id FROM cursor_usage_events WHERE model='a'`).Scan(&tokens, &account, &stamp, &conversation))
+	assert.Equal(t, 7, tokens)
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
+	assert.Empty(t, conversation)
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cursor_account_polls'`).Scan(&tableCount))
+	assert.Equal(t, 1, tableCount)
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_cursor_account_polls_hour'`).Scan(&tableCount))
+	assert.Equal(t, 1, tableCount)
 }
 
 func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
@@ -1141,11 +1163,13 @@ func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
 
 func TestArchiveResyncState(t *testing.T) {
 	for _, tc := range []struct {
-		name                                      string
-		version                                   int
-		pending, repair, archiveOnly, needs, full bool
+		name                                                string
+		version                                             int
+		pending, repair, archiveOnly, needs, full, additive bool
 	}{
 		{name: "current", version: dataVersion},
+		{name: "additive", version: dataVersion - 1, additive: true},
+		{name: "additive with pending scope", version: dataVersion - 1, additive: true, pending: true, needs: true},
 		{name: "data stale", version: 129, needs: true, full: true},
 		{name: "scoped version", version: dataVersion - 1, needs: true},
 		{name: "scoped pending", version: dataVersion, pending: true, needs: true},
@@ -1153,7 +1177,11 @@ func TestArchiveResyncState(t *testing.T) {
 		{name: "archive only", version: dataVersion - 1, archiveOnly: true, needs: true, full: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{dataVersion: {parser.AgentClaude}}))
+			scopes := map[int][]parser.AgentType{dataVersion: {parser.AgentClaude}}
+			if tc.additive {
+				scopes[dataVersion] = []parser.AgentType{}
+			}
+			t.Cleanup(InstallDataVersionScopesForTest(scopes))
 			d := testDB(t)
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", tc.version))
@@ -1173,10 +1201,11 @@ func TestArchiveResyncState(t *testing.T) {
 			}
 			path := d.Path()
 			require.NoError(t, d.Close())
-			needs, full, err := ArchiveResyncState(t.Context(), path)
+			needs, full, repair, err := ArchiveResyncState(t.Context(), path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.needs, needs)
 			assert.Equal(t, tc.full, full)
+			assert.Equal(t, tc.repair, repair)
 		})
 	}
 }
@@ -3146,8 +3175,11 @@ func TestGetSessionFull(t *testing.T) {
 			Outcome:            "unknown",
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
+			// Reads carry the stored relationship provenance.
+			relationshipInferred:         new(false),
+			storedParserRelationshipType: new(""),
 		}
-		if diff := cmp.Diff(want, got); diff != "" {
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)
 		}
 	})
@@ -3170,8 +3202,11 @@ func TestGetSessionFull(t *testing.T) {
 			Outcome:            "unknown",
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
+			// Reads carry the stored relationship provenance.
+			relationshipInferred:         new(false),
+			storedParserRelationshipType: new(""),
 		}
-		if diff := cmp.Diff(want, got); diff != "" {
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)
 		}
 	})
@@ -4801,6 +4836,20 @@ func TestFTSBackfill(t *testing.T) {
 	assert.Equal(t, "s1", page.Results[0].SessionID, "result session_id")
 }
 
+func TestCheckFTSModuleLoadsDoesNotReadContent(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	w := d.getWriter()
+	// Make any content scan fail, while leaving the FTS index available.
+	_, err := w.Exec(t.Context(), `DROP VIEW message_search_content;
+		CREATE VIEW message_search_content AS SELECT * FROM missing_content`)
+	require.NoError(t, err)
+	_, err = w.Exec(t.Context(), "SELECT 1 FROM messages_fts LIMIT 1")
+	require.Error(t, err)
+	require.NoError(t, d.checkFTSModuleLoads(t.Context(), w))
+	assert.True(t, d.HasFTS(t.Context()), "FTS index should remain available without the content view")
+}
+
 func TestOpenRejectsArchiveWhoseFTSModuleIsUnavailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(t.Context(), path)
@@ -5214,6 +5263,151 @@ func TestCloseConnectionsBlocksConcurrentReopen(t *testing.T) {
 	assert.NotNil(t, s, "session s1 missing after Reopen")
 }
 
+func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(t.Context(), func(swap *ArchiveSwap) error {
+			if err := swap.Close(t.Context()); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
+
+	<-closed
+
+	// A read whose context cancels while paused must unblock with context.Canceled
+	// instead of waiting or reporting sql: database is closed.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.GetSession(canceledCtx, "s1")
+	require.ErrorIs(t, err, context.Canceled)
+
+	// A live read blocks while connections are closed and completes against the
+	// replacement pool as soon as Reopen installs it.
+	type readResult struct {
+		session *Session
+		err     error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		s, readErr := d.GetSession(t.Context(), "s1")
+		readDone <- readResult{session: s, err: readErr}
+	}()
+
+	select {
+	case res := <-readDone:
+		require.Failf(t, "read returned while paused", "session=%v err=%v", res.session, res.err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; read must remain paused until Reopen installs the new pool
+	}
+
+	close(allowReopen)
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap did not complete")
+	}
+
+	select {
+	case res := <-readDone:
+		require.NoError(t, res.err, "GetSession after Reopen")
+		require.NotNil(t, res.session)
+		assert.Equal(t, "s1", res.session.ID)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "paused read did not wake after Reopen")
+	}
+}
+
+func TestWithArchiveSwapDoesNotDeadlockPreviewOrWriteLockedReaders(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReclassificationSession(t, d, "wt-1", "archive.example", "/worktrees/service/app", "branch")
+
+	draft := WorktreeReclassificationDraft{
+		Machine:    "archive.example",
+		PathPrefix: "/worktrees/service",
+		Project:    "service",
+		Enabled:    true,
+	}
+
+	closed := make(chan struct{})
+	allowReopen := make(chan struct{})
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- d.WithArchiveSwap(ctx, func(swap *ArchiveSwap) error {
+			if err := swap.Close(ctx); err != nil {
+				return err
+			}
+			close(closed)
+			<-allowReopen
+			return swap.Reopen()
+		})
+	}()
+
+	<-closed
+
+	type previewResult struct {
+		preview WorktreeReclassificationPreview
+		err     error
+	}
+	previewDone := make(chan previewResult, 1)
+	go func() {
+		p, err := d.PreviewWorktreeReclassification(ctx, draft)
+		previewDone <- previewResult{preview: p, err: err}
+	}()
+
+	// InsertMissingModelPricing acquires db.mu and reads via db.getReader();
+	// because WithArchiveSwap holds db.mu for the entire paused window, it
+	// blocks on db.mu rather than entering paused reads while holding db.mu.
+	pricingDone := make(chan error, 1)
+	go func() {
+		pricingDone <- d.InsertMissingModelPricing(ctx, []ModelPricing{{
+			ModelPattern: "swap-regression-model",
+		}})
+	}()
+
+	select {
+	case res := <-previewDone:
+		require.Failf(t, "preview returned while swap paused reads", "preview=%+v err=%v", res.preview, res.err)
+	case err := <-pricingDone:
+		require.Failf(t, "write-locked reader returned while swap held db.mu", "err=%v", err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; concurrent preview and write-locked reader must wait without returning early or deadlocking
+	}
+
+	close(allowReopen)
+
+	select {
+	case err := <-swapDone:
+		require.NoError(t, err, "WithArchiveSwap")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "WithArchiveSwap stalled waiting for concurrent preview or write-locked reader")
+	}
+
+	select {
+	case res := <-previewDone:
+		require.NoError(t, res.err, "PreviewWorktreeReclassification")
+		assert.Equal(t, 1, res.preview.MatchedSessions)
+		assert.Equal(t, 1, res.preview.UpdatedSessions)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "PreviewWorktreeReclassification did not complete after Reopen")
+	}
+
+	select {
+	case err := <-pricingDone:
+		require.NoError(t, err, "InsertMissingModelPricing")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "InsertMissingModelPricing did not complete after WithArchiveSwap")
+	}
+}
+
 func TestCloseWriterWaitsForInFlightWriterQuery(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
@@ -5544,7 +5738,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 func TestCopyModelPricingFrom(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB with pricing rows and a sentinel meta row.
+	// Source DB with pricing rows and a pricing metadata value.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
@@ -5587,7 +5781,7 @@ func TestCopyModelPricingFrom(t *testing.T) {
 
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
-	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+	assert.Equal(t, "v42", meta, "pricing metadata copied")
 }
 
 func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
@@ -5618,13 +5812,35 @@ func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
+	t.Run("old source without account columns", func(t *testing.T) {
+		ctx := t.Context()
+		path := filepath.Join(t.TempDir(), "source.db")
+		src := testDBAtPath(t, path, "source")
+		event := CursorUsageEvent{OccurredAt: "2026-07-28T10:00:00Z", Model: "a"}
+		require.NoError(t, src.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
+		require.NoError(t, src.Close())
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(ctx, `DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; ALTER TABLE cursor_usage_events DROP COLUMN conversation_id; DROP TABLE cursor_account_polls`)
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		dst := testDB(t)
+		require.NoError(t, dst.CopySessionMetadataFrom(ctx, path))
+		var account, polled, conversation string
+		require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at, conversation_id FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(event)).Scan(&account, &polled, &conversation))
+		assert.Empty(t, account)
+		assert.Empty(t, polled)
+		assert.Empty(t, conversation)
+	})
+
 	dir := t.TempDir()
 	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	require.NoError(t, srcDB.InsertCursorUsageEvents(ctx, []CursorUsageEvent{
+	events := []CursorUsageEvent{
 		{
+			ConversationID:   "conversation-a",
 			OccurredAt:       "2026-05-14T10:05:00Z",
 			Model:            "claude-4.6-opus-high-thinking",
 			Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -5636,7 +5852,6 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			CursorTokenFee:   money.MustParseDollars("0.0332"),
 			UserID:           "152683922",
 			UserEmail:        "member@example.com",
-			DedupKey:         "first",
 		},
 		{
 			OccurredAt:     "2026-05-15T11:15:00Z",
@@ -5649,13 +5864,15 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			UserID:         "777",
 			UserEmail:      "next@example.com",
 			IsHeadless:     true,
-			DedupKey:       "second",
 		},
 		{
 			Agent: "grok", OccurredAt: "2026-11-04T13:00:00Z",
 			InputTokens: 12, DedupKey: "xai:item-a",
 		},
-	}), "InsertCursorUsageEvents src")
+	}
+	require.NoError(t, srcDB.InsertCursorUsageEvents(ctx, events), "InsertCursorUsageEvents src")
+	stamp := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(events[0])}}, stamp, []CursorAccountHour{{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}}))
 	wantFingerprint, err := srcDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint src")
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")
@@ -5669,7 +5886,6 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 		Model:      "stale-model",
 		Kind:       "USAGE_EVENT_KIND_USAGE_BASED",
 		Charged:    money.MustParseDollars("0.99"),
-		DedupKey:   "stale",
 	}}), "InsertCursorUsageEvents dst")
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(t.Context(), srcPath), "CopySessionMetadataFrom")
@@ -5681,6 +5897,16 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	require.NoError(t, err, "CursorUsageEventFingerprint dst")
 	assert.Equal(t, wantFingerprint, gotFingerprint,
 		"final metadata copy should preserve cursor usage rows verbatim")
+	var account, polled string
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(events[0])).Scan(&account, &polled))
+	var conversation string
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT conversation_id FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(events[0])).Scan(&conversation))
+	assert.Equal(t, "conversation-a", conversation)
+	assert.Equal(t, "12", account)
+	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, polled_at FROM cursor_account_polls`).Scan(&account, &polled))
+	assert.Equal(t, "12", account)
+	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
 }
 
 func TestCopyOrphanedDataFrom(t *testing.T) {
@@ -6488,15 +6714,15 @@ func TestListStarredSessionIDsForScope(t *testing.T) {
 func TestDeleteSyncStateByPrefix(t *testing.T) {
 	d := testDB(t)
 
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at", "t1"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at:work", "t2"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_boundary_state", "b1"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_at", "t1"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_at:work", "t2"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_boundary_state", "b1"))
 	require.NoError(t, d.SetSyncState(t.Context(), "last_push_at", "keep-me"))
 
-	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "duckdb_"))
+	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "legacy_"))
 
 	for _, key := range []string{
-		"duckdb_last_push_at", "duckdb_last_push_at:work", "duckdb_last_push_boundary_state",
+		"legacy_last_push_at", "legacy_last_push_at:work", "legacy_last_push_boundary_state",
 	} {
 		value, err := d.GetSyncState(t.Context(), key)
 		require.NoError(t, err, "GetSyncState %s", key)
@@ -9025,7 +9251,7 @@ func TestToolCallFingerprintIncludesFilePath(t *testing.T) {
 	fileFP, err := d.ToolCallFingerprint(t.Context(), "fp-file")
 	require.NoError(t, err, "file fingerprint")
 
-	// A file_path-only difference must change the fingerprint so the PG/DuckDB
+	// A file_path-only difference must change the fingerprint so the replica
 	// push fast paths re-push a file_path backfill instead of skipping it.
 	assert.NotEqual(t, noFileFP, fileFP)
 	assert.Contains(t, fileFP, "internal/db/messages.go")
@@ -9195,6 +9421,8 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	requireNoError(t, err, "drop artifact_sessions_update_queue trigger")
 	_, err = conn.ExecContext(t.Context(), usageChangeJournalTriggerDropsSQL)
 	requireNoError(t, err, "drop usage change journal triggers")
+	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS trg_dashboard_sessions_update`)
+	requireNoError(t, err, "drop dashboard sessions update trigger")
 	_, err = conn.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN termination_status`)
 	requireNoError(t, err, "drop termination_status column")
 

@@ -267,6 +267,24 @@ func stripTrailingGroup(s string) string {
 	return strings.TrimRight(t[:i], " ")
 }
 
+// DisplayNameModelID converts a decorated human display name such as
+// "Gemini 4 Neon (High)" or "Gemini 3.5 Flash (Medium)" into the lowercase
+// hyphenated model id ("gemini-4-neon", "gemini-3.5-flash") that upstream
+// catalogs match against. It strips one trailing parenthesized or bracketed
+// decoration and joins whitespace-separated tokens with "-". Names without
+// a trailing decoration or interior whitespace are returned unchanged.
+func DisplayNameModelID(model string) string {
+	undecorated := stripTrailingGroup(model)
+	fields := strings.Fields(undecorated)
+	if len(fields) == 0 {
+		return model
+	}
+	if len(fields) == 1 && undecorated == model {
+		return model
+	}
+	return strings.ToLower(strings.Join(fields, "-"))
+}
+
 // stripTrailingDate removes a trailing -YYYYMMDD release-date suffix:
 // "claude-opus-4-7-20260101" -> "claude-opus-4-7".
 func stripTrailingDate(s string) string {

@@ -124,6 +124,7 @@ func buildArchiveFixture(t *testing.T, dir string, excluded []string) string {
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	// A later changed capture retains an unaccepted manifest in the vault.
 	options.IdentityFrom = filepath.Join(capture, "capture.json")
 	options.Destination = filepath.Join(inputs, "capture-again")

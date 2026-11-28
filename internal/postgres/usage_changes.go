@@ -8,6 +8,8 @@ import (
 	"log"
 	"strconv"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Statement triggers mark each changed session pending with revision 0 in one
@@ -60,7 +62,7 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 2
+const usageChangeJournalVersionPG = 4
 
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
@@ -84,24 +86,31 @@ var dropUsageChangeJournalSQL = func() string {
 	var ddl strings.Builder
 	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
+ DROP FUNCTION IF EXISTS checkpoint_usage_history() CASCADE;
+ DROP FUNCTION IF EXISTS mark_activity_spawn() CASCADE;
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token');
+     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
 		ddl.WriteString("DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;")
 	}
+	for _, table := range []string{"messages", "tool_calls"} {
+		ddl.WriteString("DROP FUNCTION IF EXISTS mark_dashboard_" + table + "() CASCADE;")
+	}
 	return ddl.String()
 }()
 
 // Journal installation is optional for both push and serve schema setup.
-func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
+// It reports false when setup failed and a later attempt may succeed.
+func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 	var err error
 	defer func() {
 		if err != nil {
 			log.Printf("pg schema: usage change journal setup failed: %v", err)
 		}
+		ok = err == nil
 	}()
 	column, err := sessionVersionColumnPG(ctx, pg)
 	if err != nil || column != "xmin" {
@@ -124,7 +133,20 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
 	if err != nil {
 		return
 	}
+	err = installDashboardJournalPG(ctx, tx)
+	if err != nil {
+		return
+	}
+	err = installSpawnJournalPG(ctx, tx)
+	if err != nil {
+		return
+	}
+	err = installUsageHistoryCheckpointsPG(ctx, tx)
+	if err != nil {
+		return
+	}
 	err = tx.Commit()
+	return
 }
 
 func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
@@ -132,14 +154,14 @@ func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version); err != nil {
 		return err
 	}
-	if version != "1" && version != strconv.Itoa(usageChangeJournalVersionPG) {
+	if version != "1" && version != "2" {
 		return nil
 	}
 	var installed, historyInstalled bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_account_revision'), EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_history_token')`).Scan(&installed, &historyInstalled); err != nil {
 		return err
 	}
-	if version == strconv.Itoa(usageChangeJournalVersionPG) && installed && historyInstalled {
+	if version != "1" && installed && historyInstalled {
 		return nil
 	}
 	if !installed {
@@ -203,22 +225,238 @@ func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
 		return err
 	}
-	if version != "1" && version != strconv.Itoa(usageChangeJournalVersionPG) {
+	if version != "1" && version != "2" {
 		return nil
 	}
 	var installed bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_history_token')`).Scan(&installed); err != nil {
 		return err
 	}
-	if version == strconv.Itoa(usageChangeJournalVersionPG) && installed {
+	if version != "1" && installed {
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO sync_metadata(key,value) VALUES('usage_history_token',pg_catalog.gen_random_uuid()::text) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
- UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version'`, usageChangeJournalVersionPG))
+ UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version'`, 2))
 	return err
+}
+
+// dashboardChangeFlagPG returns PL/pgSQL that flags a dashboard group when the
+// projected columns differ between the statement's old and new rows.
+func dashboardChangeFlagPG(columns []string, group, extra string) string {
+	return fmt.Sprintf(`IF TG_OP = 'INSERT' THEN
+ SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
+ ELSIF TG_OP = 'DELETE' THEN
+ SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
+ ELSE
+ SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT ALL SELECT %[1]s FROM new_rows)
+ UNION ALL (SELECT %[1]s FROM new_rows EXCEPT ALL SELECT %[1]s FROM old_rows)) INTO changed;
+ END IF;
+ IF changed THEN
+ PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
+ %[3]s
+ END IF;
+`, strings.Join(columns, ", "), group, extra)
+}
+
+func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != "2" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE sessions, messages, tool_calls, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	groups := []string{"common", "tools", "velocity", "signals", "scope"}
+	var ddl, stamp strings.Builder
+	stamp.WriteString(`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
+    UPDATE sync_metadata SET value = pg_catalog.gen_random_uuid()::text WHERE key = 'usage_history_token';
+    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
+        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
+        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
+    END IF;`)
+	for _, group := range groups {
+		fmt.Fprintf(&ddl, "INSERT INTO sync_metadata(key,value) VALUES('dashboard_%s', pg_catalog.gen_random_uuid()::text) ON CONFLICT(key) DO NOTHING;\n", group)
+		fmt.Fprintf(&stamp, `
+    IF current_setting('agentsview.dashboard_%[1]s_' || TG_RELID, true) = 'on' THEN
+        INSERT INTO sync_metadata(key,value) VALUES('dashboard_%[1]s', pg_catalog.gen_random_uuid()::text)
+        ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+        PERFORM set_config('agentsview.dashboard_%[1]s_' || TG_RELID, '', true);
+    END IF;`, group)
+	}
+	stampBody := strings.Replace(stampUsageChangeFunctionBodyPG, `UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`, stamp.String(), 1)
+	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, stampBody)
+	// Keep the existing session journal write and set panel flags in the same trigger.
+	sessionFlags := dashboardChangeFlagPG(db.DashboardSessionInputs, "common", "") +
+		dashboardChangeFlagPG(db.DashboardToolsSessionInputs, "tools", "") +
+		dashboardChangeFlagPG(db.DashboardSignalsSessionInputs, "signals", "")
+	sessionBody := fmt.Sprintf(markUsageChangeFunctionBodyPG, `"id"`, "true", "id, to_jsonb(row_data) - 'automation_audit_hash'")
+	sessionBody = strings.Replace(sessionBody, "BEGIN\n", "DECLARE changed boolean;\nBEGIN\n"+sessionFlags, 1)
+	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, sessionBody)
+	tables := []struct {
+		name   string
+		groups map[string][]string
+	}{
+		{"messages", map[string][]string{"tools": db.DashboardToolsMessageInputs, "velocity": db.DashboardVelocityMessageInputs, "signals": db.DashboardSignalsMessageInputs, "scope": db.DashboardScopeMessageInputs}},
+		{"tool_calls", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": append([]string{"message_ordinal"}, db.DashboardVelocityCallInputs...)}},
+	}
+	for _, table := range tables {
+		var body strings.Builder
+		body.WriteString("DECLARE changed boolean; any_changed boolean := false;\nBEGIN\n")
+		for _, group := range groups {
+			columns, ok := table.groups[group]
+			if !ok {
+				continue
+			}
+			body.WriteString(dashboardChangeFlagPG(columns, group, "any_changed := true;"))
+		}
+		body.WriteString(`IF any_changed THEN
+ PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
+ IF TG_OP = 'INSERT' THEN
+ INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT session_id,0 FROM new_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSIF TG_OP = 'DELETE' THEN
+ INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT session_id,0 FROM old_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSE
+ INSERT INTO usage_session_changes(session_id,revision) SELECT session_id,0 FROM (SELECT session_id FROM old_rows UNION SELECT session_id FROM new_rows) changed_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ END IF;
+ END IF;
+ RETURN NULL;
+ END;`)
+		function := "mark_dashboard_" + table.name
+		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %s, pg_temp AS $dashboard$%s$dashboard$;
+ REVOKE ALL ON FUNCTION %s() FROM PUBLIC;`, function, quoted, body.String(), function)
+		for _, trigger := range []struct{ event, referencing string }{
+			{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
+		} {
+			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_dashboard_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n", table.name, strings.ToLower(trigger.event), trigger.event, table.name, trigger.referencing, function)
+		}
+	}
+	ddl.WriteString("UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version';")
+	_, err = tx.ExecContext(ctx, ddl.String())
+	if err != nil {
+		return err
+	}
+	return installSpawnJournalPG(ctx, tx)
+}
+
+// installSpawnJournalPG records the children whose launcher eligibility changes
+// when a tool-call spawn edge is inserted, changed, or removed.
+func installSpawnJournalPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != "3" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE tool_calls, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION mark_activity_spawn() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, %s, pg_temp AS $spawn$
+BEGIN
+ PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
+ IF TG_OP = 'INSERT' THEN
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM new_rows
+  WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSIF TG_OP = 'DELETE' THEN
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM old_rows
+  WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSE
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM (
+   (SELECT session_id, subagent_session_id FROM old_rows EXCEPT SELECT session_id, subagent_session_id FROM new_rows)
+   UNION
+   (SELECT session_id, subagent_session_id FROM new_rows EXCEPT SELECT session_id, subagent_session_id FROM old_rows)
+  ) changed WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ END IF;
+ RETURN NULL;
+END $spawn$;
+REVOKE ALL ON FUNCTION mark_activity_spawn() FROM PUBLIC;
+CREATE TRIGGER trg_activity_spawn_insert AFTER INSERT ON tool_calls REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+CREATE TRIGGER trg_activity_spawn_update AFTER UPDATE ON tool_calls REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+CREATE TRIGGER trg_activity_spawn_delete AFTER DELETE ON tool_calls REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+UPDATE sync_metadata SET value='4' WHERE key='usage_change_journal_version';`, quoted))
+	return err
+}
+
+func installUsageHistoryCheckpointsPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	var installed bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), ''), EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='sync_metadata'::regclass AND tgname='trg_usage_history_checkpoint' AND NOT tgisinternal)`).Scan(&version, &installed); err != nil {
+		return err
+	}
+	if version != strconv.Itoa(usageChangeJournalVersionPG) {
+		return nil
+	}
+	if installed {
+		_, err := tx.ExecContext(ctx, `REVOKE ALL ON FUNCTION checkpoint_usage_history() FROM PUBLIC`)
+		return err
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+ CREATE OR REPLACE FUNCTION checkpoint_usage_history() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $checkpoint$
+ DECLARE revision bigint;
+ BEGIN
+   SELECT value::bigint INTO revision FROM sync_metadata WHERE key='usage_change_revision';
+   INSERT INTO sync_metadata(key,value) VALUES ('usage_history_checkpoint:' || revision, NEW.value)
+   ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+   DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%%'
+     AND substring(key from length('usage_history_checkpoint:') + 1)::bigint <= revision - 128;
+   RETURN NEW;
+ END $checkpoint$;
+ REVOKE ALL ON FUNCTION checkpoint_usage_history() FROM PUBLIC;
+ DROP TRIGGER IF EXISTS trg_usage_history_checkpoint ON sync_metadata;
+ CREATE TRIGGER trg_usage_history_checkpoint AFTER UPDATE ON sync_metadata
+ FOR EACH ROW WHEN (NEW.key = 'usage_history_token') EXECUTE FUNCTION checkpoint_usage_history();
+ INSERT INTO sync_metadata(key,value)
+ SELECT 'usage_history_checkpoint:' || revision.value, token.value FROM sync_metadata revision, sync_metadata token
+ WHERE revision.key='usage_change_revision' AND token.key='usage_history_token'
+ ON CONFLICT(key) DO NOTHING;`, quoted))
+	return err
+}
+
+func usageHistoryCheckpoints(ctx context.Context, q storeExecutor, current, previous int64) (string, string, error) {
+	var currentToken, previousToken string
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key = $1), ''), COALESCE((SELECT value FROM sync_metadata WHERE key = $2), '')`, "usage_history_checkpoint:"+strconv.FormatInt(current, 10), "usage_history_checkpoint:"+strconv.FormatInt(previous, 10)).Scan(&currentToken, &previousToken)
+	return currentToken, previousToken, err
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
@@ -265,9 +503,6 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 				return err
 			}
 		}
-		if table.table == "model_pricing" || table.table == "model_pricing_bands" {
-			filter = `model_pattern NOT LIKE '\_%'`
-		}
 		function := "mark_usage_" + table.table
 		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
@@ -294,7 +529,7 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if _, err = tx.ExecContext(ctx, ddl.String()); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, strconv.Itoa(usageChangeJournalVersionPG))
+	_, err = tx.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','2')`)
 	return err
 }
 
@@ -305,7 +540,7 @@ const usageChangeRevisionSQL = `coalesce((
 
 const supportedUsageChangeRevisionSQL = `coalesce((
  SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
- AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', $1))
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', '3', $1))
 ), 0)`
 
 // UsageChangeRevision returns the current revision, or 0 when the journal is

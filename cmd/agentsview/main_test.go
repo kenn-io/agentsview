@@ -12,7 +12,9 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -38,11 +41,97 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
+	"go.kenn.io/docbank/document/glmocr"
 	"go.kenn.io/kit/stacktest"
 )
 
 type cursorSecretRecorder struct {
 	secret []byte
+}
+
+func TestRepairMessageFTSRecoversAfterFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		database, err := db.Open(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, database.DropFTS(t.Context()))
+		require.NoError(t, database.Close())
+		database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, raw.Close()) })
+		_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_search_repair BEFORE INSERT ON stats WHEN NEW.key='message_search_corpus_version' BEGIN SELECT RAISE(ABORT, 'repair failed'); END`)
+		require.NoError(t, err)
+		failed, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(t.Context(), nil, func(ctx context.Context) error {
+				err := database.RepairMessageFTS(ctx)
+				if err != nil {
+					close(failed)
+					<-resume
+				}
+				return err
+			})
+		}()
+		<-failed
+		assert.False(t, database.HasFTS(t.Context()))
+		_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_search_repair`)
+		require.NoError(t, err)
+		close(resume)
+		<-done
+		assert.True(t, database.HasFTS(t.Context()))
+	})
+}
+
+func TestRepairMessageFTSRetryStopsOnCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(ctx, nil, func(context.Context) error {
+				attempts.Add(1)
+				return errors.New("repair failed")
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		<-done
+		assert.EqualValues(t, 1, attempts.Load())
+	})
+}
+
+func TestDeferredMessageFTSHTTP(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	for id, content := range map[string]string{"first": "searchneedle deploy window", "second": "searchneedle deploy during the window"} {
+		dbtest.SeedSession(t, database, id, "project", func(s *db.Session) {
+			s.MessageCount = 2
+			s.UserMessageCount = 2
+			s.StartedAt = new("2025-01-15T10:00:00Z")
+		})
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Role: "user", Content: content, Timestamp: "2025-01-15T10:00:00Z"}}))
+	}
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = openDBWithOpener(t.Context(), cfg, db.OpenDaemonWithProgress, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	handler := server.New(cfg, database, nil).Handler()
+	get := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
+		return response
+	}
+	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
+	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
 }
 
 type usageCacheBackfillRecorder struct {
@@ -263,7 +352,7 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair"} {
+	for _, kind := range []string{"data version", "archive only", "schema repair"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
@@ -279,11 +368,7 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			} else {
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
-				statement := "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)"
-				if kind == "schema repair" {
-					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
-				}
-				_, err = conn.ExecContext(t.Context(), statement)
+				_, err = conn.ExecContext(t.Context(), "ALTER TABLE tool_calls DROP COLUMN result_content_length")
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 			}
@@ -297,6 +382,165 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			require.NoError(t, err, string(out))
 		})
 	}
+}
+
+func TestServeLegacyImageTextAfterRestart(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	var restarted atomic.Bool
+	release := make(chan struct{})
+	ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !restarted.Load() {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(ocrServer.Close)
+	t.Cleanup(func() { close(release) })
+	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
+	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	schema, err := os.ReadFile("testdata/legacy/schema-a0c95ef21.sql")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), string(schema))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version = 166;
+		INSERT INTO sessions(id, project) VALUES ('replacement', 'project'), ('retained-image', 'project');
+		INSERT INTO messages(id, session_id, ordinal, role, content) VALUES (1, 'replacement', 0, 'user', 'old transcript'), (2, 'retained-image', 0, 'assistant', 'answer');
+		INSERT INTO tool_calls(message_id, session_id, tool_name, category, result_content) VALUES (2, 'retained-image', 'Read', 'file', '[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]');`)
+	require.NoError(t, err)
+	testutil.LegacyImageTextSchema(t, conn, testutil.LegacyImageTextLayoutB831F99CC)
+	require.NoError(t, conn.Close())
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "replacement", []db.Message{{SessionID: "replacement", Role: "user", Content: "updated transcript"}}))
+	require.NoError(t, database.Close())
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	env := []string{
+		"AGENTSVIEW_IMAGE_SERVE_CONFIG=" + string(data),
+		"AGENTSVIEW_IMAGE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+	}
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeLegacyImageTextHelperProcess", env, "archive rebuild complete")
+	require.NoError(t, err, string(out))
+	restarted.Store(true)
+	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeLegacyImageTextHelperProcess", append(env, "AGENTSVIEW_IMAGE_SERVE_RESTART=1"), "archive rebuild complete")
+	require.NoError(t, err, string(out))
+}
+
+func TestServeLegacyImageTextHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_IMAGE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	t.Setenv(syncWorkerChildEnvVar, "1")
+	localTransport := http.DefaultTransport
+	transport := localTransport.(*http.Transport).Clone()
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("network disabled in test")
+	}
+	withPricingCatalogTransport(t, transport)
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_IMAGE_SERVE_SOURCES")}}
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var out bytes.Buffer
+		err := runSyncWorkerContext(ctx, cfg, req, &out)
+		return decodeSingleResult(t, &out), err
+	})
+	defer restore()
+	original := writeDaemonRuntimeWithAuthAndNoSync
+	type readiness struct {
+		base                      string
+		fullRebuild, schemaRepair bool
+		err                       error
+	}
+	ready := make(chan readiness, 1)
+	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
+		base := fmt.Sprintf("http://%s:%d", host, port)
+		_, fullRebuild, schemaRepair, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		path, writeErr := original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+		ready <- readiness{base, fullRebuild, schemaRepair, err}
+		return path, writeErr
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runServe(ctx, cfg, serveOptions{}, 0)
+	}()
+	defer func() { cancel(); <-done }()
+	var state readiness
+	select {
+	case state = <-ready:
+	case <-done:
+		require.FailNow(t, "server stopped before readiness")
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "server did not become ready")
+	}
+	require.NoError(t, state.err)
+	require.False(t, state.fullRebuild, "full rebuild must finish before readiness")
+	require.False(t, state.schemaRepair, "schema repair must finish before readiness")
+	base := state.base
+	client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var status struct {
+			StartupPending bool `json:"startup_pending"`
+			UpgradePending bool `json:"upgrade_pending"`
+		}
+		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &status) == nil && !status.StartupPending && !status.UpgradePending
+	}, 20*time.Second, time.Second)
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, resp.Body.Close())
+		return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "hello")
+	}, 20*time.Second, time.Second)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/replacement/messages", nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, string(body), "updated transcript")
+	if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			if err != nil {
+				return false
+			}
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, resp.Body.Close())
+			return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
+		}, 20*time.Second, time.Second)
+	}
+	fmt.Println("archive rebuild complete")
 }
 
 func TestServeStaleArchiveHelperProcess(t *testing.T) {
@@ -316,7 +560,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")}}
 	kind := os.Getenv("AGENTSVIEW_STALE_SERVE_KIND")
 	release, launched, rebuilt := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	needsResync, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+	needsResync, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	backgroundRebuild := kind == "data version" || kind == "archive only" || kind == "" && needsResync
 	if backgroundRebuild {
@@ -380,14 +624,14 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 				if json.UnmarshalRead(resp.Body, &status) != nil || status.Progress != nil {
 					return false
 				}
-				stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 				return err == nil && !stale
 			}, 20*time.Second, 10*time.Millisecond, "replacement archive must be installed and fresh")
 		}
-		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
 		require.False(t, stale, "startup reconciliation must finish before readiness")
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
+		if kind == "data version" || kind == "schema repair" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -624,18 +868,18 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
 	)
 	ctx, cancel := context.WithCancel(t.Context())
-	port, err := server.FindAvailablePort(ctx, "127.0.0.1", 0)
+	listener, err := server.ListenAvailablePort(ctx, "127.0.0.1", 0)
 	require.NoError(t, err)
 	appCfg := config.Config{
 		Host:    "127.0.0.1",
-		Port:    port,
+		Port:    listener.Addr().(*net.TCPAddr).Port,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
 	prepareReplicaServe = func(context.Context, storage.Replica, config.Config, string, *ReplicaPushConfig, bool) (replicaServeStartup, error) {
 		return replicaServeStartup{
 			cfg: appCfg, ctx: ctx,
 			rtOpts: serveRuntimeOptions{
-				Mode: "pg-serve", RequestedPort: appCfg.Port,
+				Mode: "pg-serve", RequestedPort: appCfg.Port, Listener: listener,
 			},
 			srv: server.New(
 				appCfg, database, nil,
@@ -1009,8 +1253,8 @@ func (f *fakeUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
-func (f *fakeUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (f *fakeUnwatchedPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, f.ReconcileProviderRoots)
 }
@@ -1020,8 +1264,8 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 	groups := map[parser.AgentType][]string{"": roots}
 
-	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
-	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups, false))
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups, false))
 
 	require.Equal(t, 2, fake.calls)
 	assert.Equal(t, roots, fake.callRoots[0])
@@ -1037,14 +1281,14 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
 	}
 	calls := make(chan time.Time, 8)
-	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
+	watcher := startFileWatcher(cfg, cfg.SyncInterval, nil,
 		func(context.Context, agentsync.WatchBatch) error {
 			calls <- time.Now()
 			return nil
 		}, agentsync.WatcherOptions{})
-	t.Cleanup(stop)
-	require.Empty(t, unwatched)
-	open()
+	t.Cleanup(watcher.stop)
+	require.Empty(t, watcher.unwatchedDirs)
+	watcher.openDispatch()
 	path := filepath.Join(project, "active.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
 	first := receiveArchiveTest(t, calls)
@@ -1391,7 +1635,7 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 	assert.Equal(t, "https://test-host.example.test", called.URL)
 }
 
-func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
+func TestRemoteHostSyncFuncDoesNotForceFullWhenDatabaseNeedsResync(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
@@ -1412,7 +1656,7 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 		Machine:   "local",
 	})
 
-	var gotFull bool
+	gotFull := true
 	syncFn := remoteHostSyncFunc(
 		t.Context(),
 		config.Config{},
@@ -1431,7 +1675,135 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 	_, err = syncFn()
 
 	require.NoError(t, err)
-	assert.True(t, gotFull, "scheduled remote sync should force full when DB needs resync")
+	assert.False(t, gotFull,
+		"scheduled remote sync should let per-host version tracking rebuild without forcing explicit-full")
+}
+
+func TestCollectorOnlyScheduledRemoteSyncDoesNotLoopFullAfterUpgrade(t *testing.T) {
+	remoteAgentDir := t.TempDir()
+	projDir := filepath.Join(remoteAgentDir, "-home-proj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	sessionFile := filepath.Join(projDir, "remote-sess.jsonl")
+	require.NoError(t, os.WriteFile(sessionFile, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "hello from remote").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi from remote").
+		String()), 0o644))
+
+	remoteDataDir := t.TempDir()
+	remoteDB, err := db.Open(t.Context(), filepath.Join(remoteDataDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteDB.Close()) })
+
+	remoteCfg := config.Config{
+		Host:      "127.0.0.1",
+		DataDir:   remoteDataDir,
+		AuthToken: "remote-token",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {remoteAgentDir},
+		},
+	}
+	var manifestRequests, archiveRequests atomic.Int32
+	remoteHandler := server.New(remoteCfg, remoteDB, nil).Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/manifest":
+			manifestRequests.Add(1)
+		case "/api/v1/remote-sync/archive":
+			archiveRequests.Add(1)
+		}
+		remoteHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	collectorDataDir := t.TempDir()
+	collectorCfg := config.Config{
+		DataDir:        collectorDataDir,
+		DBPath:         filepath.Join(collectorDataDir, "sessions.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
+		RemoteHosts: []config.RemoteHost{{
+			Host:      "remote-box",
+			Transport: config.RemoteTransportHTTP,
+			URL:       ts.URL,
+			Token:     "remote-token",
+		}},
+	}
+	database, err := db.Open(t.Context(), collectorCfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if database != nil {
+			require.NoError(t, database.Close())
+		}
+	})
+	engine1 := agentsync.NewEngine(t.Context(), database, workerEngineConfig(collectorCfg))
+
+	var lastStats remotesync.SyncStats
+	newSyncFn := func(targetDB *db.DB, runner remoteSyncExclusiveRunner) func() (int, error) {
+		return remoteHostSyncFunc(
+			t.Context(), collectorCfg, targetDB, runner, collectorCfg.RemoteHosts[0],
+			func(
+				ctx context.Context, cfg config.Config, d *db.DB,
+				rh config.RemoteHost, full bool,
+			) (remotesync.SyncStats, error) {
+				stats, err := runRemoteSyncTransportWithCleanup(ctx, cfg, d, rh, full, false)
+				lastStats = stats
+				return stats, err
+			},
+		)
+	}
+
+	syncFn := newSyncFn(database, engine1)
+	synced, err := syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, int32(1), manifestRequests.Load())
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Simulate an upgrade bumping the archive data version.
+	engine1.Close()
+	require.NoError(t, database.Close())
+	database = nil
+	markArchiveStale(t, collectorCfg.DBPath)
+
+	database, err = db.Open(t.Context(), collectorCfg.DBPath)
+	require.NoError(t, err)
+	require.True(t, database.NeedsResync())
+	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), "remote-box", 1))
+	engine := agentsync.NewEngine(t.Context(), database, workerEngineConfig(collectorCfg))
+	t.Cleanup(engine.Close)
+
+	// Even before a local resync clears NeedsResync(), scheduled remote syncs
+	// must NOT force explicit-full or re-download unchanged archives.
+	syncFn = newSyncFn(database, engine)
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, remotesync.FullImportDataRebuild, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load(),
+		"upgraded remote sync must reuse its local mirror instead of re-downloading")
+
+	// A second tick before NeedsResync() clears stays incremental.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Empty(t, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Collector-only local resync clears NeedsResync() and keeps remote rows.
+	resyncStats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, resyncStats.Aborted)
+	assert.True(t, resyncStats.ArchiveRebuilt)
+	assert.False(t, database.NeedsResync())
+	assert.Equal(t, 1, resyncStats.OrphanedCopied)
+
+	// First tick after DB replacement rebuilds from the local mirror once.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, remotesync.FullImportDataRebuild, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Next tick returns to incremental mode with zero full-rebuild work.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Empty(t, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
 }
 
 func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
@@ -2869,7 +3241,7 @@ func TestOpenReadOnlyDBRejectsStaleArchive(t *testing.T) {
 	require.NoError(t, writer.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 129")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -4132,4 +4504,68 @@ func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
 		synctest.Wait()
 		assert.False(t, stopped)
 	})
+}
+
+func TestServeLifetimesReleaseDebugLog(t *testing.T) {
+	_, dir := isolateServeTestHome(t)
+	cfg, err := config.Load(nil)
+	require.NoError(t, err)
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 0
+	cfg.NoSync = true
+	original := log.Writer()
+	for range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
+		require.Eventually(t, func() bool { return FindDaemonRuntime(dir) != nil }, 30*time.Second, 100*time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			require.FailNow(t, "server did not stop")
+		}
+		require.Same(t, original, log.Writer())
+		if runtime.GOOS == "windows" {
+			path := filepath.Join(dir, "debug.log")
+			moved := filepath.Join(dir, "debug-moved.log")
+			require.NoError(t, os.Rename(path, moved))
+			require.NoError(t, os.Remove(moved))
+		}
+	}
+}
+
+func TestDeferredSearchIndexesBlockCatchup(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "gemini")
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
+		s.UserMessageCount = 2
+		s.StartedAt = new("2025-01-15T10:00:00Z")
+	})
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "needleexample"}}))
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	pauseAfterStartup(t, ingestion)
+	require.NoError(t, os.MkdirAll(filepath.Dir(reloadGeminiSessionPath(root, "overnight")), 0o755))
+	require.NoError(t, os.WriteFile(reloadGeminiSessionPath(root, "overnight"), []byte(testjsonl.GeminiSessionJSON(
+		"overnight", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+		[]map[string]any{testjsonl.GeminiUserMsg("first", "2026-08-09T10:00:00Z", "first"), testjsonl.GeminiUserMsg("second", "2026-08-09T10:01:00Z", "second")},
+	)), 0o644))
+	collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
+	require.True(t, database.SearchRepairPending())
+	require.False(t, ingestion.EnsureFresh(t.Context()))
+	require.NoError(t, database.RepairMessageFTS(t.Context()))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	require.True(t, sessionImported(t, database, "gemini:overnight"))
 }

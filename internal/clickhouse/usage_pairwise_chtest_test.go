@@ -42,7 +42,7 @@ func TestUsagePairwiseRankingReadCounts(t *testing.T) {
 			}
 			_, err := backend.UsagePairwiseComparison(ctx, req)
 			require.NoError(t, err)
-			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS query_log")
 			require.NoError(t, err)
 			var queries uint64
 			require.NoError(t, store.conn.QueryRowContext(t.Context(), `
@@ -70,7 +70,7 @@ func TestUsageReadersSkipPairwiseEvidence(t *testing.T) {
 				_, err = db.FrictionArchiveSpendFrom(ctx, store, "", "", time.UTC)
 			}
 			require.NoError(t, err)
-			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+			_, err = store.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS query_log")
 			require.NoError(t, err)
 			var queries, evidenceQueries uint64
 			require.NoError(t, store.conn.QueryRowContext(t.Context(), `
@@ -87,6 +87,7 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []bool{false, true} {
 		t.Run(map[bool]string{false: "prepared", true: "raw"}[raw], func(t *testing.T) {
+			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
 			if raw {
 				execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
@@ -104,6 +105,8 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 						store.SetCustomPricing(map[string]config.CustomModelRate{"round-test": {InputMicrodollarsPerMTok: 800_000}})
 					}
 					filters := usagePriceFilters()
+					// Every ranking below enables breakdowns, making this identical to utc.
+					delete(filters, "breakdowns")
 					filters["local window"] = db.UsageFilter{Timezone: "America/New_York", From: "2026-01-11", To: "2026-01-11"}
 					for name, f := range filters {
 						t.Run(name, func(t *testing.T) {

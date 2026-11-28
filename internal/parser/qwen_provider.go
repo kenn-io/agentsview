@@ -113,7 +113,7 @@ func qwenSessionIDFromPath(root, path string) string {
 }
 
 func qwenProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -125,5 +125,5 @@ func qwenProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

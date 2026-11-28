@@ -78,7 +78,7 @@ func TestUsageDiskNextDay(t *testing.T) {
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-30", Timezone: "America/New_York", Breakdowns: true, PairwiseSides: true, TopSessionsByGroup: true}
 	extentCount := func() uint64 {
 		t.Helper()
-		execPreparedUsage(t, first, "SYSTEM FLUSH LOGS")
+		execPreparedUsage(t, first, "SYSTEM FLUSH LOGS query_log")
 		var count uint64
 		require.NoError(t, first.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.query_log WHERE current_database = currentDatabase() AND type = 'QueryStart' AND startsWith(query, 'SELECT maxOrNull(ts)')`).Scan(&count))
 		return count

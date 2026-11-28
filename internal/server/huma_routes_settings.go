@@ -127,6 +127,12 @@ func (s *Server) humaGetSettings(
 		InsightDefaultAgent: resolvedInsightDefaultAgent(s.cfg),
 		RequireAuth:         s.cfg.RequireAuth,
 		ReadOnly:            s.db.ReadOnly(),
+		RestartSupported:    s.restartSupported(),
+	}
+	if active, ok := s.db.(interface {
+		ToolResultImages() config.ToolResultImages
+	}); ok {
+		resp.RestartRequired = toolResultImagesValue(s.cfg.ToolResultImages) != toolResultImagesValue(active.ToolResultImages())
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken

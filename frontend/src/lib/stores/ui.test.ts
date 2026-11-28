@@ -21,11 +21,31 @@ describe("UIStore", () => {
     ui.activeModal = null;
     ui.clearPublishTarget();
     ui.publishSecret = false;
+    ui.linkedMessage = null;
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
     ui.followLatest = false;
     ui.followLatestRequest = 0;
   });
+
+  afterEach(() => {
+    ui.showAllBlocks();
+    ui.setTranscriptMode("normal");
+  });
+
+  it.each(["selection", "filter", "mode", "follow"])(
+    "dismisses a linked reveal on %s",
+    (change) => {
+      ui.showAllBlocks();
+      ui.setTranscriptMode("normal");
+      ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+      if (change === "selection") ui.selectOrdinal(2);
+      if (change === "filter") ui.toggleBlock("thinking");
+      if (change === "mode") ui.setTranscriptMode("focused");
+      if (change === "follow") ui.setFollowLatest(true);
+      expect(ui.linkedMessage).toBeNull();
+    },
+  );
 
   describe("publishTarget", () => {
     it("clears the publish target when publish modal closes", async () => {
@@ -673,6 +693,37 @@ describe("UIStore", () => {
 
       ui.cycleLayout();
       expect(ui.messageLayout).toBe("default");
+    });
+  });
+
+  describe("alwaysShowYear", () => {
+    const original = globalThis.localStorage;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it.each([
+      [null, false],
+      ["true", true],
+    ])("restores %s as %s and persists a toggle", async (stored, expected) => {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: (key: string) => (key === "agentsview-always-show-year" ? stored : null),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?year-${stored}`);
+      expect(mod.ui.alwaysShowYear).toBe(expected);
+      mod.ui.toggleAlwaysShowYear();
+      await tick();
+      expect(setItem).toHaveBeenCalledWith("agentsview-always-show-year", String(!expected));
     });
   });
 

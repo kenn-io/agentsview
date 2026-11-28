@@ -53,7 +53,7 @@ func Probe(ctx context.Context, cfg Config) (Status, *Client) {
 	token := cfg.currentToken()
 	if token == "" && (cfg.TokenRequired || cfg.TokenEnv != "") {
 		st.State = StateUnauthenticated
-		st.Message = "no bearer token: set [kata] token_env to the name of an environment variable that holds the token"
+		st.Message = "no bearer token: set [kata] token_env to the name of an environment variable that holds the token, or token_file to a file that holds it"
 		return st, nil
 	}
 	endpoint, err := resolveEndpoint(ctx, cfg.Endpoint)
@@ -62,7 +62,7 @@ func Probe(ctx context.Context, cfg Config) (Status, *Client) {
 	}
 	if token == "" && strings.HasPrefix(endpoint, "https://") {
 		st.State = StateUnauthenticated
-		st.Message = "no bearer token: set [kata] token_env to the name of an environment variable that holds the token"
+		st.Message = "no bearer token: set [kata] token_env to the name of an environment variable that holds the token, or token_file to a file that holds it"
 		return st, nil
 	}
 	c, err := newClient(cfg, endpoint)

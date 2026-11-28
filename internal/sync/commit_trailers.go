@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"log"
 	"maps"
 	"os"
@@ -105,6 +107,12 @@ func (e *Engine) reconcileRepositoryTrailers(ctx context.Context, repo, path str
 	if !e.mayProbeLocalPath(filepath.Join(gitDir, "HEAD")) ||
 		!e.mayProbeLocalPath(filepath.Join(gitDir, "commondir")) ||
 		!e.mayProbeLocalPath(filepath.Join(commonDir, "config")) {
+		return 0, nil
+	}
+	// A checkout whose worktree record was pruned still has a .git file
+	// naming the removed directory. Git cannot open it, and a failed scan
+	// every pass would only repeat the same error.
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
 	commits, err := gitlog.ScanCommitTrailers(ctx, path)

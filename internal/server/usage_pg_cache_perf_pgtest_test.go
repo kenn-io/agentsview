@@ -240,6 +240,7 @@ func (f *usagePerfFixture) cachedServer(t *testing.T, dir string) (*Server, func
 	store, err := postgres.NewStore(t.Context(), f.pgURL, f.schema, true)
 	require.NoError(t, err)
 	require.NoError(t, store.ConfigureUsageCache(t.Context(), dir, f.pgURL, f.schema))
+	require.NoError(t, store.WarmUsageCache(t.Context()))
 	return &Server{db: store, sessions: service.NewReadOnlyBackend(store)}, func() { require.NoError(t, store.Close()) }
 }
 
@@ -389,6 +390,7 @@ func (f *usagePerfFixture) measureSessions(t *testing.T, repeats int) {
 			closeStore()
 
 			s, closeStore = f.cachedServer(t, dir)
+			waitWarm(t, s)
 			sample, got = measurePage(t, s, window.from, 1)
 			restart = append(restart, sample)
 			requireSamePage(t, "restart", want, got)

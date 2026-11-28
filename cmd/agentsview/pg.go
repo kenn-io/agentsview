@@ -65,7 +65,9 @@ func (pgReplica) serveOptions(
 		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
 	}
 	opts = append(opts, pgKataConn(appCfg))
+	stopFrustrationFill := pgStore.StartFrustrationFill(ctx)
 	closeAll := func() error {
+		stopFrustrationFill()
 		waitFriction()
 		if closeRawSync != nil {
 			return closeRawSync()

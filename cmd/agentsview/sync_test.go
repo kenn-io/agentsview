@@ -129,18 +129,25 @@ func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 	return cfg, database
 }
 
-func isolateDirectCLISources(t *testing.T) {
+func isolateCLISources(t *testing.T, root string) {
 	t.Helper()
-	root := t.TempDir()
-	t.Setenv("HOME", root)
+	setTestHome(t, root)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
-			t.Setenv(def.EnvVar, filepath.Join(root, string(def.Type)))
+			t.Setenv(def.EnvVar, filepath.Join(root, "empty", string(def.Type)))
 		}
 		if def.DefaultRootEnvVar != "" {
-			t.Setenv(def.DefaultRootEnvVar, root)
+			t.Setenv(def.DefaultRootEnvVar, filepath.Join(root, "empty-root", string(def.Type)))
 		}
 	}
+	for _, envVar := range config.MetaHarnessEnvVars() {
+		t.Setenv(envVar, "")
+	}
+}
+
+func isolateDirectCLISources(t *testing.T) {
+	t.Helper()
+	isolateCLISources(t, t.TempDir())
 }
 
 func TestDoSyncConfiguredFullUsesUnifiedHTTPContributor(t *testing.T) {
@@ -535,8 +542,9 @@ func TestRunLocalSyncZeroContributorRetainsAbortFallback(t *testing.T) {
 		Project: "preserved", FilePath: &missingPath, MessageCount: 1,
 	}))
 
-	didResync := runLocalSync(t.Context(), cfg, database, true)
+	didResync, err := runLocalSync(t.Context(), cfg, database, true)
 
+	require.NoError(t, err)
 	assert.True(t, didResync)
 	preserved, getErr := database.GetSession(t.Context(), "old-file-session")
 	require.NoError(t, getErr)
@@ -1856,13 +1864,15 @@ func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var didResync bool
+	var syncErr error
 	captureStdout(t, func() {
-		didResync = runLocalSync(ctx, config.Config{
+		didResync, syncErr = runLocalSync(ctx, config.Config{
 			DataDir: dataDir,
 			DBPath:  dbPath,
 		}, database, false)
 	})
 
+	require.ErrorIs(t, syncErr, context.Canceled)
 	assert.True(t, didResync)
 	assert.True(t, database.NeedsResync())
 }
@@ -2076,6 +2086,7 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		transport{URL: ts.URL + "/"},
 		"",
 		false,
+		false,
 		nil,
 	)
 	require.NoError(t, err)
@@ -2125,7 +2136,7 @@ func TestRunDaemonSyncWaitsForBusyEngine(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var waiting bool
-			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false,
+			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false, false,
 				func(p agentsync.Progress) {
 					waiting = true
 					assert.Contains(t, p.Detail, "Waiting")
@@ -2176,7 +2187,7 @@ func TestRunDaemonSyncDetectsResyncRequired(t *testing.T) {
 			})
 
 			_, err := runDaemonSync(
-				t.Context(), transport{URL: ts.URL}, "", tt.full, nil,
+				t.Context(), transport{URL: ts.URL}, "", tt.full, false, nil,
 			)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantResync,
@@ -2325,6 +2336,7 @@ func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		[]config.RemoteHost{{Host: "devbox"}},
 		false,
 		false,
+		false,
 		nil,
 	)
 	require.NoError(t, err)
@@ -2357,6 +2369,7 @@ func TestRunDaemonRemoteSyncReportsProgressEvents(t *testing.T) {
 		[]config.RemoteHost{{Host: "devbox"}},
 		false,
 		true,
+		false,
 		func(p agentsync.Progress) {
 			progress = append(progress, p)
 		},
@@ -2384,7 +2397,7 @@ func TestRunDaemonRemoteSyncJSONReturnsTopLevelErrorWithEarlierFailures(t *testi
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
-		false, false, nil,
+		false, false, false, nil,
 	)
 
 	require.EqualError(t, err, blocked)
@@ -2408,7 +2421,7 @@ func TestRunDaemonRemoteSyncJSONRejectsAbortedUnifiedRebuild(t *testing.T) {
 
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
-		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
+		[]config.RemoteHost{{Host: "alpha"}}, true, true, false, nil,
 	)
 
 	require.ErrorIs(t, err, agentsync.ErrUnifiedRebuildAborted)
@@ -2432,7 +2445,7 @@ func TestRunDaemonRemoteSyncSSEReturnsTopLevelErrorWithEarlierFailures(t *testin
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
-		false, false, nil,
+		false, false, false, nil,
 	)
 
 	require.EqualError(t, err, blocked)
@@ -2457,7 +2470,7 @@ func TestRunDaemonRemoteSyncSSERejectsAbortedUnifiedRebuild(t *testing.T) {
 
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
-		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
+		[]config.RemoteHost{{Host: "alpha"}}, true, true, false, nil,
 	)
 
 	require.ErrorIs(t, err, agentsync.ErrUnifiedRebuildAborted)
@@ -2739,4 +2752,56 @@ func TestRunRemoteSyncWithOmittedTransportReachesHTTPMirrorPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, manifestRequests,
 		"configured DataDir must route HTTP sync through the manifest/mirror path")
+}
+
+func TestRunLocalSyncReportsDiscardedFullResync(t *testing.T) {
+	cfg, database := newDirectSyncFixture(t)
+	restore := db.SetCloseDrainTimeoutForTest(100 * time.Millisecond)
+	defer restore()
+	// A reader that stays open keeps the swap from closing the archive, so
+	// the rebuilt replacement is discarded.
+	pinned, err := database.Reader().Query(t.Context(), "SELECT 1")
+	require.NoError(t, err)
+	pinnedOpen := true
+	defer func() {
+		if pinnedOpen {
+			require.NoError(t, pinned.Err())
+			require.NoError(t, pinned.Close())
+		}
+	}()
+
+	var syncErr error
+	out := captureStdout(t, func() {
+		_, syncErr = runLocalSync(t.Context(), cfg, database, true)
+	})
+	require.NoError(t, pinned.Err())
+	require.NoError(t, pinned.Close())
+	pinnedOpen = false
+
+	require.Error(t, syncErr)
+	assert.Contains(t, syncErr.Error(), "full resync not installed, archive unchanged")
+	assert.NotContains(t, out, "Sync complete")
+	assert.Contains(t, out, "Closing current database before swap stopped after")
+	session, err := database.GetSession(t.Context(), "session")
+	require.NoError(t, err)
+	assert.Nil(t, session, "the discarded rebuild must not be replaced by an incremental pass")
+}
+
+func TestResyncProgressPrinterFailDoesNotReportCompletion(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printer := newResyncProgressPrinter(&out, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhaseCopyingMetadata,
+		Detail: "Closing current database before swap",
+		Resync: true,
+	})
+	now = now.Add(5 * time.Second)
+	printer.Fail()
+	printer.Finish()
+
+	assert.Equal(t,
+		"  Closing current database before swap...\n"+
+			"  Closing current database before swap stopped after 5s\n",
+		out.String())
 }

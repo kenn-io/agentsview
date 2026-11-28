@@ -5,8 +5,6 @@ package postgres
 import (
 	"context"
 	"encoding/json/jsontext"
-	"fmt"
-	"math/rand/v2"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -26,10 +24,8 @@ func TestPushCompactComparisons(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	const id = "compact"
-	schema := fmt.Sprintf("agentsview_compact_%x", rand.Uint64())
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = pgPushTestSchema
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	messages := []db.Message{
 		{
@@ -128,11 +124,9 @@ func TestPushCompactComparisons(t *testing.T) {
 func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	schema := fmt.Sprintf("agentsview_compact_legacy_%x", rand.Uint64())
+	const schema = pgPushTestSchema
 	const id = "legacy"
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
@@ -223,10 +217,11 @@ func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
 func compactPushResponseBytes(t *testing.T, size int) int64 {
 	t.Helper()
 	ctx := t.Context()
-	schema := fmt.Sprintf("agentsview_push_response_bytes_%x", rand.Uint64())
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = pgPushTestSchema
+	url := testPGSchemaURL(t, schema)
+	if !takeFreshSchemaCopy(t, url, schema) {
+		cleanNamedPGSchema(t, url, schema)
+	}
 	local := testDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "sample-model"}}))
 	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{

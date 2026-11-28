@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/agenthook"
 
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -91,6 +93,7 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	) error {
 		return errors.New("remote unavailable")
 	}
+	stubLaunchProcesses(t)
 
 	cmd := newRootCommand()
 	var stderr bytes.Buffer
@@ -117,7 +120,7 @@ func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {
 	require.NoError(t, os.WriteFile(pluginSkill, []byte(pkg[0].Content), 0o644))
 
 	var diagnostics bytes.Buffer
-	reportMemoryPluginConflicts(&diagnostics, pluginRoot)
+	reportMemoryPluginConflicts(t.Context(), &diagnostics, pluginRoot)
 	assert.Contains(t, diagnostics.String(), "duplicates managed standalone skill")
 	body, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -126,11 +129,30 @@ func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {
 	modified := pkg[0].Content + "\nlocal edit\n"
 	require.NoError(t, os.WriteFile(path, []byte(modified), 0o644))
 	diagnostics.Reset()
-	reportMemoryPluginConflicts(&diagnostics, pluginRoot)
+	reportMemoryPluginConflicts(t.Context(), &diagnostics, pluginRoot)
 	assert.Contains(t, diagnostics.String(), "conflicts with user-managed skill")
 	body, err = os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, modified, string(body))
+}
+
+func TestMemoryPluginWarnsAboutStandaloneHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "claude"))
+	pluginRoot := t.TempDir()
+	pluginSkill := filepath.Join(pluginRoot, "skills", "agentsview-finding-history", "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(pluginSkill), 0o755))
+	require.NoError(t, os.WriteFile(pluginSkill, []byte("skill"), 0o644))
+	var diagnostics bytes.Buffer
+	reportMemoryPluginConflicts(t.Context(), &diagnostics, pluginRoot)
+	assert.NotContains(t, diagnostics.String(), "standalone SessionStart hook found")
+	_, err := agenthook.Install(agenthook.AgentClaude, sessionStartHookOptions())
+	require.NoError(t, err)
+	diagnostics.Reset()
+	reportMemoryPluginConflicts(t.Context(), &diagnostics, pluginRoot)
+	assert.Contains(t, diagnostics.String(), "standalone SessionStart hook found")
 }
 
 func TestMemorySessionStartUsesBoundedContext(t *testing.T) {
@@ -168,8 +190,18 @@ func TestMemorySessionStartDisableSwitchSkipsRequest(t *testing.T) {
 		return nil
 	}
 
-	_, err := executeCommand(newRootCommand(), "memory", "session-start")
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}}, fakeProcess{name: "claude"})
+	cmd := newRootCommand()
+	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	require.NoError(t, cmd.Execute())
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
 	require.NoError(t, err)
+	assert.Equal(t, claudeLauncherID, link.ParentSessionID)
+
+	_, err = executeCommand(newRootCommand(), "memory", "session-start", "--mode", "invalid")
+	require.ErrorContains(t, err, "unknown --mode")
 }
 
 func TestMemorySessionStartDispatchesHostedModes(t *testing.T) {

@@ -641,6 +641,8 @@ func checkpointWALTruncateConn(ctx context.Context, conn *sql.DB) error {
 // serving again before the error returns.
 func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation) error {
 	db.mu.Lock()
+	resumeReads := db.pauseReadsLocked()
+	defer resumeReads()
 	if err := db.closeConnectionsLocked(ctx); err != nil {
 		return db.reopenUnchangedAfterSwapFailureLocked(
 			fmt.Errorf("close archive connections: %w", err), op)
@@ -676,6 +678,7 @@ func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation)
 // db.mu; it is released here.
 func (db *DB) reopenUnchangedAfterSwapFailureLocked(primary error, op *compactOperation) error {
 	reopenErr := db.reopenLockedWithBarrier(true)
+	db.clearReadPause()
 	db.mu.Unlock()
 	if reopenErr != nil {
 		return errors.Join(primary, fmt.Errorf(
@@ -721,6 +724,7 @@ func (db *DB) restoreOriginalAfterSwapFailureLocked(primary error, op *compactOp
 	if restoreErr == nil {
 		restoreErr = db.reopenLockedWithBarrier(true)
 	}
+	db.clearReadPause()
 	db.mu.Unlock()
 	if restoreErr != nil {
 		// Leave the prepared manifest and backup in place: startup recovery
@@ -738,10 +742,13 @@ func (db *DB) restoreOriginalAfterSwapFailureLocked(primary error, op *compactOp
 // restoring the backup is lossless.
 func (db *DB) rollbackCompactInstall(ctx context.Context, primary error, op *compactOperation) error {
 	db.mu.Lock()
+	resumeReads := db.pauseReadsLocked()
+	defer resumeReads()
 	if err := db.closeConnectionsLocked(ctx); err != nil {
 		// The installed candidate keeps serving reads; the barrier stays up
 		// and the prepared manifest lets startup recovery finish the decision.
 		reopenErr := db.reopenLockedWithBarrier(true)
+		db.clearReadPause()
 		db.mu.Unlock()
 		return errors.Join(primary,
 			fmt.Errorf("close archive connections for rollback: %w", err), reopenErr)

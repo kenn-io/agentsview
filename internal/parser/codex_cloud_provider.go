@@ -107,6 +107,26 @@ func codexCloudThreadIDFromPath(_, path string) string {
 	return id
 }
 
+// CodexCloudAccountFromPath returns the account key of the login a Codex
+// cloud mirror file was fetched for. The fetcher stores each login's
+// mirrors in a directory named by its key, a hash of the workspace and
+// user IDs, so every computer that syncs the login agrees on it. It returns
+// empty when the file's directory is not named by a key.
+func CodexCloudAccountFromPath(path string) string {
+	dir := path[:max(strings.LastIndexAny(path, `/\`), 0)]
+	key := dir[strings.LastIndexAny(dir, `/\`)+1:]
+	if !IsCodexCloudAccountKey(key) {
+		return ""
+	}
+	return key
+}
+
+// IsCodexCloudAccountKey reports whether key has the form of a Codex cloud
+// account key: 32 lowercase hex characters.
+func IsCodexCloudAccountKey(key string) bool {
+	return len(key) == 32 && strings.Trim(key, "0123456789abcdef") == ""
+}
+
 func codexCloudParseFile(
 	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
@@ -130,7 +150,7 @@ func codexCloudProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		RawCapture: RawCaptureCapabilities{
 			Support: CapabilitySupported,
 			Shape:   RawCaptureShapeFiles,
@@ -149,5 +169,5 @@ func codexCloudProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

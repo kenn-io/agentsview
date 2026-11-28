@@ -25,7 +25,6 @@
   import { sync } from "../../stores/sync.svelte.js";
   import {
     ActivityIcon,
-    ChartColumnIcon,
     DatabaseIcon,
     Grid2x2Icon,
     LayoutGridIcon,
@@ -248,14 +247,6 @@
       >
         <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_activity()}
-      </button>
-      <button
-        class="mobile-nav-btn"
-        class:active={router.route === "trends"}
-        onclick={() => mobileNav("trends")}
-      >
-        <ChartColumnIcon size="12" strokeWidth="2" aria-hidden="true" />
-        {m.nav_trends()}
       </button>
       <button
         class="mobile-nav-btn"

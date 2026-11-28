@@ -3,6 +3,7 @@ import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { screen } from "@testing-library/svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { router } from "../../stores/router.svelte.js";
@@ -17,9 +18,8 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   deleteItem: vi.fn(),
-  loadAgents: vi.fn(),
   loadInsights: vi.fn(),
-  loadProjects: vi.fn(),
+  refreshFilterOptions: vi.fn(),
   navigateToSession: vi.fn(),
   watchEvents: vi.fn(() => ({ close() {} })),
 }));
@@ -108,8 +108,7 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
       includeAutomated: true,
     },
     projects: [],
-    loadAgents: mocks.loadAgents,
-    loadProjects: mocks.loadProjects,
+    refreshFilterOptions: mocks.refreshFilterOptions,
     navigateToSession: mocks.navigateToSession,
   },
 }));
@@ -163,18 +162,12 @@ async function selectCustomRange(fromLabel: string, toLabel: string) {
   customTab!.click();
   await flushEffects();
 
-  const from = document.querySelector<HTMLButtonElement>(
-    `.kit-calendar button[aria-label="${fromLabel}"]`,
-  );
-  expect(from).not.toBeNull();
-  from!.click();
+  const from = screen.getByRole("gridcell", { name: fromLabel });
+  from.click();
   await flushEffects();
 
-  const to = document.querySelector<HTMLButtonElement>(
-    `.kit-calendar button[aria-label="${toLabel}"]`,
-  );
-  expect(to).not.toBeNull();
-  to!.click();
+  const to = screen.getByRole("gridcell", { name: toLabel });
+  to.click();
   await flushEffects();
 }
 
@@ -408,7 +401,7 @@ describe("QualityPage date yoke integration", () => {
 
     component = mount(QualityPage, { target: document.body });
     await flushEffects();
-    await selectCustomRange("Jul 1, 2026", "Jul 7, 2026");
+    await selectCustomRange("Wednesday, July 1, 2026", "Tuesday, July 7, 2026");
 
     router.navigate("usage");
     unmount(component);

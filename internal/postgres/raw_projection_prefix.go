@@ -81,35 +81,53 @@ func reconcileRawPrefixes(ctx context.Context, tx *sql.Tx, group string) error {
 // just rendered text. Metadata disagreements remain conflicts; only aggregate
 // and signal fields that naturally change on append are excluded.
 func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
-	if len(short.Messages) == 0 || len(short.UsageEvents) > len(long.UsageEvents) {
+	if len(short.Messages) > len(long.Messages) || len(short.UsageEvents) > len(long.UsageEvents) {
 		return false, nil
 	}
-	// A capture with the same transcript extends another only when the agent's
-	// cumulative session total grew, as when Claude Code appends cost-state on
-	// exit without a new message. A strict order keeps two equal copies from
-	// extending each other.
-	if len(short.Messages) > len(long.Messages) ||
-		(len(short.Messages) == len(long.Messages) &&
-			(len(short.UsageEvents) != len(long.UsageEvents) ||
-				!rawSessionTotalGrew(short.SessionTotal, long.SessionTotal))) {
+	shortInferred := db.SessionRelationshipInferred(short.Session)
+	longInferred := db.SessionRelationshipInferred(long.Session)
+	// Never merge an explicit child into an inferred worker.
+	if !shortInferred && longInferred {
+		return false, nil
+	}
+	sameTotalEqualLength := false
+	if len(short.Messages) == len(long.Messages) {
+		if len(short.UsageEvents) != len(long.UsageEvents) {
+			return false, nil
+		}
+		if !rawSessionTotalGrew(short.SessionTotal, long.SessionTotal) {
+			if rawSessionTotalGrew(long.SessionTotal, short.SessionTotal) ||
+				shortInferred != longInferred ||
+				rawAutomationNormalizationRank(short.Session) >= rawAutomationNormalizationRank(long.Session) {
+				return false, nil
+			}
+			sameTotalEqualLength = true
+		}
+	}
+	// An empty transcript cannot prove it is a prefix of a longer capture.
+	if len(short.Messages) == 0 && !sameTotalEqualLength {
 		return false, nil
 	}
 	long.Messages = long.Messages[:len(short.Messages)]
 	long.UsageEvents = long.UsageEvents[:len(short.UsageEvents)]
 	key := func(p ingest.PreparedSession) (string, error) {
 		s := &p.Session
-		s.EndedAt, s.TerminationStatus = nil, nil
-		s.MessageCount, s.UserMessageCount = 0, 0
-		s.TotalOutputTokens, s.PeakContextTokens = 0, 0
-		s.HasTotalOutputTokens, s.HasPeakContextTokens, s.IsAutomated = false, false, false
+		if !sameTotalEqualLength {
+			s.EndedAt, s.TerminationStatus = nil, nil
+			s.MessageCount, s.UserMessageCount = 0, 0
+			s.TotalOutputTokens, s.PeakContextTokens = 0, 0
+			s.HasTotalOutputTokens, s.HasPeakContextTokens = false, false
+			// Plan usage and the agent's session total are later reports about
+			// the whole thread, so they change as the thread grows.
+			p.PlanUsage = nil
+			p.SessionTotal = nil
+		}
+		s.IsAutomated = false
+		s.RelationshipType = db.PersistedParserRelationship(*s)
 		copyRawSignalFields(s, db.SessionSignalUpdate{})
 		s.QualitySignals = nil
 		p.Signals = db.SessionSignalUpdate{}
 		p.Findings = nil
-		// Plan usage and the agent's session total are later reports about
-		// the whole thread, so they change as the thread grows.
-		p.PlanUsage = nil
-		p.SessionTotal = nil
 		return rawContentRevision(p)
 	}
 	a, err := key(short)
@@ -118,6 +136,20 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 	}
 	b, err := key(long)
 	return a == b, err
+}
+
+// rawAutomationNormalizationRank orders equal-length captures that differ only
+// in automation or relationship normalization across upgrades, preferring the
+// normalized automated form over legacy subagent representations.
+func rawAutomationNormalizationRank(s db.Session) int {
+	switch {
+	case s.IsAutomated && s.RelationshipType == "":
+		return 2
+	case s.IsAutomated:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // rawSessionTotalGrew reports whether next is a later cumulative snapshot of

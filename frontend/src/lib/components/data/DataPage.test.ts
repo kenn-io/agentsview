@@ -192,7 +192,7 @@ describe("DataPage", () => {
 
     const inventory = makeInventory([makeRow({ project_key: "k1" })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(inventory);
-    const retryBtn = document.querySelector<HTMLButtonElement>(".retry-btn");
+    const retryBtn = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(retryBtn).not.toBeNull();
     retryBtn?.click();
     await tick();

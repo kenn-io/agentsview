@@ -53,6 +53,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
         m.settings_search_keywords_appearance(),
         m.appearance_message_layout(),
         m.appearance_reading_width(),
+        m.appearance_always_show_year(),
       ].join(" "),
     },
     {

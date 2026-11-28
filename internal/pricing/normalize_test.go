@@ -253,6 +253,23 @@ func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
 		"key inside an unrelated longer name must not match")
 }
 
+func TestDisplayNameModelID(t *testing.T) {
+	cases := map[string]string{
+		"Gemini 4 Neon (High)":        "gemini-4-neon",
+		"Gemini 4 Argon (Medium)":     "gemini-4-argon",
+		"Gemini 3.5 Flash (Low)":      "gemini-3.5-flash",
+		"Gemini 2.5 Pro":              "gemini-2.5-pro",
+		"google/Gemini 4 Neon (High)": "google/gemini-4-neon",
+		"claude-fable-5[1m]":          "claude-fable-5",
+		"gemini-4-neon":               "gemini-4-neon",
+		"(High)":                      "(High)",
+		"   ":                         "   ",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, DisplayNameModelID(in), "input %q", in)
+	}
+}
+
 func TestOllamaCloudBaseModel(t *testing.T) {
 	cases := map[string]string{
 		"kimi-k2.7-code:cloud":        "kimi-k2.7-code",

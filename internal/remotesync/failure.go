@@ -91,7 +91,7 @@ func FailureSummary(err error) string {
 			"on both hosts"
 	}
 
-	if errors.Is(err, syscall.ECONNREFUSED) {
+	if isAnyErrno(err, connRefusedErrnos) {
 		return "HTTP remote sync failed: connection refused; check " +
 			"that the remote daemon is running and bound to a " +
 			"reachable address (serve --host 0.0.0.0 or host in its " +
@@ -139,13 +139,8 @@ func IsHostUnavailable(err error) bool {
 		return true
 	}
 	if errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, syscall.ECONNREFUSED) ||
-		errors.Is(err, syscall.ECONNRESET) ||
-		errors.Is(err, syscall.ECONNABORTED) ||
-		errors.Is(err, syscall.EPIPE) ||
-		errors.Is(err, syscall.ETIMEDOUT) ||
-		errors.Is(err, syscall.EHOSTUNREACH) ||
-		errors.Is(err, syscall.ENETUNREACH) {
+		isAnyErrno(err, connRefusedErrnos) ||
+		isAnyErrno(err, unreachableErrnos) {
 		return true
 	}
 	if errors.Is(err, io.EOF) {
@@ -166,6 +161,30 @@ func IsHostUnavailable(err error) bool {
 		return false
 	}
 	return netErr.Timeout()
+}
+
+// connRefusedErrnos and unreachableErrnos are the socket errors that mean
+// the remote host cannot be reached. Windows sockets report their own WSA
+// codes, which platformConnRefusedErrnos and platformUnreachableErrnos add.
+var (
+	connRefusedErrnos = append([]error{syscall.ECONNREFUSED}, platformConnRefusedErrnos...)
+	unreachableErrnos = append([]error{
+		syscall.ECONNRESET,
+		syscall.ECONNABORTED,
+		syscall.EPIPE,
+		syscall.ETIMEDOUT,
+		syscall.EHOSTUNREACH,
+		syscall.ENETUNREACH,
+	}, platformUnreachableErrnos...)
+)
+
+func isAnyErrno(err error, errnos []error) bool {
+	for _, errno := range errnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 // statusLabel renders an HTTP status for user-facing messages using

@@ -155,6 +155,12 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// IsCodexCursor reports whether data decodes as a current Codex cursor.
+func IsCodexCursor(data []byte) bool {
+	var s codexCursorState
+	return s.UnmarshalBinary(data) == nil
+}
+
 // UnmarshalBinary restores the state written by MarshalBinary. Any version,
 // length, or structure mismatch returns an error so the caller falls back
 // to an authoritative full parse.

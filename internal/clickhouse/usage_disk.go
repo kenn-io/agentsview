@@ -14,7 +14,7 @@ const (
 )
 
 // usageCaptureStable validates a fill against the parts captured for its request.
-func (s *Store) usageCaptureStable(ctx context.Context) bool {
+func (s *Store) usageCaptureStable(ctx context.Context, tables ...string) bool {
 	before, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok || ctx.Err() != nil {
 		return false
@@ -23,7 +23,10 @@ func (s *Store) usageCaptureStable(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	for _, table := range append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models") {
+	if len(tables) == 0 {
+		tables = append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models")
+	}
+	for _, table := range tables {
 		if before[table].digest != after[table].digest {
 			return false
 		}

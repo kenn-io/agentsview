@@ -36,12 +36,12 @@ func TestRawProjectionTranscriptsOnlyToolCoverage(t *testing.T) {
 	tx, err := f.runtime.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
-	require.NoError(t, sink.writePayload(t.Context(), tx, "fixture-session", "fixture-group", revision, prepared))
-	prepared.Signals.ToolObservations = []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}}
 	_, err = tx.ExecContext(t.Context(), `INSERT INTO raw_session_groups(group_id,provider,logical_key,base_alias) VALUES('fixture-group','codex','fixture','fixture')`)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(t.Context(), `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES('fixture-session','fixture-group',$1,$2)`, revision, []byte{})
 	require.NoError(t, err)
+	require.NoError(t, sink.writePayload(t.Context(), tx, "fixture-session", "fixture-group", revision, prepared))
+	prepared.Signals.ToolObservations = []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}}
 	changed, err := publishRawRecency(t.Context(), tx, "fixture-session", prepared.Signals)
 	require.NoError(t, err)
 	assert.True(t, changed)

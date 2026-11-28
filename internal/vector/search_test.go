@@ -163,7 +163,7 @@ func TestSearchBuildingOnlyReturnsBuildingError(t *testing.T) {
 	ctx := t.Context()
 	src := threeDocSearchSource()
 
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := fakeGeneration("fake-model")

@@ -363,7 +363,6 @@ func TestSignalsIgnoreToolResultPrompts(t *testing.T) {
 	got := computeSignalsFromMessages(db.Session{MessageCount: 3}, messages)
 	assert.Equal(t, "assistant", got.EndedWithRole)
 	assert.Equal(t, 1, got.QualitySignals.ShortPromptCount)
-	assert.Zero(t, signals.CountFrustrationMarkers(extractHeuristicMessages(messages)))
 	orphan := computeSignalsFromMessages(db.Session{MessageCount: 1}, messages[2:])
 	assert.Empty(t, orphan.EndedWithRole)
 	assert.Zero(t, orphan.QualitySignals.ShortPromptCount)

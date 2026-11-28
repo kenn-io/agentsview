@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -53,7 +52,6 @@ func runSetupTelemetry(ctx context.Context, interval time.Duration, cfg config.C
 		// resumes waking on broadcasts.
 		events := subscribed
 		if err != nil && ctx.Err() == nil {
-			log.Printf("capture setup telemetry: %v", err)
 			events = nil
 		}
 		select {

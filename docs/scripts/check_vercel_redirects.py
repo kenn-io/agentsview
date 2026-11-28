@@ -40,7 +40,6 @@ LEGACY_ROOT_PAGES = [
     "filesystem-sync",
     "pg-sync",
     "hosted-raw-sync",
-    "duckdb",
 ]
 
 PERMANENT: dict[str, str] = {}
@@ -52,6 +51,10 @@ PERMANENT["/assets/generated/:path*"] = "/docs/assets/generated/:path*"
 PERMANENT["/postgresql/"] = "/docs/pg-sync/"
 PERMANENT["/insights/"] = "/docs/recall/"
 PERMANENT["/architecture/"] = "/"
+# Removed pages and their legacy root URLs point at the closest remaining page.
+for _source in ("/duckdb", "/docs/duckdb"):
+    PERMANENT[f"{_source}/"] = "/docs/clickhouse-sync/"
+    PERMANENT[f"{_source}.md"] = "/docs/clickhouse-sync.md"
 
 TEMPORARY = {
     "/install.sh": "https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.sh",

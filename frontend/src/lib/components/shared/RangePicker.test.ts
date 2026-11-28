@@ -95,7 +95,7 @@ describe("RangePicker", () => {
       anchor: "2026-06-17",
     });
     // The old stepper is a month grid now; picking a day moves the anchor.
-    await fireEvent.click(screen.getByRole("button", { name: "Jun 24, 2026" }));
+    await fireEvent.click(screen.getByRole("gridcell", { name: "Wednesday, June 24, 2026" }));
     expect(onSelect).toHaveBeenLastCalledWith({
       mode: "calendar",
       unit: "week",

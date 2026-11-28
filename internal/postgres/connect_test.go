@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,18 @@ func TestOpenContextHonorsCanceledContextBeforeConnecting(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, database)
+}
+
+// CockroachDB has no role connection limit to read, so sizing the pool must
+// not query; this pool has no server to answer a query.
+func TestSizeServePoolSkipsRoleQueryOnCockroach(t *testing.T) {
+	pg, err := sql.Open("pgx", "postgres://127.0.0.1:1/database?sslmode=disable")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, pg.Close()) })
+
+	require.NoError(t, sizeServePool(t.Context(), pg, true))
+
+	assert.Equal(t, servePoolConns, pg.Stats().MaxOpenConnections)
 }
 
 func TestCheckSSL(t *testing.T) {

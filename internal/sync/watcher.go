@@ -116,6 +116,13 @@ type WatcherOptions struct {
 	// MinIntervalOverride, when set, can shorten the minimum interval
 	// between callbacks while the watcher runs.
 	MinIntervalOverride *IntervalOverride
+	// LiveInterval, when positive, is the pace for a client that is waiting.
+	// While MinIntervalOverride holds anything, callbacks start at most this
+	// far apart. It is also the first delay before a failed batch is retried,
+	// doubling per further failure; zero uses the minimum interval. A watcher
+	// whose minimum interval is long because nobody is waiting sets it, so the
+	// pace a client gets comes from this watcher's settings.
+	LiveInterval time.Duration
 }
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
@@ -753,6 +760,7 @@ type Watcher struct {
 	batchDelay         time.Duration
 	minInterval        time.Duration
 	intervalOverride   *IntervalOverride
+	liveInterval       time.Duration
 	maxEntries         int
 	dispatchEnabled    atomic.Bool
 	dispatchMu         sync.Mutex
@@ -770,7 +778,7 @@ type Watcher struct {
 	startErr            error
 	stop                chan struct{}
 	done                chan struct{}
-	flushRequests       chan chan error
+	flushRequests       chan flushRequest
 	backendStopOnce     sync.Once
 	doneOnce            sync.Once
 }
@@ -898,12 +906,13 @@ func newWatcherWithBackendOptions(
 		batchDelay:         batchDelay,
 		minInterval:        minInterval,
 		intervalOverride:   options.MinIntervalOverride,
+		liveInterval:       options.LiveInterval,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
 		rootScopes:         make(map[string][]WatchScope),
 		stop:               make(chan struct{}),
 		done:               make(chan struct{}),
-		flushRequests:      make(chan chan error),
+		flushRequests:      make(chan flushRequest),
 	}
 	if direct, ok := backend.(directEventBackend); ok {
 		direct.bindEventSink(w.eventSink)
@@ -1150,10 +1159,42 @@ func (w *Watcher) OpenDispatch() {
 	w.eventSink.signal()
 }
 
+// PauseDispatch returns a dispatching watcher to collecting. Changes keep
+// accumulating under the usual bounds, a callback already running finishes,
+// and nothing new is delivered until OpenDispatch. A paused watcher starts no
+// timers, so it costs nothing beyond receiving events.
+func (w *Watcher) PauseDispatch() {
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.lifecycle != watcherDispatching {
+		return
+	}
+	w.lifecycle = watcherCollecting
+	w.dispatchEnabled.Store(false)
+}
+
+// flushRequest asks the dispatch loop to sync its fresh work now. With
+// includeRetry, the retained retry goes with it instead of waiting out its
+// backoff.
+type flushRequest struct {
+	result       chan error
+	includeRetry bool
+}
+
 // FlushPending waits for the current callback and a snapshot of fresh work,
 // including backend deliveries already ready when the request is handled.
 // The dispatch loop owns both callbacks; retained retries keep their backoff.
 func (w *Watcher) FlushPending(ctx context.Context) error {
+	return w.flush(ctx, false)
+}
+
+// FlushPendingAndRetry is FlushPending for a caller that asked for a sync
+// now: work that failed and waits for its retry is synced too.
+func (w *Watcher) FlushPendingAndRetry(ctx context.Context) error {
+	return w.flush(ctx, true)
+}
+
+func (w *Watcher) flush(ctx context.Context, includeRetry bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1166,7 +1207,7 @@ func (w *Watcher) FlushPending(ctx context.Context) error {
 		return ctx.Err()
 	case <-w.done:
 		return os.ErrClosed
-	case w.flushRequests <- result:
+	case w.flushRequests <- flushRequest{result: result, includeRetry: includeRetry}:
 	}
 	select {
 	case <-ctx.Done():
@@ -1259,6 +1300,8 @@ func (w *Watcher) loop() {
 	var retryDueAt time.Time
 	dispatchedRetry := false
 	var flush chan error
+	// flushRetry marks a flush batch that carries the retained retry.
+	flushRetry := false
 	minInterval := w.minInterval
 	var intervalChanged <-chan struct{}
 	refreshInterval := func() {
@@ -1268,6 +1311,9 @@ func (w *Watcher) loop() {
 		var override time.Duration
 		override, intervalChanged = w.intervalOverride.Current()
 		minInterval = effectiveInterval(w.minInterval, override)
+		if override > 0 && w.liveInterval > 0 {
+			minInterval = min(minInterval, w.liveInterval)
+		}
 	}
 	refreshInterval()
 	var flushBatch WatchBatch
@@ -1358,7 +1404,7 @@ func (w *Watcher) loop() {
 					w.dispatchMu.Unlock()
 					return
 				}
-				callbackBusy, flushStarted, dispatchedRetry = true, true, false
+				callbackBusy, flushStarted, dispatchedRetry = true, true, flushRetry
 				batches <- flushBatch
 				w.dispatchMu.Unlock()
 			}
@@ -1378,7 +1424,8 @@ func (w *Watcher) loop() {
 		case <-w.stop:
 			return
 
-		case flush = <-requests:
+		case request := <-requests:
+			flush = request.result
 			stopTimer()
 			// A ready backend send can lose the select to this request. Include
 			// the buffered snapshot, or one waiting unbuffered sender, before
@@ -1399,7 +1446,12 @@ func (w *Watcher) loop() {
 					break drainReady
 				}
 			}
-			flushBatch, flushHasBatch = w.eventSink.TakePending(w.agentsForRoot)
+			take := w.eventSink.TakePending
+			flushRetry = request.includeRetry && !w.eventSink.RetryEmpty()
+			if flushRetry {
+				take = w.eventSink.Take
+			}
+			flushBatch, flushHasBatch = take(w.agentsForRoot)
 			firstPendingAt = time.Time{}
 			pendingDelay = w.batchDelay
 			immediatePending = false
@@ -1469,20 +1521,36 @@ func (w *Watcher) loop() {
 				log.Printf("watcher callback: %v", result.err)
 				wasEmpty := w.eventSink.PendingEmpty()
 				olderRetryWaiting := !w.eventSink.RetryEmpty()
+				deferOnly := callbackErrorDeferOnly(result.err)
+				if deferOnly {
+					// Discovery and root reconciliation completed cleanly; only
+					// individual deferred sources remain to retry. Acknowledge
+					// lifecycle tokens so native watch recovery can finish and
+					// release fallback polling.
+					for _, token := range result.batch.lifecycleTokens {
+						token.gate.acknowledgeLifecycle(token.generation)
+					}
+				}
 				retryRetained := false
 				if retry, ok := callbackRetryBatch(result.err); ok {
-					retry.lifecycleTokens = append(
-						[]backendLifecycleToken(nil), result.batch.lifecycleTokens...,
-					)
+					if !deferOnly {
+						retry.lifecycleTokens = append(
+							[]backendLifecycleToken(nil), result.batch.lifecycleTokens...,
+						)
+					}
 					w.eventSink.RetainRetry(retry)
 					retryRetained = true
 				} else {
+					var lifecycleTokens []backendLifecycleToken
+					if !deferOnly {
+						lifecycleTokens = result.batch.lifecycleTokens
+					}
 					switch {
 					case result.batch.FullSync:
 						w.eventSink.RetainRetry(WatchBatch{
 							FullSync:        true,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					case renameBatchNeedsFullRetry(result.batch.Renames):
@@ -1491,14 +1559,14 @@ func (w *Watcher) loop() {
 						w.eventSink.RetainRetry(WatchBatch{
 							FullSync:        true,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					case len(result.batch.ReconcileRoots) > 0:
 						w.eventSink.RetainRetry(WatchBatch{
 							ReconcileRoots:  result.batch.ReconcileRoots,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					}
@@ -1512,8 +1580,12 @@ func (w *Watcher) loop() {
 						w.eventSink.immediatePending()
 					dueAt := time.Now()
 					if !immediatePending {
+						base := w.minInterval
+						if w.liveInterval > 0 {
+							base = w.liveInterval
+						}
 						dueAt = dueAt.Add(watcherRetryDelay(
-							max(w.batchDelay, w.minInterval), consecutiveFailures,
+							max(w.batchDelay, base), consecutiveFailures,
 						))
 					}
 					// A failing fresh batch must not postpone older retained work,
@@ -1600,6 +1672,10 @@ func (w *Watcher) accumulateBackendEvent(event backendEvent) {
 			Path: root, Root: root, Op: backendOpReconcileRootChange,
 		})
 	}
+}
+
+func callbackErrorDeferOnly(err error) bool {
+	return watchBatchDeferOnlyError(err)
 }
 
 func callbackRetryBatch(err error) (WatchBatch, bool) {

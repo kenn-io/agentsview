@@ -146,7 +146,7 @@ export function selectionFromWindow(opts: {
 }
 
 /**
- * Reconstruct a selection for stores that only persist a from/to span (trends,
+ * Reconstruct a selection for stores that only persist a from/to span (such as
  * insights). If the span exactly matches a relative preset's current bounds it
  * shows as that preset (so a default 1y range reads "Last year"). Exact
  * calendar periods show as calendar selections; otherwise it is a custom range.

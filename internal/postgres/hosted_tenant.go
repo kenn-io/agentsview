@@ -68,6 +68,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installHostedCoreUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = migratePricingLayoutPG(ctx, tx); err != nil {
+			return err
+		}
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
@@ -86,6 +89,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = createHostedContentSearchIndexes(ctx, tx); err != nil {
 			return err
 		}
+		if err = backfillHostedAutomationPG(ctx, tx); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, dropUsageChangeJournalSQL); err != nil {
@@ -100,7 +106,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoted); err != nil {
 		return err
 	}
-	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL} {
+	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, rawProjectionDDL, rawLinksDDL} {
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating hosted application schema: %w", err)
 		}
@@ -119,6 +125,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if err = migrateAccountUsageCountersPG(ctx, tx); err != nil {
 		return err
 	}
+	if err = migratePricingLayoutPG(ctx, tx); err != nil {
+		return err
+	}
 	if err = checkDataVersionCompat(ctx, tx); err != nil {
 		return err
 	}
@@ -129,6 +138,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if err = createPartialIndexesPG(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = backfillMessageUsageCountersPG(ctx, tx); err != nil {
 		return err
 	}
 
@@ -159,6 +171,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
+		return err
+	}
+	if err = backfillHostedAutomationPG(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -227,6 +242,13 @@ func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) e
 	for _, t := range hostedTables {
 		expected[t.Name] = true
 	}
+	chunks, err := hostedVectorTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range chunks {
+		expected[table.Name] = true
+	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)
 	if err != nil {
 		return err
@@ -258,7 +280,11 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
-	for _, table := range hostedTables {
+	chunks, err := hostedVectorTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range append(append([]HostedTable(nil), hostedTables...), chunks...) {
 		var good bool
 		err := q.QueryRowContext(ctx, `SELECT c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity
    AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnotnull AND a.atttypid='text'::regtype)

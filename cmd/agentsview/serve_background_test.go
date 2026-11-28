@@ -859,23 +859,27 @@ func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	writer := newStartupStateWriter(dir, time.Now)
+	// Each snapshot gets a strictly later UpdatedAt regardless of the
+	// platform's wall-clock resolution.
+	base := time.Now()
+	var ticks time.Duration
+	writer := newStartupStateWriter(dir, func() time.Time {
+		ticks += time.Millisecond
+		return base.Add(ticks)
+	})
 	writer.SetPhase("initial sync")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				writer.SetPhase("initial sync " + now.String())
-			}
-		}
-	}()
-	defer func() { cancel(); <-done }()
+	// The starting daemon publishes progress before every probe. Writing from
+	// the probe hook keeps the writer and the wait in lockstep: a goroutine
+	// writing on its own ticker shares this process's scheduler, so a stall
+	// longer than the inactivity limit would freeze both and end the wait
+	// even though progress never stopped.
+	var probes int
+	old := backgroundServeProbeHook
+	backgroundServeProbeHook = func() {
+		probes++
+		writer.SetPhase("initial sync " + strconv.Itoa(probes))
+	}
+	t.Cleanup(func() { backgroundServeProbeHook = old })
 	output := captureStderr(t, func() {
 		_, waited, err := waitForExternalServeStartup(ctx, dir, "", 500*time.Millisecond) //nolint:kennlint // deadlinetest: absence check; continuing startup progress must keep the inactivity deadline from ending the wait
 		assert.True(t, waited)
@@ -1211,6 +1215,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	_, err = WriteDaemonRuntime(dir, host, port, version, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	UnmarkDaemonStarting(dir)
 
 	select {
 	case err := <-errCh:
@@ -1260,6 +1265,7 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 						_, err := WriteDaemonRuntime(dir, host, port, version, false)
 						require.NoError(t, err)
 						t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+						UnmarkDaemonStarting(dir)
 					}
 				},
 			},
@@ -1317,6 +1323,90 @@ func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, port, rt.Port)
+}
+
+func TestWaitForBackgroundServeReadyWaitsForStartLockRelease(t *testing.T) {
+	for _, attached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attached-%t", attached), func(t *testing.T) {
+			setStartProbeTickForTest(t, 10*time.Millisecond)
+			dir := runtimeTestDir(t)
+			host, port := testPingServer(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			_, err := WriteDaemonRuntime(dir, host, port, version, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+			type waitResult struct {
+				rt  *DaemonRuntime
+				err error
+			}
+			polled := make(chan struct{}, 1)
+			done := make(chan waitResult, 1)
+			go func() {
+				rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+					t.Context(), dir, "", make(chan error), 5*time.Second,
+					backgroundServeReadyWaitPolicy{
+						Attached: attached,
+						Observe: func(*startupState, time.Duration) {
+							select {
+							case polled <- struct{}{}:
+							default:
+							}
+						},
+					},
+				)
+				done <- waitResult{rt: rt, err: waitErr}
+			}()
+
+			select {
+			case res := <-done:
+				require.FailNowf(
+					t,
+					"readiness wait returned while start lock was still held",
+					"rt=%v err=%v", res.rt, res.err,
+				)
+			case <-polled:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "readiness wait did not poll while start lock was held")
+			}
+
+			UnmarkDaemonStarting(dir)
+
+			select {
+			case res := <-done:
+				require.NoError(t, res.err)
+				require.NotNil(t, res.rt)
+				assert.Equal(t, port, res.rt.Port)
+				assert.False(t, IsDaemonStarting(dir))
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "readiness wait did not return after start lock released")
+			}
+		})
+	}
+
+	t.Run("timeout reprobe respects held start lock", func(t *testing.T) {
+		host, port := testPingServer(t)
+		synctest.Test(t, func(t *testing.T) {
+			setStartProbeTickForTest(t, time.Second)
+			dir := runtimeTestDir(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+			rt, err := waitForBackgroundServeReadyWithPolicy(
+				t.Context(), dir, "", make(chan error), 20*time.Millisecond,
+				backgroundServeReadyWaitPolicy{
+					Observe: func(*startupState, time.Duration) {
+						_, writeErr := WriteDaemonRuntime(dir, host, port, version, false)
+						require.NoError(t, writeErr)
+					},
+				},
+			)
+			t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+			require.NoError(t, err)
+			assert.Nil(t, rt)
+		})
+	})
 }
 
 func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.T) {
@@ -2898,8 +2988,15 @@ func TestBackgroundServeFailureIncludesCurrentLaunchOutput(t *testing.T) {
 					"-test.run=^TestBackgroundServeFailureIncludesCurrentLaunchOutput$")
 				child.Env = append(os.Environ(), childEnv+"=1")
 				child.Stderr = logFile
-				err = child.Start()
-				return child, logPath, err
+				stdout, err := child.StdoutPipe()
+				require.NoError(t, err)
+				require.NoError(t, child.Start())
+				// EOF means the helper has exited and written its error. Wait here
+				// so process startup cannot race the caller's readiness timeout.
+				// The caller still owns child.Wait and collects the exit error.
+				_, err = io.Copy(io.Discard, stdout)
+				require.NoError(t, err)
+				return child, logPath, nil
 			}
 			oldEnsure, oldRun := startServeBackgroundProcessForEnsure, startServeBackgroundProcessForRun
 			startServeBackgroundProcessForEnsure, startServeBackgroundProcessForRun = start, start

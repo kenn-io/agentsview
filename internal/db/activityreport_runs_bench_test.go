@@ -118,11 +118,9 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 		d.activityMemo.mu.Lock()
 		defer d.activityMemo.mu.Unlock()
 		for _, id := range ids[:10] {
-			for key, element := range d.activityMemo.entries {
+			for _, key := range d.activityMemo.keys() {
 				if key.id == id {
-					d.activityMemo.bytes -= element.Value.(activityMemoEntry).bytes()
-					d.activityMemo.order.Remove(element)
-					delete(d.activityMemo.entries, key)
+					d.activityMemo.remove(key)
 				}
 			}
 		}
@@ -136,7 +134,7 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 			_, _, err := d.activityReportRuns(ctx, ids, q)
 			require.NoError(b, err)
 		}
-		require.Len(b, d.activityMemo.entries, sessions)
+		require.Equal(b, sessions, d.activityMemo.Len())
 		b.ReportMetric(float64(d.activityMemo.bytes)/(1<<20), "memo-MiB")
 	})
 	b.Run("after/refresh-runs", func(b *testing.B) {

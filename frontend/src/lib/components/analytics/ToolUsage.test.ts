@@ -129,11 +129,11 @@ describe("ToolUsage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("No tool usage data");
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
 
     analytics.errors.tools = "request failed";
     await tick();
-    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".load-error")).not.toBeNull();
     expect(document.body.textContent).toContain("No tool usage data");
     analytics.tools = null;
     await tick();

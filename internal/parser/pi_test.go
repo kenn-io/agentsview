@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1524,4 +1525,292 @@ func TestPiParserReasoningEffort(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+const piSkillTestHeader = `{"type":"session","version":3,"id":"skill-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`
+
+type piWantMessage struct {
+	Role             RoleType
+	Content          string
+	IsSystem         bool
+	SourceType       string
+	SourceSubtype    string
+	SourceUUID       string
+	SourceParentUUID string
+}
+
+func TestParsePiSession_SkillExpansion(t *testing.T) {
+	skillRow := func(uuid, parent, name, content string) piWantMessage {
+		return piWantMessage{
+			Role: RoleUser, Content: "[Skill: " + name + "]\n" + content + "\n[/Skill]",
+			IsSystem: true, SourceType: "system", SourceSubtype: "skill_invocation",
+			SourceUUID: uuid, SourceParentUUID: parent,
+		}
+	}
+	userRow := func(content, uuid, parent string) piWantMessage {
+		return piWantMessage{
+			Role: RoleUser, Content: content, SourceType: "user",
+			SourceUUID: uuid, SourceParentUUID: parent,
+		}
+	}
+	assistantRow := func(uuid, parent string) piWantMessage {
+		return piWantMessage{
+			Role: RoleAssistant, Content: "ok", SourceType: "assistant",
+			SourceUUID: uuid, SourceParentUUID: parent,
+		}
+	}
+
+	const (
+		skillTag  = `<skill name=\"review\" location=\"/skills/review/SKILL.md\">\nReferences are relative to /skills/review.\n\nCheck the diff.\n</skill>`
+		skillBody = "References are relative to /skills/review.\n\nCheck the diff."
+		assistant = `{"type":"message","id":"a1","parentId":"u1","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"ok"}}`
+	)
+
+	tests := []struct {
+		name          string
+		entries       []string
+		want          []piWantMessage
+		wantFirst     string
+		wantUserCount int
+	}{
+		{
+			name: "string content with args",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `\n\nplease look at main.go"}}`,
+				assistant,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("please look at main.go", "u1", "u1:skill"),
+				assistantRow("a1", "u1"),
+			},
+			wantFirst:     "please look at main.go",
+			wantUserCount: 1,
+		},
+		{
+			name: "text blocks with args are trimmed",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"` + skillTag + `\n\n  spaced args \n"}]}}`,
+				assistant,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("spaced args", "u1", "u1:skill"),
+				assistantRow("a1", "u1"),
+			},
+			wantFirst:     "spaced args",
+			wantUserCount: 1,
+		},
+		{
+			name: "bare skill as string gets a typed-command user row",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `"}}`,
+				assistant,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("/skill:review", "u1", "u1:skill"),
+				assistantRow("a1", "u1"),
+			},
+			wantFirst:     "/skill:review",
+			wantUserCount: 1,
+		},
+		{
+			name: "bare skill as text blocks",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"` + skillTag + `"}]}}`,
+				assistant,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("/skill:review", "u1", "u1:skill"),
+				assistantRow("a1", "u1"),
+			},
+			wantFirst:     "/skill:review",
+			wantUserCount: 1,
+		},
+		{
+			name: "whitespace-only args are treated as bare",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `\n\n  \n"}}`,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("/skill:review", "u1", "u1:skill"),
+			},
+			wantFirst:     "/skill:review",
+			wantUserCount: 1,
+		},
+		{
+			name: "bare skill's typed-command row stays first_message ahead of a later user message",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `"}}`,
+				assistant,
+				`{"type":"message","id":"u2","parentId":"a1","timestamp":"2025-01-01T10:00:03Z","message":{"role":"user","content":"thanks"}}`,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", skillBody),
+				userRow("/skill:review", "u1", "u1:skill"),
+				assistantRow("a1", "u1"),
+				userRow("thanks", "u2", "a1"),
+			},
+			wantFirst:     "/skill:review",
+			wantUserCount: 2,
+		},
+		{
+			name: "plain user message before a skill still wins first_message",
+			entries: []string{
+				`{"type":"message","id":"u0","parentId":null,"timestamp":"2025-01-01T10:00:00Z","message":{"role":"user","content":"hello"}}`,
+				`{"type":"message","id":"u1","parentId":"u0","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `\n\nrun it"}}`,
+			},
+			want: []piWantMessage{
+				userRow("hello", "u0", ""),
+				skillRow("u1:skill", "u0", "review", skillBody),
+				userRow("run it", "u1", "u1:skill"),
+			},
+			wantFirst:     "hello",
+			wantUserCount: 2,
+		},
+		{
+			name: "entries without ids keep empty uuids",
+			entries: []string{
+				`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"` + skillTag + `\n\nargs here"}}`,
+			},
+			want: []piWantMessage{
+				skillRow("", "", "review", skillBody),
+				userRow("args here", "", ""),
+			},
+			wantFirst:     "args here",
+			wantUserCount: 1,
+		},
+		{
+			name: "skill tag not at start is a single user message",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"hi ` + skillTag + `"}}`,
+			},
+			want: []piWantMessage{
+				userRow("hi "+"<skill name=\"review\" location=\"/skills/review/SKILL.md\">\nReferences are relative to /skills/review.\n\nCheck the diff.\n</skill>", "u1", ""),
+			},
+			wantFirst:     "hi <skill name=\"review\" location=\"/skills/review/SKILL.md\"> References are relative to /skills/review.  Check the diff. </skill>",
+			wantUserCount: 1,
+		},
+		{
+			name: "missing location attribute is a single user message",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"review\">\nbody\n</skill>"}}`,
+			},
+			want: []piWantMessage{
+				userRow("<skill name=\"review\">\nbody\n</skill>", "u1", ""),
+			},
+			wantFirst:     "<skill name=\"review\"> body </skill>",
+			wantUserCount: 1,
+		},
+		{
+			name: "wrong attribute order is a single user message",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill location=\"/p\" name=\"review\">\nbody\n</skill>"}}`,
+			},
+			want: []piWantMessage{
+				userRow("<skill location=\"/p\" name=\"review\">\nbody\n</skill>", "u1", ""),
+			},
+			wantFirst:     "<skill location=\"/p\" name=\"review\"> body </skill>",
+			wantUserCount: 1,
+		},
+		{
+			name: "body without newline before closing tag is a single user message",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"review\" location=\"/p\">\nbody</skill>"}}`,
+			},
+			want: []piWantMessage{
+				userRow("<skill name=\"review\" location=\"/p\">\nbody</skill>", "u1", ""),
+			},
+			wantFirst:     "<skill name=\"review\" location=\"/p\"> body</skill>",
+			wantUserCount: 1,
+		},
+		{
+			name: "text blocks that only match when joined are not split per block",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"<skill name=\"review\" location=\"/p\">"},{"type":"text","text":"body\n</skill>"}]}}`,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "review", "body"),
+				userRow("/skill:review", "u1", "u1:skill"),
+			},
+			wantFirst:     "/skill:review",
+			wantUserCount: 1,
+		},
+		{
+			name: "closing tag inside a fenced block splits where Pi's lazy regex does",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"fence\" location=\"/p\">\nRefs.\n\n` + "```" + `\n</skill>\n\ninside\n` + "```" + `\n</skill>\n\nargs"}}`,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "fence", "Refs.\n\n```"),
+				userRow("inside\n```\n</skill>\n\nargs", "u1", "u1:skill"),
+			},
+			wantFirst:     "inside ``` </skill>  args",
+			wantUserCount: 1,
+		},
+		{
+			name: "closing tag inside a fenced block without trailing text backtracks to the real end",
+			entries: []string{
+				`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"fence\" location=\"/p\">\nRefs.\n\n` + "```" + `\n</skill>\n` + "```" + `\n</skill>"}}`,
+			},
+			want: []piWantMessage{
+				skillRow("u1:skill", "", "fence", "Refs.\n\n```\n</skill>\n```"),
+				userRow("/skill:fence", "u1", "u1:skill"),
+			},
+			wantFirst:     "/skill:fence",
+			wantUserCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := piSkillTestHeader + "\n" + strings.Join(tt.entries, "\n") + "\n"
+			sess, msgs := runPiParserTest(t, content)
+
+			require.Len(t, msgs, len(tt.want))
+			for i, want := range tt.want {
+				got := msgs[i]
+				assert.Equal(t, i, got.Ordinal, "ordinal %d", i)
+				assert.Equal(t, want.Role, got.Role, "role %d", i)
+				assert.Equal(t, want.Content, got.Content, "content %d", i)
+				assert.Equal(t, want.IsSystem, got.IsSystem, "is_system %d", i)
+				assert.Equal(t, want.SourceType, got.SourceType, "source_type %d", i)
+				assert.Equal(t, want.SourceSubtype, got.SourceSubtype, "source_subtype %d", i)
+				assert.Equal(t, want.SourceUUID, got.SourceUUID, "source_uuid %d", i)
+				assert.Equal(t, want.SourceParentUUID, got.SourceParentUUID, "source_parent_uuid %d", i)
+			}
+			assert.Equal(t, tt.wantFirst, sess.FirstMessage)
+			assert.Equal(t, tt.wantUserCount, sess.UserMessageCount)
+		})
+	}
+}
+
+func TestParsePiSession_SkillExpansionKeepsTimestamp(t *testing.T) {
+	content := piSkillTestHeader + "\n" +
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"s\" location=\"/p\">\nbody\n</skill>\n\nargs"}}` + "\n"
+	_, msgs := runPiParserTest(t, content)
+
+	require.Len(t, msgs, 2)
+	want := time.Date(2025, 1, 1, 10, 0, 1, 0, time.UTC)
+	assert.True(t, want.Equal(msgs[0].Timestamp), "skill row timestamp %v", msgs[0].Timestamp)
+	assert.True(t, want.Equal(msgs[1].Timestamp), "user row timestamp %v", msgs[1].Timestamp)
+}
+
+func TestParsePiSession_SkillTagOutsideUserMessageIsUntouched(t *testing.T) {
+	tag := `<skill name=\"s\" location=\"/p\">\nbody\n</skill>`
+	content := piSkillTestHeader + "\n" +
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"go"}}` + "\n" +
+		`{"type":"message","id":"a1","parentId":"u1","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"` + tag + `"}}` + "\n" +
+		`{"type":"message","id":"t1","parentId":"a1","timestamp":"2025-01-01T10:00:03Z","message":{"role":"toolResult","toolCallId":"c1","content":"` + tag + `"}}` + "\n"
+	_, msgs := runPiParserTest(t, content)
+
+	require.Len(t, msgs, 3)
+	for _, m := range msgs {
+		assert.False(t, m.IsSystem)
+		assert.Empty(t, m.SourceSubtype)
+	}
+	assert.Contains(t, msgs[1].Content, "<skill name=\"s\"")
 }

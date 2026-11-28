@@ -301,7 +301,6 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 	// drains the deferred recompute during cleanup.
 	engine.signalSched.mu.Lock()
 	engine.signalSched.interval = time.Hour
-	engine.signalSched.quiet = time.Hour
 	engine.signalSched.mu.Unlock()
 
 	// Pre-build the appended lines: constructing Claude JSONL via

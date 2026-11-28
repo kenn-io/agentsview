@@ -4,6 +4,7 @@ import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
+import { router } from "../../stores/router.svelte.js";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import MessageContent from "./MessageContent.svelte";
 
@@ -16,14 +17,17 @@ const state = vi.hoisted(() => ({
   view: (row: Session) => row,
   activeSession: null as Session | null,
   readOnly: false,
+  isDesktop: false,
   remote: false,
   searching: false,
+  hostSessionActionsAvailable: true,
 }));
 vi.mock("../../stores/messages.svelte.js", () => ({ messages: { sessionId: "", mainModel: "" } }));
 const uiState = vi.hoisted(() => {
   const hidden = new Set<string>();
   return {
     hidden,
+    alwaysShowYear: false,
     isBlockVisible: (type: string) => !hidden.has(type),
     hideBlock: (type: string) => hidden.add(type),
     showAllBlocks: () => hidden.clear(),
@@ -62,6 +66,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => ({
   SessionsService: { postApiV1SessionsByIdResume: forkMock },
 }));
 vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
+vi.mock("@kenn-io/kit-ui/utils/clipboard", () => ({ copyToClipboard: copyMock }));
 vi.mock("@kenn-io/kit-ui/utils/markdown-mermaid", () => ({
   mermaidCodeFence: (code: string, lang: string) => {
     if (lang !== "mermaid") return undefined;
@@ -159,11 +164,76 @@ afterEach(async () => {
   state.activeSession = null;
   state.readOnly = false;
   state.remote = false;
+  state.isDesktop = false;
+  localStorage.removeItem("agentsview-server-url");
   state.searching = false;
+  state.hostSessionActionsAvailable = true;
   uiState.showAllBlocks();
+  uiState.alwaysShowYear = false;
 });
 
 describe("MessageContent", () => {
+  it("copies a message link without the current session filters", async () => {
+    router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
+    try {
+      await render(message({ session_id: "session-1", ordinal: 7 }));
+      await click('[aria-label="Copy link to message"]');
+      expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+    } finally {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  });
+
+  it("copies a browser link under the configured base path", async () => {
+    const base = document.createElement("base");
+    base.href = "/app/";
+    document.head.appendChild(base);
+    try {
+      await render(message({ session_id: "session-1", ordinal: 7 }));
+      await click('[aria-label="Copy link to message"]');
+      expect(copyMock).toHaveBeenCalledWith(
+        `${window.location.origin}/app/sessions/session-1?msg=7`,
+      );
+    } finally {
+      base.remove();
+    }
+  });
+
+  it("copies a local desktop deep link", async () => {
+    state.isDesktop = true;
+    await render(message({ session_id: "codex:session-1", ordinal: 7 }));
+    await click('[aria-label="Copy link to message"]');
+    expect(copyMock).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
+  });
+
+  it("copies a link to the selected remote server", async () => {
+    state.isDesktop = true;
+    localStorage.setItem("agentsview-server-url", "https://example.org/archive/");
+    const base = document.createElement("base");
+    base.href = "/desktop/";
+    document.head.appendChild(base);
+    try {
+      await render(message({ session_id: "session-1", ordinal: 7 }));
+      await click('[aria-label="Copy link to message"]');
+      expect(copyMock).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
+    } finally {
+      base.remove();
+    }
+  });
+
+  it("offers message links when mutations are disabled", async () => {
+    await render(message({ ordinal: 7 }), { allowMutations: false });
+    await click('[aria-label="Copy link to message"]');
+    expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
+  });
+
+  it("shows the year in message timestamps when enabled", async () => {
+    uiState.alwaysShowYear = true;
+    await render(message());
+    expect(text(".timestamp")).toContain("2026");
+  });
+
   it("shows pin success only after persistence", async () => {
     let resolve!: (saved: boolean) => void;
     pinMock.mockReturnValueOnce(
@@ -443,6 +513,12 @@ describe("MessageContent", () => {
       expect(text(".fork-feedback")).not.toBe("");
     },
   );
+  it("hides message-point resume when host actions are unavailable", async () => {
+    state.hostSessionActionsAvailable = false;
+    state.sessions = [session()];
+    await render(message({ ordinal: 1 }));
+    expect(document.querySelector(".fork-btn")).toBeNull();
+  });
   it("hides forking in remote read-only mode", async () => {
     state.readOnly = true;
     state.remote = true;

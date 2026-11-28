@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -372,6 +372,44 @@ func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 	assert.Zero(t, withActive.ExcludedActive)
 }
 
+func TestSearchSessions_EmptyActiveHint(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("FTS not available")
+	}
+	seedFTSSession(t, d, "active-1", "proj", "shared needle", "2024-06-15T11:55:00Z")
+	seedFTSSession(t, d, "active-2", "proj", "shared needle", "2024-06-15T11:56:00Z")
+	seedFTSSession(t, d, "other", "other", "shared needle", "2024-06-15T11:57:00Z")
+
+	in := searchSessionsIn{Query: "needle", Project: "proj"}
+	out := mustSearch(t, ts, in)
+	assert.Empty(t, out.Results)
+	assert.Equal(t, 2, out.ExcludedActive)
+	assert.Equal(t, []service.ContentSearchHint{{
+		Code: "excluded_active", Message: "Sessions active in the last 10 minutes hidden from this page: 2. " +
+			"Retry this request with include_active: true to see them; they may include your current conversation.",
+		RetryWith: map[string]any{"include_active": true},
+	}}, out.Hints)
+
+	noMatch := mustSearch(t, ts, searchSessionsIn{Query: "absent"})
+	assert.Empty(t, noMatch.Results)
+	assert.Empty(t, noMatch.Hints)
+
+	seedFTSSession(t, d, "older", "proj", "pageexample", "2024-06-15T11:00:00Z")
+	seedFTSSession(t, d, "recent", "proj", "pageexample", "2024-06-15T11:55:00Z")
+	mixed := mustSearch(t, ts, searchSessionsIn{Query: "pageexample"})
+	assert.Len(t, mixed.Results, 1)
+	assert.Equal(t, 1, mixed.ExcludedActive)
+	assert.Empty(t, mixed.Hints)
+	page := mustSearch(t, ts, searchSessionsIn{Query: "pageexample", Sort: "recency", Limit: 1})
+	assert.Empty(t, page.Results)
+	require.NotNil(t, page.NextCursor)
+	require.Len(t, page.Hints, 1)
+	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. "+
+		"Retry this request with include_active: true to see them; they may include your current conversation. "+
+		"To see later matches without including active sessions, pass next_cursor as cursor.", page.Hints[0].Message)
+}
+
 func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOut {
 	t.Helper()
 	_, out, err := ts.searchSessions(t.Context(), nil, in)
@@ -589,30 +627,58 @@ func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
 	assert.Equal(t, 2, *third.NextFrom)
 }
 
-func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
+func TestGetMessages_BodyCursorSplitsMessageOverBudget(t *testing.T) {
 	ts, d := newTestToolset(t)
 	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
 	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
 		dbtest.UserMsg("oversized", 0, body),
 	}, dbtest.WithMessageCounts(1, 1))
 
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage,
-	})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	assert.Equal(t, maxMaxCharsPerMessage, utf8.RuneCountInString(first.Messages[0].Content))
-	assert.Equal(t, maxMaxCharsPerMessage+5, first.Messages[0].FullLength)
-	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	in := getMessagesIn{SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage}
+	var got strings.Builder
+	for i := 0; ; i++ {
+		require.Less(t, i, len(body), "body continuation did not end")
+		_, out, err := ts.getMessages(t.Context(), nil, in)
+		require.NoError(t, err)
+		require.Len(t, out.Messages, 1)
+		assert.True(t, fitsResponse(out))
+		if in.BodyCursor == "" {
+			assert.Equal(t, maxMaxCharsPerMessage+5, out.Messages[0].FullLength)
+			assert.True(t, out.Messages[0].Truncated)
+		}
+		got.WriteString(out.Messages[0].Content)
+		in.BodyCursor = out.Messages[0].BodyCursor
+		if in.BodyCursor == "" {
+			break
+		}
+	}
+	assert.Equal(t, body, got.String())
+}
 
-	_, rest, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "oversized", BodyCursor: first.Messages[0].BodyCursor,
-		MaxCharsPerMessage: maxMaxCharsPerMessage,
-	})
+func TestGetMessages_AroundBodyCursorSplitsMessageOverBudget(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
+	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
+		dbtest.UserMsg("oversized", 0, body),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	anchor := 0
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "oversized", Around: &anchor, MaxCharsPerMessage: maxMaxCharsPerMessage})
 	require.NoError(t, err)
-	require.Len(t, rest.Messages, 1)
-	assert.Equal(t, strings.Repeat("界", 5), rest.Messages[0].Content)
-	assert.False(t, rest.Messages[0].Truncated)
+	require.Len(t, out.Messages, 1)
+	assert.True(t, fitsResponse(out))
+	require.NotEmpty(t, out.Messages[0].BodyCursor)
+	var got strings.Builder
+	got.WriteString(out.Messages[0].Content)
+	for i, cursor := 0, out.Messages[0].BodyCursor; cursor != ""; i++ {
+		require.Less(t, i, len(body), "body continuation did not end")
+		_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "oversized", BodyCursor: cursor, MaxCharsPerMessage: maxMaxCharsPerMessage})
+		require.NoError(t, err)
+		require.Len(t, next.Messages, 1)
+		got.WriteString(next.Messages[0].Content)
+		cursor = next.Messages[0].BodyCursor
+	}
+	assert.Equal(t, body, got.String())
 }
 
 func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
@@ -634,6 +700,68 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
 		MaxCharsPerMessage: 4,
 	})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+func TestGetMessages_RevisionDoesNotSwitchHostCopy(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "codex:uuid", "proj", []db.Message{
+		dbtest.UserMsg("codex:uuid", 0, "original message"),
+	}, dbtest.WithMessageCounts(1, 1))
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid"})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.TranscriptRevision)
+	original, err := d.GetSession(t.Context(), "codex:uuid")
+	require.NoError(t, err)
+	t.Run("matching revisions", func(t *testing.T) {
+		_, continuation, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
+		require.NoError(t, err)
+		require.Len(t, continuation.Messages, 1)
+		require.Equal(t, "original message", continuation.Messages[0].Content)
+		_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", ExpectedRevision: *original.TranscriptRevision})
+		require.NoError(t, err)
+	})
+	dbtest.SeedSessionWithMessages(t, d, "host~codex:uuid", "proj", []db.Message{
+		dbtest.UserMsg("host~codex:uuid", 0, "other host message"),
+	}, dbtest.WithMessageCounts(1, 1))
+	t.Run("body cursor with sibling", func(t *testing.T) {
+		_, truncated, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", MaxCharsPerMessage: 4})
+		require.NoError(t, err)
+		require.Len(t, truncated.Messages, 1)
+		_, chunk, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", BodyCursor: truncated.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
+		require.NoError(t, err)
+		require.Len(t, chunk.Messages, 1)
+		require.Equal(t, "inal", chunk.Messages[0].Content)
+	})
+	sibling, err := d.GetSession(t.Context(), "host~codex:uuid")
+	require.NoError(t, err)
+	// Equal revisions ensure a counter comparison alone cannot reject the sibling.
+	require.Equal(t, original.TranscriptRevision, sibling.TranscriptRevision)
+	require.NoError(t, d.DeleteSession(t.Context(), "codex:uuid"))
+	t.Run("bound revision after delete", func(t *testing.T) {
+		_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
+		require.ErrorIs(t, err, service.ErrSourceChanged)
+	})
+	t.Run("unbound revision after delete", func(t *testing.T) {
+		for _, id := range []string{"uuid", "codex:uuid"} {
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, ExpectedRevision: *original.TranscriptRevision})
+			assert.ErrorIs(t, err, service.ErrSourceChanged)
+		}
+	})
+}
+
+func TestGetMessages_ContinuationRejectsDeletedSession(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "codex:body", "proj", []db.Message{
+		dbtest.UserMsg("codex:body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.TranscriptRevision)
+	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", ExpectedRevision: first.TranscriptRevision})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
@@ -1294,10 +1422,10 @@ func TestServer_EndToEnd(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	assert.ElementsMatch(t, []string{
-		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
-		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
+		ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview,
+		ToolGetMessages, ToolGetCompactionSummaries, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
-		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
+		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolGetTermTrends, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
 	}, names)
 
@@ -1322,11 +1450,16 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/sessions" {
+			assert.Equal(t, "one-shot", query.Get("ids"))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"one-shot","agent":"pi","user_message_count":1}]}`))
+			return
+		}
 		requests = append(requests, r.URL.RawQuery)
 		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
 		assert.Equal(t, "substring", query.Get("mode"))
 		assert.Equal(t, "pi", query.Get("agent"))
-		w.Header().Set("Content-Type", "application/json")
 		if query.Get("include_one_shot") == "true" {
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"one-shot","agent":"pi","location":"message","role":"user","ordinal":0,"timestamp":"2024-06-15T10:00:00Z","snippet":"wire one-shot marker","ordinal_range":[0,0]}]}`))
 			return
@@ -1435,13 +1568,19 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 // fakeContentSearchService captures the first ContentSearchRequest a tool builds
 // and returns a canned result or error, so semantic-mode passthrough and
 // context-mapping can be asserted without a full backend. Unused methods
-// fall through to the embedded nil interface (never called by searchContent
-// when IncludeActive is set, which skips the session-activity lookup).
+// fall through to the embedded nil interface.
 type fakeContentSearchService struct {
 	service.SessionService
 	lastReq service.ContentSearchRequest
 	result  *service.ContentSearchResult
 	err     error
+}
+
+func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
+	if id == "child" || id == "older" || id == "current" {
+		return &service.SessionDetail{ID: id}, nil
+	}
+	return nil, fmt.Errorf("unexpected session lookup: %s", id)
 }
 
 func (f *fakeContentSearchService) SearchContent(
@@ -1581,30 +1720,182 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 		{Concept: "auth model", Ordinal: 4, OrdinalRange: [2]int{3, 5}, Score: 0.7},
 		{Concept: "retry policy", Ordinal: 12, OrdinalRange: [2]int{11, 13}, Score: 0.9},
 	}
-	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
-		Matches: []db.ContentMatch{{
-			SessionID: "both", Location: "message", Ordinal: 4,
-			OrdinalRange: [2]int{3, 5}, Score: new(0.8), ConceptEvidence: evidence,
-		}},
-		CandidateTruncated: true,
-	}}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Concepts: []string{"auth model", "retry policy"}, Scope: "top",
-		IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
-	assert.Equal(t, "top", fake.lastReq.Scope)
-	assert.Equal(t, "semantic", out.EffectiveMode)
-	assert.Equal(t, "top", out.EffectiveScope)
-	assert.True(t, out.CandidateTruncated)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
+	for _, mode := range []string{"substring", "hybrid", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+				Matches: []db.ContentMatch{{
+					SessionID: "both", Location: "message", Ordinal: 4,
+					OrdinalRange: [2]int{3, 5}, Score: new(0.8), ConceptEvidence: evidence,
+				}},
+				CandidateTruncated: true,
+			}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+				Concepts: []string{"auth model", "retry policy"}, Mode: mode, Scope: "top", IncludeActive: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
+			assert.Equal(t, "semantic", fake.lastReq.Mode)
+			assert.Equal(t, "top", fake.lastReq.Scope)
+			assert.Equal(t, "semantic", out.EffectiveMode)
+			assert.Equal(t, "top", out.EffectiveScope)
+			assert.True(t, out.CandidateTruncated)
+			require.Len(t, out.Matches, 1)
+			assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
+		})
+	}
 }
 
-func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
+type listingMessageSpy struct {
+	service.SessionService
+	filters []service.MessageFilter
+	err     error
+}
+
+type listingHTTPService struct {
+	service.SessionService
+	search service.SessionService
+}
+
+func (s *listingHTTPService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return s.search.SearchContent(ctx, req)
+}
+
+func (s *listingHTTPService) Messages(ctx context.Context, id string, filter service.MessageFilter) (*service.MessageList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &service.MessageList{Messages: []db.Message{{SessionID: id, Ordinal: *filter.From, Content: "hello"}}}, nil
+}
+
+func TestSearchContentListingUsesHTTPDeadline(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	for _, tc := range []struct {
+		name     string
+		deadline bool
+	}{
+		{"SQLite deadline", true},
+		{"replica without deadline", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if tc.deadline {
+					w.Header().Set(db.ContentScanDeadlineHeader, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano))
+				}
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"session-a","ordinal":0}]}`))
+			}))
+			t.Cleanup(daemon.Close)
+			svc := &listingHTTPService{SessionService: ts.svc, search: servicehttp.NewHTTPBackend(daemon.URL, "", false, "")}
+			tool := &toolset{svc: svc, now: ts.now}
+			_, out, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			if tc.deadline {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				require.NoError(t, err)
+				require.Len(t, out.Matches, 1)
+				assert.Equal(t, "hello", out.Matches[0].Snippet)
+			}
+		})
+	}
+}
+
+func (s *listingMessageSpy) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
+	s.filters = append(s.filters, f)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.SessionService.Messages(ctx, id, f)
+}
+
+func TestSearchContentListingMessageError(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	otherErr := errors.New("message read failed")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadline", context.DeadlineExceeded},
+		{"other", otherErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &listingMessageSpy{SessionService: ts.svc, err: tc.err}
+			tool := &toolset{svc: spy, now: ts.now}
+			_, _, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			require.ErrorIs(t, err, tc.err)
+			require.NotEmpty(t, spy.filters)
+			if tc.name == "deadline" {
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				assert.Equal(t, otherErr, err)
+			}
+		})
+	}
+}
+
+func TestSearchContent_ListSessionMessages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	spy := &listingMessageSpy{SessionService: ts.svc}
+	ts.svc = spy
+	dbtest.SeedSession(t, d, "child", "project-a", func(s *db.Session) {
+		s.MessageCount = 4
+		s.UserMessageCount = 1
+		s.EndedAt = new("2024-06-15T11:59:00Z")
+		s.ParentSessionID = new("parent")
+		s.RelationshipType = "subagent"
+	})
+	key := "AKIA" + "7QHWN2DKR4FYPLJM"
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("child", 0, "first "+key+" "+strings.Repeat("x", 100)),
+		{SessionID: "child", Ordinal: 1, Role: "assistant", Content: "inspect the failure", ContentLength: len("inspect the failure")},
+		{
+			SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
+			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}},
+		},
+		{SessionID: "child", Ordinal: 3, Role: "assistant", ThinkingText: "check the log", ContentLength: len("check the log"), HasThinking: true},
+	}))
+	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, first.Matches, 2)
+	assert.Equal(t, 0, first.Matches[0].Ordinal)
+	assert.NotContains(t, first.Matches[0].Snippet, key)
+	assert.True(t, strings.HasSuffix(first.Matches[0].Snippet, "..."))
+	assert.Equal(t, 1, first.Matches[1].Ordinal)
+	assert.Equal(t, "inspect the failure", first.Matches[1].Snippet)
+	assert.True(t, first.Matches[0].Subordinate)
+	assert.Equal(t, "regex", first.EffectiveMode)
+	require.NotEmpty(t, spy.filters)
+	require.NotEmpty(t, first.Matches[0].TranscriptRevision)
+	assert.Equal(t, first.Matches[0].TranscriptRevision, spy.filters[0].ExpectedRevision)
+	require.NotNil(t, first.NextCursor)
+	_, last, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: *first.NextCursor})
+	require.NoError(t, err)
+	require.Len(t, last.Matches, 2)
+	assert.Equal(t, 2, last.Matches[0].Ordinal)
+	assert.Equal(t, "echo hello", last.Matches[0].Snippet)
+	assert.Equal(t, 3, last.Matches[1].Ordinal)
+	assert.Equal(t, "check the log", last.Matches[1].Snippet)
+	assert.Nil(t, last.NextCursor)
+	_, empty, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Project: "other"})
+	require.NoError(t, err)
+	assert.Empty(t, empty.Matches)
+
+	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{
+		dbtest.UserMsg("one-shot", 0, "only"),
+		{SessionID: "one-shot", Ordinal: 1, Role: "assistant", Content: "side", ContentLength: 4, IsSidechain: true},
+		dbtest.AsstMsg("one-shot", 2, "reply"),
+	}, dbtest.WithMessageCounts(3, 1), func(s *db.Session) { s.IsAutomated = true })
+	_, oneShot, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "one-shot", Scope: "top"})
+	require.NoError(t, err)
+	require.Len(t, oneShot.Matches, 2)
+	assert.Equal(t, "only", oneShot.Matches[0].Snippet)
+	assert.Equal(t, "reply", oneShot.Matches[1].Snippet)
+}
+
+func TestSearchContent_RejectedBeforeService(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		in   searchContentIn
@@ -1612,8 +1903,8 @@ func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
 	}{
 		{"neither", searchContentIn{}, "pattern or concepts required"},
 		{"both", searchContentIn{Pattern: "x", Concepts: []string{"a", "b"}}, "mutually exclusive"},
-		{"lexical mode", searchContentIn{Concepts: []string{"a", "b"}, Mode: "regex"}, "mode must be semantic"},
 		{"cursor", searchContentIn{Concepts: []string{"a", "b"}, Cursor: 10}, "cursor is not supported"},
+		{"negative cursor", searchContentIn{Pattern: "x", Cursor: -1}, "cursor must not be negative"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
@@ -1723,12 +2014,12 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 		{
 			name:    "around with direction rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, Direction: "desc"},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "around with from rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, From: &from},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "before without around rejected",
@@ -2147,4 +2438,454 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
 	assert.Equal(t, note, out.Note)
+}
+
+func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "project")
+	dbtest.SeedSession(t, d, "s2", "project")
+	for _, id := range []string{"a", "b"} {
+		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "archived", Title: id, Body: id,
+			SourceSessionID: "s1", SourceRunID: "generation", Evidence: []db.RecallEvidence{{SessionID: "s1", MessageStartOrdinal: 1, MessageEndOrdinal: 2, Snippet: "evidence"}},
+		})
+		require.NoError(t, err)
+	}
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)})
+	st, ct := newInMemoryPair(t, srv)
+	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
+	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var out listRecallOut
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	assert.NotRegexp(t, `"score(_breakdown)?"\s*:`, string(raw))
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "archived", out.Entries[0].Status)
+	assert.NotEmpty(t, out.Entries[0].ReviewState)
+	assert.Equal(t, "generation", out.Entries[0].SourceRunID)
+	require.Len(t, out.Entries[0].Evidence, 1)
+	require.NotEmpty(t, out.NextCursor)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z", "cursor": out.NextCursor}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var next listRecallOut
+	raw, err = json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &next))
+	require.Len(t, next.Entries, 1)
+	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "c", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "c", Body: "c", SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "d", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "d", Body: "d", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s2"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	filtered := decodeStructured[listRecallOut](t, res)
+	require.Len(t, filtered.Entries, 1)
+	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
+}
+
+func TestGetMessages_BudgetPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 0, 101)
+	for i := range 100 {
+		messages = append(messages, dbtest.UserMsg("budget", i, strings.Repeat("x", 2000)))
+	}
+	messages = append(messages, db.Message{SessionID: "budget", Ordinal: 100, Role: "system", Content: "hidden", IsSystem: true})
+	dbtest.SeedSessionWithMessages(t, d, "budget", "proj", messages, dbtest.WithMessageCounts(101, 100))
+	for _, direction := range []string{"asc", "desc"} {
+		t.Run(direction, func(t *testing.T) {
+			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction, MaxCharsPerMessage: 2000}
+			var ordinals []int
+			filtered := 0
+			cutPage := false
+			for i := 0; ; i++ {
+				require.Less(t, i, len(messages)+1, "message pagination did not end")
+				_, out, err := ts.getMessages(t.Context(), nil, in)
+				require.NoError(t, err)
+				assert.True(t, fitsResponse(out))
+				filtered += out.Filtered
+				if out.Omitted > 0 {
+					assert.Equal(t, 101, out.MessageCount)
+				}
+				for _, m := range out.Messages {
+					ordinals = append(ordinals, m.Ordinal)
+				}
+				if len(out.Messages) == 0 {
+					break
+				}
+				if out.Omitted > 0 {
+					cutPage = true
+					require.NotNil(t, out.NextFrom)
+					want := out.Messages[len(out.Messages)-1].Ordinal + 1
+					if direction == "desc" {
+						want -= 2
+					}
+					assert.Equal(t, want, *out.NextFrom)
+				}
+				if out.NextFrom == nil {
+					break
+				}
+				in.From = out.NextFrom
+			}
+			assert.True(t, cutPage)
+			require.Len(t, ordinals, 100)
+			for i, ordinal := range ordinals {
+				want := i
+				if direction == "desc" {
+					want = 99 - i
+				}
+				assert.Equal(t, want, ordinal)
+			}
+			assert.Equal(t, 101, len(ordinals)+filtered)
+		})
+	}
+}
+
+func TestGetMessages_BudgetOversizedMetadata(t *testing.T) {
+	ts, d := newTestToolset(t)
+	message := dbtest.UserMsg("large-model", 0, "message")
+	message.Model = strings.Repeat("x", 12000)
+	dbtest.SeedSessionWithMessages(t, d, "large-model", "proj", []db.Message{message}, dbtest.WithMessageCounts(1, 1))
+	_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-model"})
+	require.ErrorContains(t, err, "message metadata exceeds response budget")
+}
+
+type pagedContentSearchService struct {
+	service.SessionService
+	matches []db.ContentMatch
+	legacy  bool
+}
+
+func (f *pagedContentSearchService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	start := min(req.Cursor, len(f.matches))
+	end := min(start+req.Limit, len(f.matches))
+	result := &service.ContentSearchResult{Matches: f.matches[start:end], ActiveFilterApplied: !f.legacy}
+	if end < len(f.matches) && req.Mode != "semantic" && req.Mode != "hybrid" {
+		result.NextCursor = end
+	}
+	return result, nil
+}
+
+func (f *pagedContentSearchService) Get(_ context.Context, _ string) (*service.SessionDetail, error) {
+	return nil, service.ErrSessionNotFound
+}
+
+func TestSearchContent_BudgetTotal(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode     string
+		count, want    int
+		capped, legacy bool
+	}{
+		{name: "legacy", count: 36, want: 18, legacy: true},
+		{name: "capped", count: 600, want: 500, capped: true},
+		{name: "semantic", mode: "semantic", count: 30},
+		{name: "hybrid", mode: "hybrid", count: 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
+			for i := range fake.matches {
+				var timestamp string
+				if tc.legacy {
+					timestamp = "2024-06-15T11:59:00Z"
+					if i%2 == 0 {
+						timestamp = "2024-06-15T11:00:00Z"
+					}
+				}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
+			}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: 20, Context: 4})
+			require.NoError(t, err)
+			assert.True(t, fitsResponse(out))
+			assert.Equal(t, tc.want, out.Total)
+			assert.Equal(t, tc.capped, out.TotalCapped)
+			if tc.mode != "" {
+				assert.Positive(t, out.Omitted)
+				assert.Contains(t, out.Note, "Reduce limit")
+			}
+			if tc.legacy {
+				require.NotEmpty(t, out.Matches)
+				require.NotNil(t, out.NextCursor)
+				assert.Equal(t, out.Matches[len(out.Matches)-1].Ordinal+1, *out.NextCursor)
+			}
+		})
+	}
+}
+
+func TestSearchContent_BudgetOversized(t *testing.T) {
+	context := make([]db.Message, 10)
+	for i := range context {
+		context[i] = dbtest.UserMsg("session", i, strings.Repeat("<", 500))
+	}
+	for _, tc := range []struct {
+		name           string
+		matches        []db.ContentMatch
+		currentSession string
+	}{
+		{name: "context", matches: []db.ContentMatch{{SessionID: "session", Ordinal: 10, Snippet: "needle", ContextBefore: context}}},
+		{name: "empty result", currentSession: strings.Repeat("x", 12000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &toolset{svc: &pagedContentSearchService{matches: tc.matches}, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: tc.currentSession, IncludeActive: true, Context: 10})
+			require.ErrorContains(t, err, "search metadata exceeds response budget")
+		})
+	}
+}
+
+func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 5)
+	for i := range messages {
+		messages[i] = dbtest.UserMsg("around-budget", i, strings.Repeat("x", 5000))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "around-budget", "proj", messages, dbtest.WithMessageCounts(5, 5))
+	anchor, before, after := 2, 2, 2
+	in := getMessagesIn{SessionID: "around-budget", Around: &anchor, Before: &before, After: &after, MaxCharsPerMessage: 5000}
+	_, out, err := ts.getMessages(t.Context(), nil, in)
+	require.NoError(t, err)
+	assert.True(t, fitsResponse(out))
+	require.NotEmpty(t, out.Messages)
+	assert.Equal(t, anchor, out.Messages[0].Ordinal)
+	require.NotNil(t, out.NextFrom)
+	assert.Equal(t, 0, *out.NextFrom)
+}
+
+func TestSessionToolsResolvePlainIDs(t *testing.T) {
+	ts, d := newTestToolset(t)
+	ts.svc = service.NewDirectBackend(d, nil, withTestDocbank())
+	seedFTSSession(t, d, "codex:plain", "proj", "needle in the transcript", "2024-06-14T10:00:00Z")
+	dbtest.SeedMessages(t, d, toolCallMsg("codex:plain", 1, db.ToolCall{ToolName: "Bash", Category: "Bash"}))
+	dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) { s.ParentSessionID = new("codex:plain") })
+	dbtest.SeedSession(t, d, "codex:empty", "proj")
+
+	_, overview, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "plain"})
+	require.NoError(t, err)
+	assert.Equal(t, "codex:plain", overview.Session.SessionID)
+	assert.NotEmpty(t, overview.LastMessages)
+	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.NotEmpty(t, messages.Messages)
+	assert.Equal(t, "needle in the transcript", messages.Messages[0].Content)
+	_, tools, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.Len(t, tools.ToolCalls, 1)
+	assert.Equal(t, "Bash", tools.ToolCalls[0].ToolName)
+	_, kids, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.Len(t, kids.Sessions, 1)
+	assert.Equal(t, "child", kids.Sessions[0].SessionID)
+	_, _, err = ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: "plain"})
+	require.NoError(t, err)
+
+	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
+	require.NoError(t, err)
+	assert.Empty(t, calls.ToolCalls)
+	_, children, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: "empty"})
+	require.NoError(t, err)
+	assert.Empty(t, children.Sessions)
+}
+
+func TestListRecall_SourceSessionRawID(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "codex:source", "project")
+	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
+	})
+	require.NoError(t, err)
+
+	_, out, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "codex:source", out.Entries[0].SourceSessionID)
+	dbtest.SeedSession(t, d, "host~codex:source", "project")
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "entry", out.Entries[0].ID)
+}
+
+func TestOptionalSessionFiltersOlderServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/sessions/unindexed":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/v1/search/content":
+			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
+			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
+		default:
+			assert.Fail(t, "unexpected request", "path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 27})}
+	_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
+	require.NoError(t, err)
+	require.Len(t, search.Matches, 1)
+	assert.Equal(t, "other", search.Matches[0].SessionID)
+}
+
+func TestSessionResolutionAmbiguousCandidates(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, id := range []string{"codex:uuid", "host-a~uuid", "host-b~uuid", "host-c~uuid", "host-d~uuid"} {
+		dbtest.SeedSession(t, d, id, "project")
+	}
+	_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "uuid"})
+	require.ErrorContains(t, err, "codex:uuid")
+	require.ErrorContains(t, err, "host-a~uuid")
+	require.ErrorContains(t, err, "host-b~uuid")
+	require.ErrorContains(t, err, "host-c~uuid")
+	require.ErrorContains(t, err, "host-d~uuid")
+}
+
+func TestSessionResolutionTrashedExactID(t *testing.T) {
+	for _, tc := range []struct{ name, id string }{
+		{"qualified", "codex:source"},
+		{"bare", "5d416183-b894-47ef-9cba-47d5a1201234"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, "host~"+tc.id, "project")
+			dbtest.SeedSession(t, d, tc.id, "project")
+			require.NoError(t, d.SoftDeleteSession(t.Context(), tc.id))
+			_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: tc.id})
+			require.ErrorIs(t, err, service.ErrSessionNotFound)
+		})
+	}
+}
+
+type deadlineContentService struct {
+	service.SessionService
+	deadlines []time.Time
+	bounded   []bool
+	oversized bool
+	local     bool
+	countErr  error
+}
+
+func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
+
+func (s *deadlineContentService) LocalContentScan() bool { return s.local }
+
+func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	d, ok := ctx.Deadline()
+	s.deadlines = append(s.deadlines, d)
+	s.bounded = append(s.bounded, ok)
+	if s.local && req.Mode == "hybrid" && len(s.deadlines) == 1 {
+		_, cancel := db.WithContentScanDeadline(ctx)
+		cancel()
+	}
+	if s.oversized {
+		if len(s.deadlines) > 1 {
+			if s.countErr != nil {
+				return nil, s.countErr
+			}
+			return nil, context.DeadlineExceeded
+		}
+		matches := make([]db.ContentMatch, 20)
+		for i := range matches {
+			matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 4000)}
+		}
+		return &service.ContentSearchResult{Matches: matches, NextCursor: 20, ActiveFilterApplied: true}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSearchContentCountFailure(t *testing.T) {
+	otherErr := errors.New("count failed")
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "timed out", http.StatusGatewayTimeout)
+	}))
+	t.Cleanup(daemon.Close)
+	_, httpErr := servicehttp.NewHTTPBackend(daemon.URL, "", false, "").SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, httpErr)
+	for _, tc := range []struct {
+		name      string
+		err       error
+		returnErr bool
+	}{
+		{name: "deadline"},
+		{name: "daemon timeout", err: httpErr},
+		{name: "other error", err: otherErr, returnErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{oversized: true, countErr: tc.err}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
+			if tc.returnErr {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, fake.deadlines, 2)
+			assert.NotEmpty(t, out.Matches)
+			assert.Positive(t, out.Omitted)
+			assert.True(t, fitsResponse(out))
+			require.NotNil(t, out.NextCursor)
+			assert.Equal(t, out.Matches[len(out.Matches)-1].Ordinal+1, *out.NextCursor)
+			encoded, err := json.Marshal(out)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), `"total":`)
+		})
+	}
+}
+
+func TestSearchContentSharedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		bounded    bool
+	}{
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "fts", mode: "fts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{local: true}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
+			require.NoError(t, err)
+			require.Greater(t, len(fake.deadlines), 1)
+			require.Equal(t, tc.bounded, fake.bounded[0])
+			for i := 1; i < len(fake.deadlines); i++ {
+				assert.Equal(t, tc.bounded, fake.bounded[i])
+				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
+			}
+		})
+	}
+}
+
+func TestHybridFollowupsShareDeadline(t *testing.T) {
+	fake := &deadlineContentService{local: true}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})
+	require.NoError(t, err)
+	require.Greater(t, len(fake.deadlines), 1)
+	assert.False(t, fake.bounded[0], "the primary semantic search keeps its existing wait")
+	assert.True(t, fake.bounded[1], "follow-up searches share a keyword deadline")
+}
+
+type timeoutContentService struct{ service.SessionService }
+
+func (s timeoutContentService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestSearchContentTimeoutAdvice(t *testing.T) {
+	ts := &toolset{svc: timeoutContentService{}, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, "date_from, project, or session_id")
 }

@@ -2,7 +2,8 @@
   import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
-  import { parseContent, enrichSegments } from "../../utils/content-parser.js";
+  import { parseContent, parseSkillInvocation, enrichSegments } from "../../utils/content-parser.js";
+  import { isSkillInvocationMessage } from "../../utils/messages.js";
   import { formatTimestamp, formatTokenUsage } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -14,6 +15,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
+  import MessageLinkButton from "./MessageLinkButton.svelte";
   import DocbankMatches from "./DocbankMatches.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
@@ -21,7 +23,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import MermaidBlock from "./MermaidBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
   import { Button, CopyButton } from "@kenn-io/kit-ui";
-  import { ui } from "../../stores/ui.svelte.js";
+  import { ui, type BlockType } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -36,18 +38,28 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 
   interface Props {
     message: Message;
+    /** Skill expansion that preceded this user message, shown as a disclosure. */
+    skillMessage?: Message;
     session?: Session | null;
     isSubagentContext?: boolean;
     searchOrdinal?: number;
     compact?: boolean;
     allowMutations?: boolean;
+    revealed?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true, revealed = false }: Props = $props();
+  /** A skill row holds one opaque body, so read it from the outer envelope. */
+  function skillSegments(msg: Message) {
+    if (!isSkillInvocationMessage(msg)) return null;
+    const segment = parseSkillInvocation(msg.content);
+    return segment ? [segment] : null;
+  }
   let copied = $state(false);
   let segments = $derived(enrichSegments(
-    parseContent(message.content, message.has_tool_use, message.id, message.content_length),
+    skillSegments(message) ?? parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
   ));
+  let attachedSkill = $derived(skillMessage ? parseSkillInvocation(skillMessage.content) : null);
   // Embedded subagents have their own ordinal namespace and are never searched here.
   let activeSearchOrdinal = $derived(isSubagentContext ? undefined : searchOrdinal);
   let hasSearchQuery = $derived(activeSearchOrdinal !== undefined && inSessionSearch.isActive);
@@ -77,6 +89,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
+  // A skill expansion is stored on role "user" but nobody typed it, so it
+  // drops the user label, icon, and colors.
+  let isSkillInvocation = $derived(isSkillInvocationMessage(message));
   let roleLabel = $derived.by(() => {
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext || sessionKind === "subagent") return m.message_content_role_agent();
@@ -84,6 +99,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return m.message_content_role_user();
   });
   let roleIcon = $derived.by(() => {
+    if (isSkillInvocation) return "S";
     if (!isUser) return "A";
     if (isSubagentContext || sessionKind === "subagent") return "S";
     if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
@@ -113,14 +129,15 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       : m.message_content_code_collapsed();
   }
 
-  let showText = $derived(ui.isBlockVisible(isUser ? "user" : "assistant"));
-  let accentColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
-  let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
-  let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
-  let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
+  function blockVisible(type: BlockType): boolean { return revealed || ui.isBlockVisible(type); }
+  let showText = $derived(blockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
+  let accentColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
+  let accentForeground = $derived(isSkillInvocation ? "var(--accent-teal-foreground)" : isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
+  let roleInk = $derived(isSkillInvocation ? "var(--accent-teal-ink)" : isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
+  let roleBg = $derived(isUser && !isSkillInvocation ? "var(--user-bg)" : "var(--assistant-bg)");
   // Every layout draws the role rail at full strength, so the user/assistant
   // distinction reads the same in Default, Compact, Stream, and Skim.
-  let railColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
+  let railColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
@@ -182,7 +199,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       pinFeedback = generatedErrorMessage(error);
     }
   }
-  let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
+  let canForkFromMessage = $derived(allowMutations && sync.hostSessionActionsAvailable &&
+    owningSession?.agent === "claude" &&
     !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
   async function handleForkFromHere() {
     if (!canForkFromMessage) return;
@@ -212,10 +230,10 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 </script>
 
-<div class="message" class:is-user={isUser} class:compact style:border-left-color={railColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser && !isSkillInvocation} class:compact style:border-left-color={railColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
-    <span class="role-label" style:color={roleInk}>{roleLabel}</span>
+    {#if !isSkillInvocation}<span class="role-label" style:color={roleInk}>{roleLabel}</span>{/if}
     <CopyButton revealOnHover {copied} ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
@@ -225,6 +243,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
+    <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
@@ -236,16 +255,21 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     <div class="header-meta">
       {#if tokenSummary}<span class="message-tokens">{tokenSummary}</span>{/if}
       {#if turnSummary}<span class="turn-summary" class:slow={turnSummary.slow} class:running={turnSummary.running}>{turnSummary.text}</span>{/if}
-      <span class="timestamp">{formatTimestamp(message.timestamp)}</span>
+      <span class="timestamp">{formatTimestamp(message.timestamp, ui.alwaysShowYear)}</span>
       {#if offMainModel}<span class="message-model" title={offMainModel}>{offMainModel}</span>{/if}
     </div>
   </div>
   <div class="message-body">
+    {#if attachedSkill && blockVisible("system")}
+      <div class="markdown attached-skill">
+        <SkillBlock content={attachedSkill.content} name={attachedSkill.label} />
+      </div>
+    {/if}
     {#each segments as segment, segmentIndex}
       {@const searchKey = activeSearchOrdinal === undefined || segment.type === "tool"
         ? undefined : blockKey(activeSearchOrdinal, segment.type, segmentIndex)}
       {#if segment.type === "thinking"}
-        {#if ui.isBlockVisible("thinking")}
+        {#if blockVisible("thinking")}
           <ThinkingBlock content={segment.content} {searchKey} />
         {/if}
       {:else if segment.type === "tool"}
@@ -253,7 +277,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {:else if segment.type === "code"}
         {@const codeLabel = segment.label?.trim().toLowerCase()}
         {@const language = segment.label?.trim() ?? ""}
-        {#if ui.isBlockVisible("code")}
+        {#if blockVisible("code")}
           {#if codeLabel === "mermaid" && !hasSearchQuery}
             <MermaidBlock content={segment.content} />
           {:else}
@@ -293,7 +317,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
           </div>
         {/if}
       {:else if segment.type === "skill"}
-        {#if showText}<SkillBlock content={segment.content} name={segment.label} {searchKey} />{/if}
+        {#if showText}
+          <!-- The .markdown rules below are scoped to this component, so wrap
+               SkillBlock to give its rendered body the same prose styles. -->
+          <div class="markdown">
+            <SkillBlock content={segment.content} name={segment.label} {searchKey} />
+          </div>
+        {/if}
       {:else}
         {#if showText}
           <div class="text-content markdown" {@attach searchBlock(searchKey)}
@@ -304,7 +334,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {/if}
     {/each}
     <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
-    {#if ui.isBlockVisible("tool")}
+    {#if blockVisible("tool")}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
@@ -397,6 +427,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 
   .message-body { display: flex; flex-direction: column; gap: 8px; }
+  .attached-skill { margin-bottom: 8px; }
   .markdown :global(p) { margin: 0.5em 0; }
   .markdown :global(p:first-child) { margin-top: 0; }
   .markdown :global(p:last-child) { margin-bottom: 0; }

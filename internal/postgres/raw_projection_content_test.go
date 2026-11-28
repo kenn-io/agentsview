@@ -1,6 +1,8 @@
 package postgres
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"reflect"
@@ -32,6 +34,98 @@ func TestRawPayloadKeepsDialogueInDerivedState(t *testing.T) {
 		assert.Equal(t, original, encoded, "dialogue changes preserve the immutable payload")
 		assert.Equal(t, new(dialogue), p.Messages[0].DialogueText, "encoding preserves the caller's derived state")
 	}
+}
+
+func TestRawPayloadPreservesRelationshipProvenance(t *testing.T) {
+	t.Run("automated parentless sdk-cli worker", func(t *testing.T) {
+		p := ingest.PreparedSession{Session: db.Session{
+			ID: "panel-1", Agent: "claude", Entrypoint: "sdk-cli",
+			RelationshipType: "subagent", IsAutomated: true,
+		}}
+		withoutProvenanceRevision, err := rawContentRevision(ingest.PreparedSession{Session: db.Session{
+			ID: "panel-1", Agent: "claude", Entrypoint: "sdk-cli",
+			RelationshipType: "", IsAutomated: true,
+		}})
+		require.NoError(t, err)
+
+		p.Session.RecordParserRelationship()
+		p.Session.RelationshipType = db.SessionRelationship(p.Session)
+		require.Empty(t, p.Session.RelationshipType)
+
+		withProvenanceRevision, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.Equal(t, withoutProvenanceRevision, withProvenanceRevision, "private provenance stays out of content revision")
+
+		raw, err := encodeRawPayload(p)
+		require.NoError(t, err)
+		decoded, err := decodeRawPayload(raw)
+		require.NoError(t, err)
+		decoded.Session.ID = "raw-row-abc"
+		assert.Equal(t, "subagent", db.PersistedParserRelationship(decoded.Session))
+		assert.True(t, db.SessionRelationshipInferred(decoded.Session))
+		assert.Empty(t, db.SessionRelationship(decoded.Session))
+
+		decoded.Session.IsAutomated = false
+		assert.Equal(t, "subagent", db.SessionRelationship(decoded.Session))
+	})
+
+	t.Run("native agent child survives raw-row ID rewrite", func(t *testing.T) {
+		p := ingest.PreparedSession{Session: db.Session{
+			ID: "agent-child1", Agent: "claude", Entrypoint: "sdk-cli",
+			RelationshipType: "subagent", IsAutomated: true,
+		}}
+		p.Session.RecordParserRelationship()
+		p.Session.RelationshipType = db.SessionRelationship(p.Session)
+		require.Equal(t, "subagent", p.Session.RelationshipType)
+
+		raw, err := encodeRawPayload(p)
+		require.NoError(t, err)
+		decoded, err := decodeRawPayload(raw)
+		require.NoError(t, err)
+		decoded.Session.ID = "raw-row-xyz"
+		assert.Equal(t, "subagent", db.PersistedParserRelationship(decoded.Session))
+		assert.False(t, db.SessionRelationshipInferred(decoded.Session))
+		assert.Equal(t, "subagent", db.SessionRelationship(decoded.Session))
+	})
+
+	t.Run("legacy gob payload without provenance trailer decodes cleanly", func(t *testing.T) {
+		legacy := ingest.PreparedSession{Session: db.Session{
+			ID: "legacy-1", Agent: "claude", RelationshipType: "subagent",
+		}}
+		var buf bytes.Buffer
+		require.NoError(t, gob.NewEncoder(&buf).Encode(legacy))
+		decoded, err := decodeRawPayload(buf.Bytes())
+		require.NoError(t, err)
+		assert.Equal(t, "legacy-1", decoded.Session.ID)
+		assert.Equal(t, "subagent", decoded.Session.RelationshipType)
+	})
+
+	t.Run("legacy automated codex non-interactive gob recovers inferred provenance", func(t *testing.T) {
+		legacy := ingest.PreparedSession{Session: db.Session{
+			ID: "codex:exec-1", SourceSessionID: "exec-1", Agent: "codex",
+			SessionKind: "non-interactive", RelationshipType: "subagent", IsAutomated: true,
+		}}
+		var buf bytes.Buffer
+		require.NoError(t, gob.NewEncoder(&buf).Encode(legacy))
+		decoded, err := decodeRawPayload(buf.Bytes())
+		require.NoError(t, err)
+		assert.Equal(t, "subagent", db.PersistedParserRelationship(decoded.Session))
+		assert.True(t, db.SessionRelationshipInferred(decoded.Session))
+		assert.Empty(t, db.SessionRelationship(decoded.Session))
+	})
+
+	t.Run("legacy explicit grok non-interactive gob stays explicit subagent", func(t *testing.T) {
+		legacy := ingest.PreparedSession{Session: db.Session{
+			ID: "grok:child-1", SourceSessionID: "child-1", Agent: "grok",
+			SessionKind: "non-interactive", RelationshipType: "subagent", IsAutomated: true,
+		}}
+		var buf bytes.Buffer
+		require.NoError(t, gob.NewEncoder(&buf).Encode(legacy))
+		decoded, err := decodeRawPayload(buf.Bytes())
+		require.NoError(t, err)
+		assert.False(t, db.SessionRelationshipInferred(decoded.Session))
+		assert.Equal(t, "subagent", db.SessionRelationship(decoded.Session))
+	})
 }
 
 func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
@@ -70,6 +164,13 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		p.Session.DataVersion = 123
 		p.Signals.SecretsRulesVersion = "next-rules"
 		p.Signals.QualitySignals.Version = 123
+		got, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.Equal(t, digest, got)
+	})
+	t.Run("recorded project metadata", func(t *testing.T) {
+		p := clone()
+		p.Session.RecordedProject = true
 		got, err := rawContentRevision(p)
 		require.NoError(t, err)
 		assert.Equal(t, digest, got)

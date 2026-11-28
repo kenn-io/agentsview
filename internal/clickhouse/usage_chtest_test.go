@@ -140,7 +140,7 @@ func TestSessionUsageReadsOnlyItsSession(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, want.BreakdownCount, got.BreakdownCount)
 
-	_, err = conn.ExecContext(ctx, `SYSTEM FLUSH LOGS`)
+	_, err = conn.ExecContext(ctx, `SYSTEM FLUSH LOGS query_log`)
 	require.NoError(t, err)
 	var queries, read uint64
 	require.NoError(t, conn.QueryRowContext(ctx, `

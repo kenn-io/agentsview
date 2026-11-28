@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 )
 
-func newFinalRowsStore(t *testing.T) *Store {
+func newFinalRowsStore(t testing.TB) *Store {
 	t.Helper()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
@@ -103,6 +103,7 @@ func TestFinalRowsFollowSessions(t *testing.T) {
 		{name: "rename without a message change", sql: []string{insert("'b'", 2, "renamed")}},
 		{name: "older version stays hidden", sql: []string{insert("'c'", 0, "stale")}},
 		{name: "equal version replaces", sql: []string{insert("'d'", 1, "tie")}},
+		{name: "two pushes between checks", sql: []string{insert("'a'", 2, "two"), insert("'e'", 1, "one")}},
 		{
 			name: "merge folding a new row into kept parts",
 			sql:  []string{insert("'a'", 3, "folded"), "SYSTEM START MERGES sessions", "OPTIMIZE TABLE sessions FINAL", "SYSTEM STOP MERGES sessions"},
@@ -113,6 +114,13 @@ func TestFinalRowsFollowSessions(t *testing.T) {
 			full: true,
 		},
 		{name: "push after the delete", sql: []string{insert("'e'", 4, "one")}},
+		{
+			// More keys than a query parameter once carried still read only
+			// the pushed keys.
+			name: "push of 2,500 sessions",
+			sql: []string{`INSERT INTO sessions (id, machine, display_name, push_version)
+				SELECT if(number = 0, 'b', concat('bulk-', toString(number))), 'host-a', 'bulk', 5 FROM numbers(2500)`},
+		},
 		{name: "truncate", sql: []string{"TRUNCATE TABLE sessions"}, full: true},
 	})
 }
@@ -316,14 +324,16 @@ func TestUsageCoverageRetryReadsOnlyMovedParts(t *testing.T) {
 	_, syncer, store := newPreparedUsageStore(t)
 	fullReads := func() (sessions, snapshots int) {
 		t.Helper()
-		// The log shows a key lookup's keys inline, in has(...).
-		execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+		// A key lookup names its keys in has(...) or selects them in an
+		// IN subquery; a full read does neither.
+		execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT
 			countIf(query LIKE '%sipHash128Reference(tuple(*))%FROM sessions%'),
 			countIf(query LIKE '%sipHash128Reference(tuple(id, revision, push_version))%FROM usage_session_snapshots%')
 			FROM system.query_log
 			WHERE current_database = currentDatabase() AND type = 'QueryFinish'
-				AND query NOT LIKE '%has(%' AND query NOT LIKE '%system.query_log%'`).Scan(&sessions, &snapshots))
+				AND query NOT LIKE '%has(%' AND query NOT LIKE '% IN (SELECT %'
+				AND query NOT LIKE '%system.query_log%'`).Scan(&sessions, &snapshots))
 		return sessions, snapshots
 	}
 	// A store that has not read the tables yet, as after a restart.
@@ -371,6 +381,7 @@ func TestFinalRowsSettleAfterMerge(t *testing.T) {
 		{name: "full read after the merge", mergeBeforeRead: true, settles: true},
 		{name: "full read before the merge", settles: true},
 		{name: "incremental read before the merge", tracked: true, settles: false},
+		{name: "incremental read after the merge", tracked: true, mergeBeforeRead: true, settles: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -421,4 +432,90 @@ func TestFinalRowsSettleAfterMerge(t *testing.T) {
 			assert.Equal(t, (&finalRows{count: count, sum: hash}).identity(), f.identity())
 		})
 	}
+}
+
+// A table swapped in under the same name starts its block numbers over, so
+// its merged part can cover the old table's parts exactly and look like a
+// merge of rows already counted. The tracker reads the new table in full.
+func TestFinalRowsFollowSwappedTable(t *testing.T) {
+	t.Parallel()
+	store := newFinalRowsStore(t)
+	want := func(ctx context.Context) (string, map[string]finalFields) {
+		var count uint64
+		var sum string
+		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count(),
+			reinterpretAsFixedString(sumWithOverflow(reinterpretAsUInt128(sipHash128Reference(tuple(*)))))
+			FROM sessions FINAL`).Scan(&count, &sum))
+		hash, err := parseRowHash(sum)
+		require.NoError(t, err)
+		return (&finalRows{count: count, sum: hash}).identity(), nil
+	}
+	insert := func(table, ids string, version int, name string) string {
+		return fmt.Sprintf(`INSERT INTO %s (id, machine, display_name, push_version)
+			SELECT arrayJoin([%s]), 'host-a', '%s', %d`, table, ids, name, version)
+	}
+	f := &finalRows{spec: sessionsFinalTable}
+	requireTrackerFollows(t, store, f, want, []finalRowsStep{
+		{name: "first rows", sql: []string{"SYSTEM STOP MERGES sessions", insert("sessions", "'a','b'", 1, "one")}},
+		{name: "second insert", sql: []string{insert("sessions", "'c'", 1, "one")}},
+		{
+			name: "swap in a table whose merged part covers the old blocks",
+			sql: []string{
+				"CREATE TABLE sessions_swap AS sessions",
+				insert("sessions_swap", "'a','b'", 1, "one"),
+				insert("sessions_swap", "'c'", 5, "changed"),
+				"OPTIMIZE TABLE sessions_swap FINAL",
+				"EXCHANGE TABLES sessions AND sessions_swap",
+				"DROP TABLE sessions_swap SYNC",
+			},
+			full: true,
+		},
+	})
+}
+
+// An incremental read covers only the parts of its snapshot. A push that
+// lands between the snapshot and the read waits for the next check, which
+// reads the key again.
+func TestFinalRowsIncrementalReadKeepsToSnapshotParts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := newFinalRowsStore(t)
+	insert := func(ids string, version int) string {
+		return fmt.Sprintf(`INSERT INTO sessions (id, machine, display_name, push_version)
+			SELECT arrayJoin([%s]), 'host-a', 'one', %d`, ids, version)
+	}
+	f := &finalRows{spec: sessionsFinalTable}
+	versions := func() map[string]uint64 {
+		out := map[string]uint64{}
+		for key, r := range f.rows {
+			out[key] = r.pushVersion
+		}
+		return out
+	}
+	check := func() *finalRowsChange {
+		t.Helper()
+		snapshot, err := store.readPartsSnapshot(ctx)
+		require.NoError(t, err)
+		change, err := store.prepareFinalRows(ctx, f, snapshot["sessions"])
+		require.NoError(t, err)
+		return change
+	}
+	execPreparedUsage(t, store, "SYSTEM STOP MERGES sessions", insert("'a','b'", 1))
+	f.apply(check())
+	execPreparedUsage(t, store, insert("'a','c'", 2))
+	snapshot, err := store.readPartsSnapshot(ctx)
+	require.NoError(t, err)
+	execPreparedUsage(t, store, insert("'a'", 3))
+	change, err := store.prepareFinalRows(ctx, f, snapshot["sessions"])
+	require.NoError(t, err)
+	require.False(t, change.full)
+	f.apply(change)
+	assert.Equal(t, map[string]uint64{"a": 2, "b": 1, "c": 2}, versions())
+	assert.EqualValues(t, 3, f.count)
+
+	change = check()
+	require.False(t, change.full)
+	f.apply(change)
+	assert.Equal(t, map[string]uint64{"a": 3, "b": 1, "c": 2}, versions())
+	assert.EqualValues(t, 3, f.count)
 }

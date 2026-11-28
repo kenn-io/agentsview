@@ -33,7 +33,7 @@ func TestMemoryPluginHookMissingBinaryDoesNotBlockSession(t *testing.T) {
 }
 
 func TestMemoryPluginGeneratedArtifactsAreCurrent(t *testing.T) {
-	artifacts, err := RenderPluginPackage("0.1.0")
+	artifacts, err := RenderPluginPackage(MemoryPluginVersion)
 	require.NoError(t, err)
 	for _, artifact := range artifacts {
 		body, readErr := os.ReadFile(filepath.Join(
@@ -59,4 +59,17 @@ func TestMemoryPluginManifestsSelectFocusedMCP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(mcp), `"--profile", "memory"`)
 	assert.NotContains(t, string(mcp), "AGENTSVIEW_SERVER_TOKEN\"")
+}
+
+func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
+	root := memoryPluginRoot(t)
+	manifest, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "plugin.json"))
+	require.NoError(t, err)
+	var plugin struct {
+		Name       string                     `json:"name"`
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	require.NoError(t, json.Unmarshal(manifest, &plugin))
+	assert.Equal(t, pluginName, plugin.Name)
+	assert.Contains(t, plugin.MCPServers, pluginServer)
 }

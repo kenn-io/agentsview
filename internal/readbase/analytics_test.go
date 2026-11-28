@@ -29,7 +29,10 @@ func (b analyticsFixtureBackend) Sessions(context.Context, db.AnalyticsFilter, b
 func (b analyticsFixtureBackend) FormatTime(value any) string { return value.(string) }
 
 func (analyticsFixtureBackend) VisitSessionIDSets(ctx context.Context, ids []string, visit func(context.Context, string, []any) error) error {
-	return VisitChunkedSessionIDs(ctx, ids, visit)
+	return db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
+		idSet, args := db.InPlaceholders(chunk)
+		return visit(ctx, idSet, args)
+	})
 }
 
 func (b analyticsFixtureBackend) HeatmapSQL(db.AnalyticsFilter, string) (string, []any) {

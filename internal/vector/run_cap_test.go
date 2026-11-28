@@ -110,11 +110,11 @@ type interruptedSource struct {
 }
 
 func (s interruptedSource) ScanEmbeddableUnits(
-	ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
+	ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	units := 0
-	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, maxRunRunes, func(u db.EmbeddableUnit) error {
+	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, maxRunRunes, func(u db.EmbeddableUnit) error {
 		if units++; units > 4 {
 			return errors.New("interrupted")
 		}
@@ -167,7 +167,7 @@ func TestBuildRunCapChangeResplitsIdleSession(t *testing.T) {
 func legacyRunSource(t *testing.T, archive *db.DB) *fakeUnitSource {
 	t.Helper()
 	src := &fakeUnitSource{}
-	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, math.MaxInt, func(u db.EmbeddableUnit) error {
+	_, err := archive.ScanEmbeddableUnits(t.Context(), "", false, nil, math.MaxInt, func(u db.EmbeddableUnit) error {
 		session, err := archive.GetSession(t.Context(), u.SessionID)
 		require.NoError(t, err)
 		require.NotNil(t, session)

@@ -64,3 +64,94 @@ test("Compact packs grouped and parallel tool rows tighter than Default", async 
     });
   }
 });
+
+for (const layout of ["stream", "skim"]) {
+  test(`keeps message actions available in ${layout} layout`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(
+      (value) => localStorage.setItem("agentsview-message-layout", value),
+      layout,
+    );
+    await serveTranscript(page, SESSION_ID, messages);
+    await page.goto(`/sessions/${SESSION_ID}`);
+    const card = page.locator(".message").filter({ hasText: "Run the checks" });
+    await expect(card).toBeVisible();
+    await card.hover();
+    const link = card.getByRole("button", { name: "Copy link to message" });
+    const pin = card.getByRole("button", { name: "Pin message" });
+    await expect(link).toBeVisible();
+    await expect(pin).toBeVisible();
+    await expect(link).toHaveCSS("opacity", "1");
+    const bounds = await card.evaluate((el) => {
+      const content = el.querySelector(".text-content")!;
+      const range = document.createRange();
+      range.selectNodeContents(content);
+      const text = range.getBoundingClientRect();
+      const action = el
+        .querySelector('[aria-label="Copy link to message"]')!
+        .getBoundingClientRect();
+      return {
+        textRight: text.right,
+        actionLeft: action.left,
+        actionRight: action.right,
+        viewport: innerWidth,
+      };
+    });
+    expect(bounds.textRight).toBeLessThanOrEqual(bounds.actionLeft);
+    expect(bounds.actionRight).toBeLessThanOrEqual(bounds.viewport);
+    await link.focus();
+    await expect(link).toBeFocused();
+  });
+}
+
+for (const layout of ["default", "compact", "stream", "skim"]) {
+  test(`keeps grouped-message links within the narrow viewport in ${layout} layout`, async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      (value) => localStorage.setItem("agentsview-message-layout", value),
+      layout,
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await serveTranscript(page, SESSION_ID, messages);
+    await page.goto(`/sessions/${SESSION_ID}`);
+    const group = page.locator(".tool-group").first();
+    await expect(group).toBeVisible();
+    await group.hover();
+    const link = group.getByRole("button", { name: "Copy link to message" }).first();
+    await expect(link).toBeVisible();
+    const bounds = await link.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      const clippedBy = [];
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (!/(hidden|clip|auto|scroll)/.test(style.overflowX)) continue;
+        const box = parent.getBoundingClientRect();
+        if (rect.left < box.left || rect.right > box.right)
+          clippedBy.push({ left: box.left, right: box.right });
+      }
+      return {
+        left: rect.left,
+        right: rect.right,
+        viewport: innerWidth,
+        clippedBy,
+        clickable: el.contains(
+          document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2),
+        ),
+      };
+    });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewport);
+    expect(bounds.clippedBy).toEqual([]);
+    expect(bounds.clickable).toBe(true);
+    const input = group.getByRole("button", { name: "Copy input" }).first();
+    expect(
+      await input.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        return el.contains(
+          document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2),
+        );
+      }),
+    ).toBe(true);
+  });
+}

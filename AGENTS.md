@@ -12,16 +12,16 @@
 
 ## Task Routes
 
-| Task or path                                                                            | Read before editing                  |
-| --------------------------------------------------------------------------------------- | ------------------------------------ |
-| Features, bug fixes, tests, or test helpers                                             | `docs/agents/testing.md`             |
-| SQLite, PostgreSQL, CockroachDB, DuckDB, ClickHouse, archive resync, or storage queries | `docs/agents/storage.md`             |
-| Database or Go backend optimizations, including read, sync, and push paths              | `docs/agents/storage.md`             |
-| Watchers, polling, sync scheduling, background work, or memory investigations           | `docs/agents/background-work.md`     |
-| Build commands, toolchains, CI build tags, or dependencies                              | `docs/agents/build.md`               |
-| S3 ingest, `S3Provider`, or `Source.S3Discovery`                                        | `docs/agents/s3-providers.md`        |
-| Any frontend file                                                                       | `frontend/AGENTS.md`                 |
-| Frontend controls, styling, or reusable components                                      | `frontend/AGENTS.md` and `DESIGN.md` |
+| Task or path                                                                    | Read before editing                  |
+| ------------------------------------------------------------------------------- | ------------------------------------ |
+| Features, bug fixes, tests, or test helpers                                     | `docs/agents/testing.md`             |
+| SQLite, PostgreSQL, CockroachDB, ClickHouse, archive resync, or storage queries | `docs/agents/storage.md`             |
+| Database or Go backend optimizations, including read, sync, and push paths      | `docs/agents/storage.md`             |
+| Watchers, polling, sync scheduling, background work, or memory investigations   | `docs/agents/background-work.md`     |
+| Build commands, toolchains, CI build tags, or dependencies                      | `docs/agents/build.md`               |
+| S3 ingest, `S3Provider`, or `Source.S3Discovery`                                | `docs/agents/s3-providers.md`        |
+| Any frontend file                                                               | `frontend/AGENTS.md`                 |
+| Frontend controls, styling, or reusable components                              | `frontend/AGENTS.md` and `DESIGN.md` |
 
 The `README.md` and `Makefile` are the sources for project facts, setup, and
 commands. Do not copy their catalogues into this file.
@@ -164,15 +164,14 @@ update its evidence entry in the same change.
 ## Project Map
 
 agentsview syncs local AI agent sessions into SQLite, serves a Svelte 5 web UI,
-and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
+and can replicate data to PostgreSQL or ClickHouse.
 
 - `cmd/agentsview/`: CLI and server entry points
 - `internal/db/`: SQLite archive and search
-- `internal/readbase/`: shared replica and mirror catalog, analytics, session
-  and transcript reads, and read-only stubs
+- `internal/readbase/`: shared replica catalog, analytics, session and
+  transcript reads, and read-only stubs
 - `internal/postgres/`: PostgreSQL sync and read store
-- `internal/duckdb/`: disposable DuckDB mirror and Quack reads
-- `internal/clickhouse/`: ClickHouse remote mirror and read store
+- `internal/clickhouse/`: ClickHouse sync and read store
 - `internal/parser/`: agent session parsers
 - `internal/server/`: HTTP API and SSE
 - `internal/sync/`: discovery, file watching, and sync
@@ -222,7 +221,7 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   canceled, use `context.WithoutCancel(t.Context())`.
 - `make lint` checks part of this with `noctx`, `usetesting`, `fatcontext`, and
   govet `lostcancel`. It compiles only `fts5` files, so check `pgtest`,
-  `chtest`, `duckdbtest`, and `s3test` files by hand.
+  `chtest`, and `s3test` files by hand.
 
 ## Pull Requests
 

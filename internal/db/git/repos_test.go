@@ -122,10 +122,14 @@ func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	t.Setenv("PATH", path)
 	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
 	outside := t.TempDir()
+	assert.Empty(t, findRepoRoot(t.Context(), outside))
+	// The temporary directory may sit on its own mount, and a device boundary
+	// defers to Git. The filesystem root has no boundary above it.
+	fsRoot := filepath.VolumeName(outside) + string(filepath.Separator)
 	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
 	close(ctx.resume)
-	assert.Empty(t, findRepoRoot(ctx, outside))
-	assert.Empty(t, findRepoRoot(ctx, outside))
+	assert.Empty(t, findRepoRoot(ctx, fsRoot))
+	assert.Empty(t, findRepoRoot(ctx, fsRoot))
 	assert.Equal(t, int32(2), ctx.attempts.Load(), "ordinary non-repositories need only their eligibility bounds")
 	gitRun(t, outside, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{outside})[0], findRepoRoot(t.Context(), outside))

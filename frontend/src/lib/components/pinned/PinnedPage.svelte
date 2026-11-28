@@ -2,6 +2,8 @@
   import { onDestroy } from "svelte";
   import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
   import { m } from "../../i18n/index.js";
   import {
     ExternalLinkIcon,
@@ -21,6 +23,10 @@
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
   });
+
+  function retryLoad() {
+    void pins.loadAll(sessions.filters.project || undefined);
+  }
 
   onDestroy(() => pins.cancelAllPinsRead());
 
@@ -117,8 +123,10 @@
     {/snippet}
   </LibraryPageHeader>
 
-  {#if pins.loading}
-    <div class="loading-state">{m.pinned_loading()}</div>
+  {#if pins.error && pins.pins.length === 0}
+    <LoadError message={pins.error} onRetry={retryLoad} />
+  {:else if pins.loading && pins.pins.length === 0}
+    <LoadingState label={m.pinned_loading()} />
   {:else if pins.pins.length === 0 && sessions.filters.project}
     <EmptyState
       align="top"
@@ -136,6 +144,9 @@
       {/snippet}
     </EmptyState>
   {:else}
+    {#if pins.error}
+      <LoadError message={pins.error} onRetry={retryLoad} />
+    {/if}
     <div class="pin-list">
       {#each pins.pins as pin (`${pin.session_id}:${pin.message_key ?? pin.id}`)}
         {@const info = getSessionInfo(pin)}
@@ -235,12 +246,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .loading-state {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 40px 0;
-    font-size: 13px;
-  }
 
   .pin-list {
     display: grid;

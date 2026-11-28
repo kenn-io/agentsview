@@ -15,6 +15,23 @@ import (
 )
 
 func TestGrokNativeSubagentsSurviveParentLoss(t *testing.T) {
+	// A headless child whose summary marks it a subagent keeps that role
+	// after its parent's metadata is gone, even though it is automated.
+	for _, tc := range []struct {
+		name, kind string
+		headless   bool
+	}{
+		{"interactive", "", false},
+		{"headless", parser.SessionKindNonInteractive, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testGrokNativeSubagentsSurviveParentLoss(t, tc.headless, tc.kind)
+		})
+	}
+}
+
+func testGrokNativeSubagentsSurviveParentLoss(t *testing.T, headless bool, wantKind string) {
+	t.Helper()
 	root := t.TempDir()
 	require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("..", "parser", "testdata", "grok-build", "subagents"))))
 	parentDir := filepath.Join(root, "%2Fworkspace%2Fproject", "019f6000-0000-7000-8000-000000000010")
@@ -32,6 +49,9 @@ func TestGrokNativeSubagentsSurviveParentLoss(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(strings.ReplaceAll(string(body), `"subagent"`, `"subagent_fork"`)), 0o600))
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "chat_history.jsonl"), []byte(`{"type":"user","content":"You are a code reviewer. Review this change."}`+"\n"), 0o600))
+		if headless {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "prompt_context.json"), []byte(`{"is_non_interactive":true}`), 0o600))
+		}
 	}
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
@@ -45,7 +65,7 @@ func TestGrokNativeSubagentsSurviveParentLoss(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, stored)
 			assert.Equal(t, "subagent", stored.RelationshipType, child.kind)
-			assert.Empty(t, stored.SessionKind, child.kind)
+			assert.Equal(t, wantKind, stored.SessionKind, child.kind)
 			assert.True(t, stored.IsAutomated, child.kind)
 		}
 	}

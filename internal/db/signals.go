@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
+
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 const signalsBackfillMarker = "session_quality_signals_v1"
@@ -49,6 +52,141 @@ type ToolObservation struct {
 	Outcome        string
 	Repeat         string
 	SequenceEnding *string
+}
+
+// SessionSignalRefreshInput holds persisted signal columns and trailing
+// assistant message text needed to recompute outcome, recency, and health
+// score after is_automated changes.
+type SessionSignalRefreshInput struct {
+	IsAutomated                 bool
+	MessageCount                int
+	EndedAt                     *string
+	EndedWithRole               string
+	FinalFailureStreak          int
+	LastAssistantText           string
+	SignalsPendingSince         *string
+	HasToolCalls                bool
+	ToolFailureSignalCount      int
+	ToolRetryCount              int
+	EditChurnCount              int
+	ConsecutiveFailureMax       int
+	HasContextData              bool
+	CompactionCount             int
+	MidTaskCompactionCount      int
+	ContextPressureMax          *float64
+	ShortPromptCount            int
+	UnstructuredStart           bool
+	MissingSuccessCriteriaCount int
+	MissingVerificationCount    int
+	DuplicatePromptCount        int
+	NoCodeContextCount          int
+	RunawayToolLoopCount        int
+}
+
+// SessionSignalRefreshResult holds the refreshed outcome, recency, and health
+// columns for a session whose automation status changed.
+type SessionSignalRefreshResult struct {
+	Outcome             string
+	OutcomeConfidence   string
+	SignalsPendingSince *string
+	HealthScore         *int
+	HealthGrade         *string
+}
+
+// Matches reports whether r equals the stored signal columns.
+func (r SessionSignalRefreshResult) Matches(
+	outcome, confidence string,
+	pending *string,
+	score *int,
+	grade *string,
+) bool {
+	return r.Outcome == outcome &&
+		r.OutcomeConfidence == confidence &&
+		equalOptional(r.SignalsPendingSince, pending) &&
+		equalOptional(r.HealthScore, score) &&
+		equalOptional(r.HealthGrade, grade)
+}
+
+func equalOptional[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// RefreshIfChanged applies trailing visible message metadata, recomputes
+// outcome, recency, and health score at now, and reports whether any stored
+// signal column changed.
+func (in *SessionSignalRefreshInput) RefreshIfChanged(
+	lastRole, lastContent, curOutcome, curConfidence string,
+	curScore *int, curGrade *string, now time.Time,
+) (SessionSignalRefreshResult, bool) {
+	if in.EndedWithRole == "" && lastRole != "" {
+		in.EndedWithRole = lastRole
+	}
+	if lastRole == "assistant" {
+		in.LastAssistantText = lastContent
+	}
+	next := RecomputeSignalsForAutomationChange(*in, now)
+	return next, !next.Matches(curOutcome, curConfidence, in.SignalsPendingSince, curScore, curGrade)
+}
+
+// RecomputeSignalsForAutomationChange derives outcome, recency, and health
+// score from persisted signal columns at observation time now.
+func RecomputeSignalsForAutomationChange(
+	in SessionSignalRefreshInput, now time.Time,
+) SessionSignalRefreshResult {
+	var lastActivity time.Time
+	if in.EndedAt != nil {
+		lastActivity, _ = time.Parse(time.RFC3339Nano, *in.EndedAt)
+	}
+	outcome := signals.ClassifyOutcomeAt(signals.OutcomeInput{
+		IsAutomated:        in.IsAutomated,
+		MessageCount:       in.MessageCount,
+		EndedWithRole:      in.EndedWithRole,
+		FinalFailureStreak: in.FinalFailureStreak,
+		LastAssistantText:  in.LastAssistantText,
+		LastActivity:       lastActivity,
+	}, now)
+	score := signals.ComputeHealthScore(signals.ScoreInput{
+		Outcome:                outcome.Outcome,
+		OutcomeConfidence:      outcome.Confidence,
+		HasToolCalls:           in.HasToolCalls,
+		FailureSignalCount:     in.ToolFailureSignalCount,
+		RetryCount:             in.ToolRetryCount,
+		EditChurnCount:         in.EditChurnCount,
+		ConsecutiveFailMax:     in.ConsecutiveFailureMax,
+		HasContextData:         in.HasContextData,
+		CompactionCount:        in.CompactionCount,
+		MidTaskCompactionCount: in.MidTaskCompactionCount,
+		PressureMax:            in.ContextPressureMax,
+		Heuristics: signals.HeuristicSignals{
+			ShortPromptCount:            in.ShortPromptCount,
+			UnstructuredStart:           in.UnstructuredStart,
+			MissingSuccessCriteriaCount: in.MissingSuccessCriteriaCount,
+			MissingVerificationCount:    in.MissingVerificationCount,
+			DuplicatePromptCount:        in.DuplicatePromptCount,
+			NoCodeContextCount:          in.NoCodeContextCount,
+			RunawayToolLoopCount:        in.RunawayToolLoopCount,
+		},
+	})
+	res := SessionSignalRefreshResult{
+		Outcome:           outcome.Outcome,
+		OutcomeConfidence: outcome.Confidence,
+		HealthScore:       score.Score,
+	}
+	if outcome.IsRecent {
+		if in.SignalsPendingSince != nil {
+			res.SignalsPendingSince = in.SignalsPendingSince
+		} else {
+			pending := now.UTC().Format(time.RFC3339)
+			res.SignalsPendingSince = &pending
+		}
+	}
+	if score.Grade != "" {
+		res.HealthGrade = &score.Grade
+	}
+	return res
 }
 
 // usageOnlySignalUpdate is the canonical derived-signal state for an archive

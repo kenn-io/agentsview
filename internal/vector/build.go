@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -57,6 +58,10 @@ type BuildOptions struct {
 	// than the refresh watermark are picked up. It does not force a re-embed
 	// of documents that stay in scope.
 	IncludeAutomated bool
+	// Agents limits message scans to these agent IDs; an empty list includes all.
+	Agents []string
+	// Roles limits message scans to these roles; an empty list includes both.
+	Roles []string
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
 	// ModelContextTokens is the maximum tokens accepted for one input.
@@ -128,7 +133,7 @@ func (ix *Index) Build(
 		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
 	if o.RepairInvalid {
-		return ix.buildInvalidRepair(ctx, enc, gen, o)
+		return ix.repairWithScope(ctx, enc, gen, o)
 	}
 
 	firstEver, err := ix.noWatermarkYet(ctx)
@@ -147,7 +152,14 @@ func (ix *Index) Build(
 	// in-scope automated sessions older than the watermark) get resolved,
 	// then setIncludeAutomatedScope below stamps the key so every later
 	// build compares against a real stored scope again.
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
+	storedAgents, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	agents := normalizedAgents(o.Agents)
+	roles := normalizedRoles(o.Roles)
+	scopeAgents := scopeValue(agents, roles)
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != scopeAgents
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -168,6 +180,12 @@ func (ix *Index) Build(
 		capChanged = !hasCap || storedCap != runCap
 	}
 	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
+	if scopeChanged {
+		// A failed reconciliation must be retried even if the old scope returns.
+		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
+			return BuildResult{}, fmt.Errorf("clearing scope: %w", err)
+		}
+	}
 	if capChanged {
 		// A partial reshape must still reconcile fully if the old cap is restored.
 		if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
@@ -175,9 +193,24 @@ func (ix *Index) Build(
 		}
 	}
 	fp := gen.Fingerprint()
+	selected, activeMatches, err := ix.selectBuildTarget(ctx, fp, o.Space)
+	if err != nil {
+		return BuildResult{}, err
+	}
 	if full {
 		if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
 			return BuildResult{}, err
+		}
+	}
+	var seed *reuseGeneration
+	if ix.spec.Name == "messages" && !o.FullRebuild {
+		var g reuseGeneration
+		g.ordinal, g.dimension, err = ix.generationOrdinalDimension(ctx, selected)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return BuildResult{}, err
+		}
+		if err == nil {
+			seed = &g
 		}
 	}
 	// Report the scanning phase before the mirror refresh: on a large archive
@@ -187,7 +220,7 @@ func (ix *Index) Build(
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
-	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
+	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, agents, roles, seed)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -195,6 +228,9 @@ func (ix *Index) Build(
 		if err := ix.metaSet(ctx, runMaxRunesMetaKey, runCap); err != nil {
 			return BuildResult{}, fmt.Errorf("storing run cap: %w", err)
 		}
+	}
+	if err := ix.metaSet(ctx, scopeAgentsKey, scopeAgents); err != nil {
+		return BuildResult{}, err
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
@@ -205,26 +241,45 @@ func (ix *Index) Build(
 		}
 	}
 
-	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.Space, o.FullRebuild)
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, selected, activeMatches, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	result := BuildResult{Fingerprint: target, Refresh: refreshStats}
+
+	var ordinal int64
+	if ix.spec.Name == "messages" {
+		var dimension int
+		ordinal, dimension, err = ix.generationOrdinalDimension(ctx, target)
+		if err != nil {
+			return result, err
+		}
+		if !o.FullRebuild {
+			seed = &reuseGeneration{ordinal: ordinal, dimension: dimension}
+			if err := ix.backfillChunkText(ctx, ordinal); err != nil {
+				return result, err
+			}
+		}
+	}
 
 	total, err := ix.countPending(ctx, target)
 	if err != nil {
 		return result, err
 	}
 
+	if seed != nil {
+		enc = ix.reuseEncoder(enc, *seed)
+	}
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fillStore := &repairQueueCompletingStore{
 		Store: ix.store,
 		db:    ix.db,
 		spec:  ix.spec,
 	}
-	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped,
+	reuseStore := &reuseCompletingStore{repairQueueCompletingStore: fillStore, ix: ix, ordinal: ordinal}
+	fillStats, fillErr := kitvec.Fill[string, string](ctx, reuseStore, target, wrapped,
 		kitvec.WithFillSplit[string](ix.split),
-		kitvec.WithFillBatch[string](o.encodeBatchOptions()...),
+		kitvec.WithFillBatch[string](o.EncodeBatchOptions()...),
 		kitvec.WithFillConcurrency[string](o.Concurrency),
 		// A positive BatchSize packs chunks from several documents into one
 		// encode call, so a permanent rejection arrives without knowing which
@@ -240,6 +295,46 @@ func (ix *Index) Build(
 	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
+	}
+
+	if ix.spec.Name == "messages" {
+		tx, err := ix.db.BeginTx(ctx, nil)
+		if err != nil {
+			return result, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
+			return result, err
+		}
+		// A previous fill can save documents before a later document fails. On
+		// retry those completed documents are no longer passed to SaveVectors.
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT d.doc_key, d.content, EXISTS (SELECT 1 FROM `+ix.spec.chunksTable()+` c WHERE c.ordinal = ? AND c.doc_key = d.doc_key) FROM `+ix.spec.reuseTable()+` r JOIN `+ix.spec.DocsTable+` d ON d.doc_key = r.doc_key JOIN `+ix.spec.stampsTable()+` s ON s.ordinal = r.ordinal AND s.doc_key = r.doc_key AND s.revision = d.content_hash WHERE r.ordinal = ?`, ordinal, ordinal)
+		if err != nil {
+			return result, err
+		}
+		defer rows.Close()
+		var completed []string
+		for rows.Next() {
+			var key, content string
+			var hasChunks bool
+			if err := rows.Scan(&key, &content, &hasChunks); err != nil {
+				return result, err
+			}
+			if hasChunks || len(kitvec.Split(content, ix.split)) == 0 {
+				completed = append(completed, key)
+			}
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return result, err
+		}
+		for _, key := range completed {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND doc_key = ?`, ordinal, key); err != nil {
+				return result, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return result, err
+		}
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
@@ -258,6 +353,26 @@ func (ix *Index) Build(
 		}
 	}
 	return result, nil
+}
+
+func (ix *Index) repairWithScope(
+	ctx context.Context, enc kitvec.EncodeFunc, gen kitvec.Generation, o BuildOptions,
+) (BuildResult, error) {
+	if ix.spec.Name == "messages" {
+		storedAgents, hasAgents, err := ix.metaGet(ctx, scopeAgentsKey)
+		if err != nil {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, err
+		}
+		_, hasScope, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
+		if err != nil {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, err
+		}
+		scope := scopeValue(normalizedAgents(o.Agents), normalizedRoles(o.Roles))
+		if storedAgents != scope || (hasAgents && !hasScope) {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("scope changed; run an embeddings build before repairing invalid vectors")
+		}
+	}
+	return ix.buildInvalidRepair(ctx, enc, gen, o)
 }
 
 // buildInvalidRepair is separate from the ordinary build path so repair cannot
@@ -306,7 +421,7 @@ func (ix *Index) buildInvalidRepair(
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
 		Split:       ix.split,
-		Batch:       o.encodeBatchOptions(),
+		Batch:       o.EncodeBatchOptions(),
 		Concurrency: o.Concurrency,
 	})
 	finish()
@@ -334,7 +449,7 @@ func (ix *Index) buildInvalidRepair(
 	return result, nil
 }
 
-// encodeBatchOptions configures kit to treat the model context window as the
+// EncodeBatchOptions configures kit to treat the model context window as the
 // conservative upper bound for every input. Providers may truncate oversized
 // inputs to that length, so the bound keeps the request within their aggregate
 // token cap without depending on provider tokenization.
@@ -342,7 +457,7 @@ func (ix *Index) buildInvalidRepair(
 // Without a configured budget, batch_size alone bounds a request: each input
 // is charged one token against a budget of batch_size, which leaves the batch
 // size as the only limit and keeps kit's default token estimate out of it.
-func (o BuildOptions) encodeBatchOptions() []kitvec.BatchOption {
+func (o BuildOptions) EncodeBatchOptions() []kitvec.BatchOption {
 	options := []kitvec.BatchOption{
 		kitvec.WithBatchSize(o.BatchSize),
 		kitvec.WithBatchConcurrency(1),
@@ -421,22 +536,8 @@ func (ix *Index) noWatermarkYet(ctx context.Context) (bool, error) {
 	return watermark == "", nil
 }
 
-// resolveBuildTarget decides which generation fingerprint Build should fill
-// and whether it is a newly (or still) building generation that should be
-// auto-activated once it fully covers the mirror. See the package's build
-// brief for the exact decision table.
-//
-// FullRebuild resets the target generation whenever it already exists —
-// active, building, or retired — not only when it happens to be the active
-// one: a fingerprint that already exists as a retired (or still building)
-// generation carries stamps and vectors from its earlier life, and without
-// a reset EnsureGeneration would reuse them, letting Fill skip every
-// document and silently reactivate stale embeddings instead of performing
-// the requested full rebuild.
-func (ix *Index) resolveBuildTarget(
-	ctx context.Context, gen kitvec.Generation, fp string,
-	space embedmodel.Descriptor, fullRebuild bool,
-) (target string, wasBuilding bool, err error) {
+// selectBuildTarget picks the active matching generation or the new fingerprint.
+func (ix *Index) selectBuildTarget(ctx context.Context, fp string, space embedmodel.Descriptor) (string, bool, error) {
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return "", false, err
@@ -447,9 +548,19 @@ func (ix *Index) resolveBuildTarget(
 			return "", false, fmt.Errorf("matching active generation: %w", err)
 		}
 	}
-
 	if activeMatches {
-		fp = active
+		return active, true, nil
+	}
+	return fp, false, nil
+}
+
+// resolveBuildTarget prepares the selected generation and resets it for a full
+// rebuild, including when the generation was previously retired.
+func (ix *Index) resolveBuildTarget(
+	ctx context.Context, gen kitvec.Generation, fp string,
+	activeMatches, fullRebuild bool,
+) (target string, wasBuilding bool, err error) {
+	if activeMatches {
 		if fullRebuild {
 			if err := ix.markActiveFullRebuildPending(ctx, fp); err != nil {
 				return "", false, err
@@ -643,6 +754,17 @@ func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
 	).Scan(&ordinal); err != nil {
 		return fmt.Errorf("lookup generation ordinal for fingerprint %s: %w", fp, err)
+	}
+
+	if ix.spec.Name == "messages" {
+		for _, table := range []string{ix.spec.chunkTextTable(), ix.spec.reuseTable()} {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE ordinal = ?`, ordinal); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.MetaTable+` WHERE key = ?`, chunkTextMarker+strconv.FormatInt(ordinal, 10)); err != nil {
+			return err
+		}
 	}
 
 	vecTable := fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal)

@@ -13,11 +13,10 @@ import (
 
 func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_signals_version_test"
+	const schema = pgPushTestSchema
 	const id = "signals-version"
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	url := testPGURL(t)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 	}))
@@ -67,11 +66,10 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 		{"remove-session", "this is broken", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			const schema = "agentsview_signals_memo_race_test"
+			const schema = pgPushTestSchema
 			const id = "signals-memo-race"
 			syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			require.NoError(t, local.UpsertSession(ctx, db.Session{
 				ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 			}))
@@ -118,7 +116,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				require.NoError(t, pg.QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id = $1`, id).Scan(&publishedVersion))
 			}
 
-			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
+			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn, false))
 			if test.name != "remove-session" {
 				assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			}
@@ -144,11 +142,10 @@ func TestFrustrationMemo(t *testing.T) {
 		{"replace", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			const schema = "agentsview_signals_memo_test"
+			const schema = pgPushTestSchema
 			const id = "signals-memo"
 			syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 2}
 			require.NoError(t, local.UpsertSession(ctx, session))
 			// The system row is not a prompt, so its marker text must not count.
@@ -165,7 +162,8 @@ func TestFrustrationMemo(t *testing.T) {
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			filter := db.AnalyticsFilter{Timezone: "Local"}
+			initial, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
 			versionColumn, err := sessionVersionColumnPG(ctx, store.pg)
@@ -191,7 +189,7 @@ func TestFrustrationMemo(t *testing.T) {
 				_, err = syncer.Push(ctx, false, nil)
 				require.NoError(t, err)
 			}
-			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			warm, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			assert.Equal(t, test.want, warm.QualityHealth.Totals.FrustrationMarkerCount)
 		})

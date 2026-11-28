@@ -81,7 +81,7 @@ func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
 			agent == AgentCodebuff || agent == AgentVibe ||
 			agent == AgentAntigravityCLI || agent == AgentAntigravity ||
 			agent == AgentGemini || agent == AgentPi ||
-			agent == AgentOMO || agent == AgentStepCode {
+			agent == AgentOMO || agent == AgentStepCode || agent == AgentCodex {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},
@@ -110,6 +110,17 @@ func TestProviderCapabilitiesStoredMemberFreshnessListingMatchConsumers(t *testi
 			container, ok := ResolveStoredMemberFreshnessContainer(provider, dbPath)
 			assert.True(t, ok)
 			assert.Equal(t, dbPath, container)
+			continue
+		}
+		if agent == AgentHermes || agent == AgentAugureDesktop {
+			assert.Equal(t, CapabilitySupported, got)
+			if agent == AgentAugureDesktop {
+				createHermesStateDB(t, root)
+				path := filepath.Join(root, "state.db")
+				container, ok := ResolveStoredMemberFreshnessContainer(provider, path)
+				assert.True(t, ok)
+				assert.Equal(t, path, container)
+			}
 			continue
 		}
 		assert.Equalf(t, CapabilityUnsupported, got,

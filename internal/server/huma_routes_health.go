@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"os"
+	"uuid"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -10,6 +11,7 @@ import (
 )
 
 type PingInfo struct {
+	InstanceID                   uuid.UUID         `json:"instance_id"`
 	OK                           bool              `json:"ok"`
 	Healthy                      bool              `json:"healthy"`
 	Service                      string            `json:"service,omitempty"`
@@ -44,6 +46,7 @@ func (s *Server) humaPing(
 	}
 	return &jsonOutput[PingInfo]{
 		Body: PingInfo{
+			InstanceID:                   s.instanceID,
 			OK:                           true,
 			Healthy:                      healthy,
 			Service:                      daemonService,

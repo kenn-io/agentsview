@@ -13,8 +13,7 @@ const mocks = vi.hoisted(() => ({
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   generate: vi.fn(),
   load: vi.fn().mockResolvedValue(undefined),
-  loadAgents: vi.fn(),
-  loadProjects: vi.fn(),
+  refreshFilterOptions: vi.fn(),
   select: vi.fn(),
   selectTask: vi.fn(),
 }));
@@ -37,8 +36,7 @@ const state = vi.hoisted(() => {
     sessions: {
       agents: [] as Array<{ name: string; session_count: number }>,
       projects: [],
-      loadAgents: mocks.loadAgents,
-      loadProjects: mocks.loadProjects,
+      refreshFilterOptions: mocks.refreshFilterOptions,
     },
     store: {
       dateFrom: "2026-07-01",
@@ -52,9 +50,10 @@ const state = vi.hoisted(() => {
       items: [selectedItem],
       tasks: [],
       loading: false,
-      selectedId: 42,
+      error: null as string | null,
+      selectedId: 42 as number | null,
       selectedTaskId: null as string | null,
-      selectedItem,
+      selectedItem: selectedItem as typeof selectedItem | undefined,
       selectedTask: undefined as InsightTask | undefined,
       cancelInFlightReads: mocks.cancelInFlightReads,
       deleteItem: mocks.deleteItem,
@@ -75,6 +74,7 @@ const state = vi.hoisted(() => {
     },
   };
 });
+const savedInsight = state.store.items[0]!;
 
 vi.mock("../../stores/insights.svelte.js", async () => {
   const { SvelteMap } = await import("svelte/reactivity");
@@ -122,6 +122,7 @@ describe("GeneratedInsightsPanel", () => {
     state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
+    state.store.items = [savedInsight];
     state.store.selectedTask = undefined;
     state.store.selectedId = 42;
     state.store.selectedItem = state.store.items[0]!;
@@ -165,10 +166,32 @@ describe("GeneratedInsightsPanel", () => {
     expect(reportErrorShown).toHaveBeenCalledTimes(4);
   });
 
+  it("shows a failed archive read with Retry instead of the empty archive", async () => {
+    const items = state.store.items;
+    state.store.items = [];
+    state.store.selectedId = null as unknown as number;
+    state.store.error = "insights table missing";
+    try {
+      component = mount(GeneratedInsightsPanel, { target: document.body });
+      await tick();
+
+      const alert = document.querySelector('[role="alert"]')!;
+      expect(alert.textContent).toContain("insights table missing");
+      expect(document.body.textContent).not.toContain("No generated insights saved.");
+      expect(reportErrorShown).toHaveBeenCalledWith("insight");
+
+      mocks.load.mockClear();
+      alert.querySelector<HTMLButtonElement>("button")!.click();
+      expect(mocks.load).toHaveBeenCalledOnce();
+    } finally {
+      state.store.items = items;
+      state.store.error = null;
+    }
+  });
+
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
-
     const text = document.body.textContent ?? "";
     for (const label of [
       "Date range",

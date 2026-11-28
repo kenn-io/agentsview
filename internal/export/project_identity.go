@@ -394,7 +394,7 @@ func AggregateIdentityScope(scopes []IdentityScope) IdentityScope {
 }
 
 // LegacySharedStoreIdentityScope provides a deterministic response scope for
-// PostgreSQL and DuckDB stores populated before source archive identities were
+// PostgreSQL and ClickHouse stores populated before source archive identities were
 // published. Shared-store catalog keys are response-scoped selectors, not
 // durable project identities; this fallback prevents unrelated labels from
 // collapsing without scanning or mutating legacy session rows.

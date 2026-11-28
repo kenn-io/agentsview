@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vite-plus/test";
-import { isSystemMessage, normalizeMessagePreview, previewMessage } from "./messages.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
+import {
+  isPromptMessage,
+  isSkillInvocationMessage,
+  isSystemBoundaryMessage,
+  isSystemMessage,
+  normalizeMessagePreview,
+  previewMessage,
+} from "./messages.js";
 import { msg } from "./test-messages.js";
 
 describe("isSystemMessage", () => {
@@ -267,5 +275,65 @@ describe("previewMessage", () => {
       text: "<system-reminder>ctx</system-reminder>",
       isShell: true,
     });
+  });
+});
+
+describe("skill invocation rows", () => {
+  const skillRow = msg({
+    role: "user",
+    content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+    is_system: true,
+    source_type: "system",
+    source_subtype: "skill_invocation",
+  });
+
+  it("is visible, not a boundary card, and not a prompt", () => {
+    expect(isSkillInvocationMessage(skillRow)).toBe(true);
+    expect(isSystemMessage(skillRow)).toBe(false);
+    expect(isSystemBoundaryMessage(skillRow)).toBe(false);
+    expect(isPromptMessage(skillRow)).toBe(false);
+  });
+
+  it("does not match the subtype on a message that is not system-flagged", () => {
+    const typed = msg({ content: "typed", source_subtype: "skill_invocation" });
+    expect(isSkillInvocationMessage(typed)).toBe(false);
+  });
+
+  it("still hides an unknown system subtype", () => {
+    const unknown = msg({ is_system: true, source_subtype: "mystery_subtype" });
+    expect(isSystemMessage(unknown)).toBe(true);
+    expect(isSkillInvocationMessage(unknown)).toBe(false);
+  });
+});
+
+describe("isPromptMessage", () => {
+  it("keeps typed prompts, including empty ones and shell commands", () => {
+    expect(isPromptMessage(msg({ content: "fix the bug" }))).toBe(true);
+    expect(isPromptMessage(msg({ content: "" }))).toBe(true);
+    expect(isPromptMessage(msg({ content: "<bash-input>ls</bash-input>" }))).toBe(true);
+    expect(
+      isPromptMessage(msg({ content: "<bash-input>ls</bash-input><bash-stdout>a</bash-stdout>" })),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["an assistant reply", { role: "assistant" }],
+    ["a system-flagged row", { is_system: true }],
+    ["a continuation card", { is_system: true, source_subtype: "continuation" }],
+    ["a compaction boundary", { is_compact_boundary: true }],
+    ["stored tool output", { source_subtype: "tool_result" }],
+    ["injected command output", { content: "<local-command-stdout>ok</local-command-stdout>" }],
+    ["a reminder-only row", { content: "<system-reminder>ctx</system-reminder>" }],
+    ["shell output", { content: "<bash-stdout>hello</bash-stdout>" }],
+    [
+      "shell output that prints a closing tag",
+      { content: "<bash-stdout>a </bash-stdout> b</bash-stdout>" },
+    ],
+    [
+      "shell output after a reminder",
+      { content: "<system-reminder>ctx</system-reminder>\n<bash-stdout>ok</bash-stdout>" },
+    ],
+  ] satisfies [string, Partial<Message>][])("drops %s", (_name, extra) => {
+    expect(isPromptMessage(msg(extra))).toBe(false);
   });
 });

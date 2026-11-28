@@ -66,10 +66,18 @@ const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
 // as messages, since the view writes one row per message.
 var usageMessagesOrderBy = []string{"session_id", "ordinal"}
 
-func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
+// usageMessageLowCardinality are the usage_messages columns that hold few
+// distinct values; see convertToLowCardinality.
+var usageMessageLowCardinality = []columnSpec{
+	col("model", tLowString), col("provider_id", tLowString),
+}
+
+// ensureUsageMessages creates usage_messages and its view. current holds
+// the table's column types before this call, nil when it is new.
+func ensureUsageMessages(ctx context.Context, conn *sql.DB, current map[string]string) error {
 	columns := []string{
 		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
-		"model String", "provider_id String", "claude_message_id String",
+		"model " + tLowString, "provider_id " + tLowString, "claude_message_id String",
 		"claude_request_id String", "source_uuid String", "push_version UInt64",
 	}
 	fields := []string{usageMessageFields}
@@ -90,6 +98,9 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {
 		return fmt.Errorf("creating stored usage messages: %w", err)
+	}
+	if err := convertToLowCardinality(ctx, conn, "usage_messages", current, usageMessageLowCardinality); err != nil {
+		return err
 	}
 	// Mirrors created before the recorded cost column gain it before the view
 	// writes it. Existing rows keep NULL with no backfill: only parsers
@@ -189,7 +200,7 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		")) MATERIALIZED arrayMap(m -> tuple("+strings.Join(factValues, ",")+"),usage_messages)",
 		chSnapshotPreparesUsageColumn)
 	_, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS "+spec.name+" ("+
-		strings.Join(columns, ",")+") ENGINE=ReplacingMergeTree(revision) ORDER BY id SETTINGS index_granularity=1")
+		strings.Join(columns, ",")+") ENGINE=ReplacingMergeTree(revision) ORDER BY id")
 	if err != nil {
 		return fmt.Errorf("creating complete usage snapshots: %w", err)
 	}
@@ -206,6 +217,9 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return fmt.Errorf("adding clickhouse column %s.%s: %w", spec.name, c.name, err)
 		}
 	}
+	if err := convertToLowCardinality(ctx, conn, spec.name, existing[spec.name], spec.columns); err != nil {
+		return err
+	}
 	if _, has := existing[spec.name][chSnapshotPreparesUsage]; !has {
 		if err := addSnapshotPreparesUsage(ctx, conn); err != nil {
 			return err
@@ -215,6 +229,9 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		if err := addSnapshotRecordedCosts(ctx, conn); err != nil {
 			return err
 		}
+	}
+	if err := rebuildUsageSnapshots(ctx, conn, usageSnapshotRebuildStale); err != nil {
+		return err
 	}
 	if err := ensurePreparedUsage(ctx, conn); err != nil {
 		return err
@@ -1501,15 +1518,22 @@ func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any
 	return nil
 }
 
+// insertUsageSessionSnapshots writes one complete snapshot per payload. A
+// session in carries gets its earlier usage messages from the mirror's
+// snapshot; see insertCarriedSnapshots.
 func (s *Sync) insertUsageSessionSnapshots(
-	ctx context.Context, payloads []sessionPayload, contentVersions map[string]uint64, version uint64,
+	ctx context.Context, payloads []sessionPayload, publications map[string]sessionPublication,
+	carries map[string]snapshotCarry, version uint64,
 ) error {
 	spec, err := usageSessionSnapshotSpec()
 	if err != nil {
 		return err
 	}
 	rows := make([][]any, 0, len(payloads))
+	var carried []carriedSnapshot
 	for _, payload := range payloads {
+		row := s.sessionRow(payload, publications[payload.session.ID], version)
+		row = row[:len(row)-1]
 		messages := make([][]any, 0, len(payload.messages))
 		for _, message := range payload.messages {
 			messages = append(messages, []any{
@@ -1522,9 +1546,29 @@ func (s *Sync) insertUsageSessionSnapshots(
 		for _, event := range payload.usage {
 			events = append(events, usageEventRow(event, version))
 		}
-		row := s.sessionRow(payload, contentVersions[payload.session.ID], version)
-		rows = append(rows, append(row[:len(row)-1], messages, events, version))
+		full := append(slices.Clone(row), messages, events, version)
+		carry, ok := carries[payload.session.ID]
+		if !ok {
+			rows = append(rows, full)
+			continue
+		}
+		first := slices.IndexFunc(payload.messages, func(m db.Message) bool { return m.Ordinal > carry.through })
+		if first < 0 {
+			first = len(messages)
+		}
+		tail := messages[first:]
+		carried = append(carried, carriedSnapshot{
+			id: payload.session.ID, full: full,
+			tail: append(row, tail, events, version, carry.rows, int64(carry.through)),
+		})
 	}
-	s.usageWritten = s.usageWritten || len(rows) > 0
-	return insertRowsSpec(ctx, s.conn, spec, rows)
+	s.usageWritten = s.usageWritten || len(payloads) > 0
+	if err := insertRowsSpec(ctx, s.conn, spec, rows); err != nil {
+		return err
+	}
+	missing, err := s.insertCarriedSnapshots(ctx, spec, carried, version)
+	if err != nil {
+		return err
+	}
+	return insertRowsSpec(ctx, s.conn, spec, missing)
 }

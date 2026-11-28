@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -14,6 +15,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/stringutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -22,13 +26,44 @@ import (
 // retain the revision captured before their reads so concurrent writes remain
 // visible to the next visit.
 type pgActivityInputs struct {
-	revision int64
+	revision            int64
+	identity            string
+	identityUnavailable bool
 	// sessions holds each session's activity, derived at gapCap.
 	sessions   map[string]pgActivitySession
 	gapCap     float64
 	usage      []pgActivityUsageRow
+	priced     *pgActivityPriced
 	candidates map[string]bool
 	changed    []string
+}
+
+type pgActivityPriced struct {
+	rangeStart, rangeEnd, effectiveEnd, next time.Time
+	pricingDigest                            string
+	block                                    *export.PricingBlock
+	rows                                     []pgActivityPricedRow
+}
+
+func (p *pgActivityPriced) covers(q activity.Query, digest string) bool {
+	if !p.rangeStart.Equal(q.RangeStart) || !p.rangeEnd.Equal(q.RangeEnd) ||
+		p.pricingDigest != digest || q.EffectiveEnd.Before(p.effectiveEnd) {
+		return false
+	}
+	nextUS := int64(math.MaxInt64)
+	if !p.next.IsZero() {
+		nextUS = readbase.CeilMicros(p.next)
+	}
+	return (&readbase.ActivityUsageSums{
+		EndUS: readbase.CeilMicros(p.effectiveEnd), NextUS: nextUS,
+	}).Covers(readbase.CeilMicros(q.EffectiveEnd))
+}
+
+type pgActivityPricedRow struct {
+	attribution                                unique.Handle[string]
+	cost                                       int64
+	index, webSearches                         int32
+	reported, priced, contributes, sessionCost bool
 }
 
 // pgActivitySession is one session's activity over all time: its runs and
@@ -67,7 +102,8 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 }
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
-	size := int64(unsafe.Sizeof(e))
+	size := int64(unsafe.Sizeof(e)) + int64(len(e.identity))
+	size += pgActivityPricedBytes(e.priced)
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
 		size += int64(len(id)) + 80 + int64(unsafe.Sizeof(session)) + session.runs.Bytes() +
@@ -93,20 +129,57 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 	return size
 }
 
+func pgActivityInputsWithoutPrices(inputs []pgActivityInputs, size int64) ([]pgActivityInputs, int64) {
+	for i := range inputs {
+		size -= pgActivityPricedBytes(inputs[i].priced)
+		inputs[i].priced = nil
+	}
+	return inputs, size
+}
+
+func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
+	if priced == nil {
+		return 0
+	}
+	return int64(unsafe.Sizeof(*priced)) + int64(cap(priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(priced.block)
+}
+
 func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {
-	previous, ok := s.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	slot := lower + "|" + upper
+	previousRows, ok := s.runtimeState().activityInputs.Get(slot, version)
+	var previous pgActivityInputs
+	if len(previousRows) > 0 {
+		previous = previousRows[0]
+	} else {
+		ok = false
+	}
+	identity := ""
+	identityUnavailable := ok && previous.identityUnavailable
+	if (!ok || previous.identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
+		var err error
+		identity, err = s.activitySourceIdentity(ctx, "")
+		identityUnavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
+		if !ok && identity != "" {
+			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
+				previous, ok = loaded, true
+			}
+		}
+	}
 	after := int64(math.MaxInt64)
 	if ok {
-		after = previous[0].revision
+		after = previous.revision
 	}
 	revision, changed, err := s.LoadUsageChanges(ctx, after)
 	if err != nil || revision == 0 {
 		s.runtimeState().activityInputs.DeleteSlots(func(slot string) bool { return slot == lower+"|"+upper })
 		return nil, err
 	}
-	next := &pgActivityInputs{revision: revision, sessions: map[string]pgActivitySession{}, changed: changed}
-	if ok && revision >= after && len(changed) <= max(64, len(previous[0].candidates)/4) {
-		old := previous[0]
+	next := &pgActivityInputs{revision: revision, identity: identity, identityUnavailable: identityUnavailable, sessions: map[string]pgActivitySession{}, changed: changed}
+	if ok && previous.identity != "" {
+		next.identity = previous.identity
+	}
+	if ok && revision >= after && len(changed) <= max(64, len(previous.candidates)/4) {
+		old := previous
 		dirty := make(map[string]bool, len(changed))
 		for _, id := range changed {
 			dirty[id] = true
@@ -118,6 +191,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 			}
 		}
 		next.usage = old.usage
+		next.priced = old.priced
 		next.candidates = old.candidates
 	}
 	return next, nil
@@ -310,6 +384,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 		inputs.usage = slices.Clip(slices.Clone(fresh))
 		inputs.candidates = selected
 		inputs.changed = nil
+		inputs.priced = nil
 		return inputs.usage, nil
 	}
 	replaced := make(map[string]bool, len(read))
@@ -342,6 +417,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	inputs.usage = slices.Clip(slices.Clone(merged))
 	inputs.candidates = selected
 	inputs.changed = nil
+	inputs.priced = nil
 	return merged, nil
 }
 
@@ -349,9 +425,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 // of their own; see readActivityCandidates.
 const activityMessageSliceSessions = 4096
 
-// activityMessageSlices caps the message reads one pairing runs at once.
-// The terminal read and the report's usage read run beside them on the
-// pool of 5 connections, which leaves one for other requests.
+// Keep message slices bounded alongside the terminal and usage reads.
 const activityMessageSlices = 2
 
 // readActivityMessagePairs pairs the messages of the sessions in ids, one

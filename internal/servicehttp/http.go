@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // errHTTPNotFound is returned by the generated client adapter for 404 responses so callers
@@ -53,6 +54,13 @@ type httpStatusError struct {
 	path       string
 	statusCode int
 	body       []byte
+}
+
+type sessionRefreshNotStartedError struct{ error }
+
+func (e *sessionRefreshNotStartedError) Unwrap() error { return e.error }
+func (e *sessionRefreshNotStartedError) Is(target error) bool {
+	return target == syncpkg.ErrSessionRefreshNotStarted
 }
 
 func (e *httpStatusError) Error() string {
@@ -279,6 +287,9 @@ func (b *httpBackend) FindSessionIDsByPartial(
 func (b *httpBackend) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
+	if err := b.requireRawLookup(ctx); err != nil {
+		return nil, err
+	}
 	q := &apiclient.GetAPIV1SessionIdsResolveQuery{Partial: raw, RawSuffix: new(true)}
 	if limit > 0 {
 		q.Limit = new(int64(limit))
@@ -295,15 +306,25 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 		return nil, err
 	}
 	if response.JSON200.RawSuffix == nil || !*response.JSON200.RawSuffix {
-		return nil, errors.New(
-			"server does not acknowledge raw session ID lookup",
-		)
+		return nil, service.ErrRawLookupUnsupported
 	}
 	return response.JSON200.Ids, nil
 }
 
+// CheckCompactionSummaries probes once per request because the daemon can change.
+func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
+	capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion < service.CompactionAPIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d or later", capabilities.APIVersion, service.CompactionAPIVersion)
+	}
+	return nil
+}
+
 // Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+func (b *httpBackend) requireAPIVersion(ctx context.Context, minVersion int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -312,21 +333,35 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.SessionAnnotationsAPIVersion {
-		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
-				"restart or upgrade the server",
-			version,
-		)
+	if version < minVersion {
+		return &apiVersionError{version: version, feature: feature}
 	}
 	return nil
+}
+
+type apiVersionError struct {
+	version int
+	feature string
+}
+
+func (e *apiVersionError) Error() string {
+	return fmt.Sprintf("server API version %d does not support %s; restart or upgrade the server", e.version, e.feature)
+}
+
+// Only a confirmed old version means raw lookup is unsupported; a failed probe stays an ordinary error.
+func (b *httpBackend) requireRawLookup(ctx context.Context) error {
+	err := b.requireAPIVersion(ctx, service.RawSessionLookupAPIVersion, "raw session ID lookup")
+	if _, ok := errors.AsType[*apiVersionError](err); ok {
+		return fmt.Errorf("%w: %w", service.ErrRawLookupUnsupported, err)
+	}
+	return err
 }
 
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx); err != nil {
+		if err := b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}
 	}
@@ -435,6 +470,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
+	if f.Flat {
+		q.Flat = new(true)
+	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
 	}
@@ -502,6 +540,9 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
+	if f.CompactBoundaryOnly {
+		q.CompactBoundary = new(true)
+	}
 	if f.From != nil {
 		q.From = new(int64(*f.From))
 	}
@@ -657,6 +698,14 @@ func (b *httpBackend) Sync(
 		return nil, fmt.Errorf("sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		if response.StatusCode == http.StatusConflict {
+			var body struct {
+				Code string `json:"code"`
+			}
+			if json.Unmarshal(response.Body, &body) == nil && body.Code == service.SessionRefreshNotStartedCode {
+				return nil, &sessionRefreshNotStartedError{err}
+			}
+		}
 		return nil, err
 	}
 
@@ -945,6 +994,11 @@ func (b *httpBackend) SearchContent(
 	response, err := api.GetAPIV1SearchContentWithResponse(ctx, &apiclient.GetAPIV1SearchContentRequestOptions{Query: q}, editors...)
 	if response == nil {
 		return nil, err
+	}
+	if response.HTTPResponse != nil {
+		if deadline, parseErr := time.Parse(time.RFC3339Nano, response.HTTPResponse.Header.Get(db.ContentScanDeadlineHeader)); parseErr == nil {
+			db.SetContentScanDeadline(ctx, deadline)
+		}
 	}
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
@@ -1315,11 +1369,16 @@ func (b *httpBackend) ListRecallEntries(
 	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	q := recallFilterToQuery(f)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
 	}
+	if f.UpdatedSince != "" || f.CreatedSince != "" {
+		if err := b.requireAPIVersion(ctx, service.RecallTimeBoundsAPIVersion, "Recall time bounds"); err != nil {
+			return nil, err
+		}
+	}
+	q := recallFilterToQuery(f)
 	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
 	if response == nil {
 		return nil, err
@@ -1331,9 +1390,12 @@ func (b *httpBackend) ListRecallEntries(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
 		}
+		if response.HTTPResponse.StatusCode == http.StatusConflict {
+			return nil, service.ErrStaleRecallPagination
+		}
 		return nil, err
 	}
-	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly}
+	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly, NextCursor: response.JSON200.NextCursor}
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
@@ -1509,6 +1571,15 @@ func (b *httpBackend) ImportRecallEntries(
 
 func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
+	if f.UpdatedSince != "" {
+		q.UpdatedSince = new(f.UpdatedSince)
+	}
+	if f.CreatedSince != "" {
+		q.CreatedSince = new(f.CreatedSince)
+	}
+	if f.Cursor != "" {
+		q.Cursor = new(f.Cursor)
+	}
 	if f.Query != "" {
 		q.Q = new(f.Query)
 	}

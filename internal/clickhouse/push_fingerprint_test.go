@@ -28,7 +28,7 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 
 	// Fingerprint this session had before session_plan_usage existed; sessions
 	// without plan usage must keep it.
-	const withoutPlanUsage = "3ffa01ac4b265fffea3c52f5731cafd35b542c2db053e8d5f993bac323c0d07b"
+	const withoutPlanUsage = "e5a5f3f0f630d23945a9193394aa275b73161fdef2149e0d63cae384c72d2afa"
 	assert.Equal(t, withoutPlanUsage, fingerprint())
 
 	snapshot.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.0)}
@@ -66,10 +66,8 @@ func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
 	assert.Equal(t, legacy, fingerprint())
 }
 
-// TestSnapshotFingerprintSplit pins the session fingerprint stored before
-// the content fingerprint existed, so an upgrade rewrites nothing, and
-// checks that the content fingerprint ignores session fields and follows
-// every dependent table.
+// TestSnapshotFingerprintSplit checks that the content fingerprint ignores
+// session fields and follows every dependent table.
 func TestSnapshotFingerprintSplit(t *testing.T) {
 	s := &Sync{machine: "m"}
 	snapshot := &db.SessionMirrorSnapshot{
@@ -100,8 +98,10 @@ func TestSnapshotFingerprintSplit(t *testing.T) {
 	}
 
 	first := fingerprint()
-	const beforeSplit = "fd493dcbb439d59f17e007806eccee99fd1d64b9eff40737f5fd09eb753498f6"
-	assert.Equal(t, beforeSplit, first.full)
+	snapshot.IsLaunched = true
+	launched := fingerprint()
+	assert.NotEqual(t, first.full, launched.full)
+	assert.Equal(t, first.content, launched.content)
 
 	snapshot.Session.DataVersion = 8
 	snapshot.Session.DisplayName = new("renamed")
@@ -127,12 +127,14 @@ func TestSnapshotFingerprintSplit(t *testing.T) {
 }
 
 func TestPlanSessionWrite(t *testing.T) {
-	local := sessionFingerprint{full: "full-new", content: "content-a"}
+	local := sessionFingerprint{full: "full-new", content: "content-a", messages: 3}
 	stored := mirrorSession{
 		fingerprint: "full-new", contentFingerprint: "content-a",
 		archiveID: "archive", contentVersion: 7, rowCurrent: true,
 	}
 	rowOnly := sessionWrite{row: true, keptContent: "content-a", keptVersion: 7}
+	grown := sessionFingerprint{full: "full-other", content: "content-b", messages: 3}
+	withRows := func(m *mirrorSession) { m.messageRows, m.leadingRows, m.storedMessages = "rows", "leading", 2 }
 	for _, tc := range []struct {
 		name   string
 		local  sessionFingerprint
@@ -148,6 +150,32 @@ func TestPlanSessionWrite(t *testing.T) {
 			name: "content changed", found: true,
 			local: sessionFingerprint{full: "full-other", content: "content-b"},
 			want:  rewriteSession,
+		},
+		{
+			name: "content changed after the stored messages", found: true,
+			local: grown, stored: withRows,
+			want: sessionWrite{
+				row: true, content: true, keptVersion: 7,
+				keptMessageRows: "rows", keptLeadingRows: "leading", keepMessages: 2,
+			},
+		},
+		{
+			name: "fewer messages than stored", found: true,
+			local:  sessionFingerprint{full: "full-other", content: "content-b", messages: 1},
+			stored: withRows,
+			want:   rewriteSession,
+		},
+		{
+			name: "row written before message rows fingerprints", found: true,
+			local:  grown,
+			stored: func(m *mirrorSession) { m.storedMessages = 2 },
+			want:   rewriteSession,
+		},
+		{
+			name: "row-only write records the stored message rows", found: true,
+			local:  sessionFingerprint{full: "full-other", content: "content-a"},
+			stored: withRows,
+			want:   sessionWrite{row: true, keptContent: "content-a", keptVersion: 7, keptMessageRows: "rows", keptLeadingRows: "leading"},
 		},
 		{
 			name: "session fields changed", found: true,

@@ -14,11 +14,11 @@ import (
 
 const sanitizedGeminiAppsImportHTML = `<!doctype html>
 <html><head><title>My Activity History</title></head><body>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>first prompt</p><p>first answer</p></div></div>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>
+<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;first prompt<br>Jan 2, 2025, 3:04:05 PM EDT<br><p>first answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>
+<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Created a canvas<br>Jan 3, 2025, 3:04:05 PM PST<br><p>canvas</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>
+<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Gave feedback: Good response<br>Jan 4, 2025, 3:04:05 PM PST<br></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>
+<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;second prompt<br>Jan 5, 2025, 3:04:05 PM PST<br><p>second answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>
+<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Unknown activity<br>Jan 6, 2025, 3:04:05 PM PST<br><p>unknown</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>
 </body></html>`
 
 func TestImportGeminiApps(t *testing.T) {
@@ -46,8 +46,11 @@ func TestImportGeminiApps(t *testing.T) {
 
 func TestImportGeminiAppsIgnoresOtherProductsThroughPublicPath(t *testing.T) {
 	root := t.TempDir()
-	gemini := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>See <a href="https://example.invalid">source</a> for details</p></div></div>`
-	other := `<div class="outer-cell"><div class="header-cell"><h3>YouTube</h3><p>Watched</p><p>Jan 2, 2025, 3:04:05 PM XYZ</p></div><div class="content-cell"><p>video title</p></div></div>`
+	gemini := geminiAppsImportPromptedCell("Jan 2, 2025, 3:04:05 PM EDT", `See <a href="https://example.invalid">source</a> for details`)
+	other := strings.ReplaceAll(
+		geminiAppsImportPromptedCell("Jan 2, 2025, 3:04:05 PM XYZ", "video title"),
+		"Gemini Apps", "YouTube",
+	)
 	path := filepath.Join(root, "activity.html")
 	require.NoError(t, os.WriteFile(
 		path,
@@ -76,19 +79,19 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	path := filepath.Join(root, "activity.html")
 	initial := strings.ReplaceAll(
 		sanitizedGeminiAppsImportHTML,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Created a canvas<br>Jan 3, 2025, 3:04:05 PM PST<br><p>canvas</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	initial = strings.ReplaceAll(initial,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Gave feedback: Good response<br>Jan 4, 2025, 3:04:05 PM PST<br></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	initial = strings.ReplaceAll(initial,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;second prompt<br>Jan 5, 2025, 3:04:05 PM PST<br><p>second answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	initial = strings.ReplaceAll(initial,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Unknown activity<br>Jan 6, 2025, 3:04:05 PM PST<br><p>unknown</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
@@ -116,13 +119,21 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	assert.Equal(t, initialID, page.Sessions[0].ID)
 	messages, err := d.GetAllMessages(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "first prompt\n\nupdated answer", messages[0].Content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "first prompt", messages[0].Content)
+	assert.Equal(t, "user", messages[0].Role)
+	assert.Equal(t, "updated answer", messages[1].Content)
+	assert.Equal(t, "assistant", messages[1].Role)
 }
 
-func geminiAppsImportPromptedCell(timestamp, content string) string {
-	return `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>` + timestamp +
-		`</p></div><div class="content-cell"><p>` + content + `</p></div></div>`
+// geminiAppsImportPromptedCell renders one Prompted record in the cell layout
+// Google Takeout writes.
+func geminiAppsImportPromptedCell(timestamp, prompt string) string {
+	return `<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid">` +
+		`<div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div>` +
+		`<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;` + prompt + `<br>` + timestamp + `<br></div>` +
+		`<div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div>` +
+		`</div></div>`
 }
 
 func geminiAppsImportDocument(cells ...string) string {
@@ -210,19 +221,19 @@ func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {
 		"EDT", "XYZ",
 	)
 	html = strings.ReplaceAll(html,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Created a canvas<br>Jan 3, 2025, 3:04:05 PM PST<br><p>canvas</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	html = strings.ReplaceAll(html,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Gave feedback: Good response<br>Jan 4, 2025, 3:04:05 PM PST<br></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	html = strings.ReplaceAll(html,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;second prompt<br>Jan 5, 2025, 3:04:05 PM PST<br><p>second answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	html = strings.ReplaceAll(html,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Unknown activity<br>Jan 6, 2025, 3:04:05 PM PST<br><p>unknown</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	require.NoError(t, os.WriteFile(path, []byte(html), 0o644))
@@ -283,19 +294,19 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 		path := filepath.Join(root, "activity.html")
 		initial := strings.ReplaceAll(
 			sanitizedGeminiAppsImportHTML,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
+			`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Created a canvas<br>Jan 3, 2025, 3:04:05 PM PST<br><p>canvas</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 			"",
 		)
 		initial = strings.ReplaceAll(initial,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
+			`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Gave feedback: Good response<br>Jan 4, 2025, 3:04:05 PM PST<br></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 			"",
 		)
 		initial = strings.ReplaceAll(initial,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
+			`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;second prompt<br>Jan 5, 2025, 3:04:05 PM PST<br><p>second answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 			"",
 		)
 		initial = strings.ReplaceAll(initial,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
+			`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Unknown activity<br>Jan 6, 2025, 3:04:05 PM PST<br><p>unknown</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 			"",
 		)
 		require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
@@ -379,19 +390,19 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 func geminiAppsSinglePromptHTML() string {
 	fixture := strings.ReplaceAll(
 		sanitizedGeminiAppsImportHTML,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Created a canvas<br>Jan 3, 2025, 3:04:05 PM PST<br><p>canvas</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	fixture = strings.ReplaceAll(fixture,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Gave feedback: Good response<br>Jan 4, 2025, 3:04:05 PM PST<br></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	fixture = strings.ReplaceAll(fixture,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;second prompt<br>Jan 5, 2025, 3:04:05 PM PST<br><p>second answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	fixture = strings.ReplaceAll(fixture,
-		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
+		`<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Unknown activity<br>Jan 6, 2025, 3:04:05 PM PST<br><p>unknown</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div>`,
 		"",
 	)
 	return fixture
@@ -415,4 +426,37 @@ func TestImportGeminiAppsReportsTrashedSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Errors)
 	assert.Equal(t, []ImportRefusal{{SessionID: id, Reason: RefusalTrashed}}, stats.Refusals)
+}
+
+func TestImportGeminiAppsTakeoutFixture(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "gemini-apps", "MyActivity.html"))
+	require.NoError(t, err)
+	root := t.TempDir()
+	activityDir := filepath.Join(root, "Takeout", "My Activity", "Gemini Apps")
+	require.NoError(t, os.MkdirAll(activityDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(activityDir, "MyActivity.html"), fixture, 0o644))
+
+	d := testDB(t)
+	stats, err := ImportGeminiApps(t.Context(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, stats.Imported)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Errors)
+
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 3)
+	var haiku *db.Session
+	for i := range page.Sessions {
+		if page.Sessions[i].FirstMessage != nil && *page.Sessions[i].FirstMessage == "Write a haiku about rain.\nKeep it short." {
+			haiku = &page.Sessions[i]
+		}
+	}
+	require.NotNil(t, haiku)
+	messages, err := d.GetAllMessages(t.Context(), haiku.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "user", messages[0].Role)
+	assert.Equal(t, "assistant", messages[1].Role)
+	assert.Equal(t, "Soft rain on the roof\nthe gutters hum their one song\nmorning smells of earth", messages[1].Content)
 }

@@ -1,9 +1,13 @@
 import type { DbMessage as Message } from "../api/generated/index.js";
 import { isToolOnly } from "./content-parser.js";
+import { isSkillInvocationMessage } from "./messages.js";
 
 export interface MessageItem {
   kind: "message";
   message: Message;
+  /** Skill expansion row that directly precedes this user message. The
+   *  message renders it as a disclosure attached to its own card. */
+  skill?: Message;
   ordinals: number[];
 }
 
@@ -22,6 +26,15 @@ export interface EmptyGroupItem {
 }
 
 export type DisplayItem = MessageItem | ToolGroupItem | EmptyGroupItem;
+
+/**
+ * The ordinal that stands for an item in selection and prompt navigation. A
+ * message item that carries an attached skill covers two ordinals, but the
+ * user's prompt is the stop.
+ */
+export function primaryOrdinal(item: DisplayItem): number {
+  return item.kind === "message" ? item.message.ordinal : item.ordinals[0]!;
+}
 
 export interface BuildDisplayItemsOptions {
   /** When true, tool-only messages are emitted as individual
@@ -69,6 +82,24 @@ export function buildDisplayItems(
         ? "tool-group"
         : null;
     if (kind === null) {
+      const prev = items.at(-1);
+      if (
+        prev?.kind === "message" &&
+        prev.skill === undefined &&
+        isSkillInvocationMessage(prev.message) &&
+        msg.role === "user" &&
+        !msg.is_system &&
+        prev.message.session_id === msg.session_id &&
+        msg.ordinal === prev.message.ordinal + 1
+      ) {
+        items[items.length - 1] = {
+          kind: "message",
+          message: msg,
+          skill: prev.message,
+          ordinals: [prev.message.ordinal, msg.ordinal],
+        };
+        continue;
+      }
       items.push({
         kind: "message",
         message: msg,

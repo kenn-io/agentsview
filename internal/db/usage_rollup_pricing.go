@@ -14,6 +14,14 @@ import (
 
 const usageSessionPricingIdentityVersion = "usage-session-pricing-v1"
 
+// usageZonePricingIdentityVersion advances when pricing resolution rules change
+// without changing the stored catalog digest. Trusted zones re-check per-session
+// pricing hashes and rebuild only sessions whose own DependencyFingerprint
+// changed, leaving unrelated cached rollups untouched.
+// Version 2 re-checks zones after Gemini 4 fixed aliases and display-name slug
+// matching joined pricing resolution.
+const usageZonePricingIdentityVersion = "usage-zone-pricing-v2"
+
 // usagePricingInput's canonical model already applies timestamp-selected aliases.
 type usagePricingInput struct {
 	ProviderID, ReportedModel, CanonicalModel string

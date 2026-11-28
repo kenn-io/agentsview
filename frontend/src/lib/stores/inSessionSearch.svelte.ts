@@ -46,6 +46,12 @@ export interface SearchView {
   renderUnknownXmlBlocksAsPreformatted?: boolean;
 }
 
+export function linkedOrdinal(sessionId: string | null): number | undefined {
+  return sessionId && ui.linkedMessage?.sessionId === sessionId
+    ? ui.linkedMessage.ordinal
+    : undefined;
+}
+
 const EMPTY_MATCHES: Match[] = [];
 
 export class InSessionSearchStore {
@@ -84,6 +90,7 @@ export class InSessionSearchStore {
         settings.sessionProviders,
         sessions.activeSession?.agent,
       ),
+      revealOrdinal: linkedOrdinal(this.source.sessionId),
     });
   });
   index: SessionIndex | null = $derived.by(() => {

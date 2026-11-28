@@ -23,6 +23,7 @@ INTENTIONALLY_UNLISTED = {
     "claude-ai": "chat export importer, not a harness",
     "chatgpt": "chat export importer, not a harness",
     "gemini-apps": "chat export importer, not a harness",
+    "grok-web": "chat Sync importer, not a harness",
     "kiro-ide": "same brand as kiro",
     "antigravity-cli": "same brand as antigravity",
 }

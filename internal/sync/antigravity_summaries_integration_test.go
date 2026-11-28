@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -181,4 +182,148 @@ func antigravityStoredSession(t *testing.T, archive *db.DB, id string) *db.Sessi
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	return session
+}
+
+// Local changed-path and watch-batch syncs refresh archived workspace,
+// project, and parent metadata when conversation_summaries.db (or its WAL)
+// changes, while title-only edits select no transcripts.
+func TestAntigravitySummaryStoreChangedPathSyncRefreshesMetadata(t *testing.T) {
+	const (
+		changedID = "11111111-2222-3333-4444-555555555551"
+		siblingID = "11111111-2222-3333-4444-555555555552"
+	)
+	type testCase struct {
+		agent     parser.AgentType
+		container bool
+		write     func(t *testing.T, root, id, prompt string)
+	}
+	writeIDE := func(t *testing.T, root, id, prompt string) {
+		t.Helper()
+		testjsonl.WriteAntigravityBrainTranscript(t, root, id,
+			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"`+prompt+`"}`+"\n")
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+		copyAntigravityCLITestSchemaTemplate(t, dbPath)
+	}
+	writeCLI := func(t *testing.T, root, id, prompt string) {
+		t.Helper()
+		convDir := filepath.Join(root, "conversations")
+		require.NoError(t, os.MkdirAll(convDir, 0o755))
+		createAntigravityCLIDisplayStepDB(t, filepath.Join(convDir, id+".db"), prompt)
+		testjsonl.WriteAntigravityBrainTranscript(t, root, id,
+			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"`+prompt+`"}`+"\n")
+	}
+	cases := map[string]testCase{
+		"app and IDE":   {agent: parser.AgentAntigravity, write: writeIDE},
+		"CLI":           {agent: parser.AgentAntigravityCLI, write: writeCLI},
+		"CLI container": {agent: parser.AgentAntigravityCLI, container: true, write: writeCLI},
+	}
+
+	for name, tc := range cases {
+		for _, mode := range []string{"sync_paths", "watch_batch"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				base := t.TempDir()
+				configuredRoot := base
+				sessionRoot := base
+				if tc.container {
+					configuredRoot = filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+					sessionRoot = filepath.Join(configuredRoot, "inst-a", "antigravity-acp")
+				}
+				tc.write(t, sessionRoot, changedID, "first prompt")
+				tc.write(t, sessionRoot, siblingID, "second prompt")
+				store := testjsonl.WriteAntigravitySummaries(t, sessionRoot, map[string]testjsonl.AntigravitySummary{
+					changedID: {Title: "Alpha", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+					siblingID: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+				})
+
+				engine, archive := newAntigravitySummaryEngine(t, tc.agent, configuredRoot, config.ArchiveContentFull)
+				require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+				changedFullID := string(tc.agent) + ":" + changedID
+				siblingFullID := string(tc.agent) + ":" + siblingID
+				changedInitial := antigravityStoredSession(t, archive, changedFullID)
+				siblingInitial := antigravityStoredSession(t, archive, siblingFullID)
+				require.Equal(t, "/tmp/ws-old", changedInitial.Cwd)
+				require.Nil(t, changedInitial.ParentSessionID)
+
+				runChangedPath := func(path string) sync.SyncStats {
+					t.Helper()
+					if mode == "watch_batch" {
+						stats, err := engine.SyncWatchBatchThenRun(
+							t.Context(), sync.WatchBatch{Paths: []string{path}}, nil, nil,
+						)
+						require.NoError(t, err)
+						return stats
+					}
+					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+					return engine.LastSyncStats()
+				}
+
+				// Title-only edit selects zero transcripts.
+				testjsonl.WriteAntigravitySummaries(t, sessionRoot, map[string]testjsonl.AntigravitySummary{
+					changedID: {Title: "Alpha renamed", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+					siblingID: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+				})
+				titleStats := runChangedPath(store)
+				if mode == "watch_batch" {
+					assert.Equal(t, 0, titleStats.Synced)
+				} else {
+					// A 0-file SyncPathsContext leaves LastSyncStats().Synced
+					// from the prior SyncAll intact; selecting any unchanged
+					// transcript would overwrite it with Synced=0, Skipped>0.
+					assert.Equal(t, 2, titleStats.Synced)
+				}
+				assert.Equal(t, 0, titleStats.Skipped)
+				assert.Equal(t, 1, titleStats.TitlesUpdated)
+				afterTitle := antigravityStoredSession(t, archive, changedFullID)
+				assert.Equal(t, new("Alpha renamed"), afterTitle.SessionName)
+				assert.Equal(t, changedInitial.FileHash, afterTitle.FileHash)
+
+				// Workspace and parent edit refreshes only the affected session,
+				// while a title-only rename on the sibling skips reparsing.
+				testjsonl.WriteAntigravitySummaries(t, sessionRoot, map[string]testjsonl.AntigravitySummary{
+					changedID: {
+						Title:         "Alpha renamed",
+						WorkspaceURIs: `["file:///tmp/ws-new"]`,
+						ParentID:      antigravitySummaryParent,
+					},
+					siblingID: {Title: "Beta renamed", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+				})
+				metaStats := runChangedPath(store)
+				assert.Equal(t, 1, metaStats.Synced)
+				assert.Equal(t, 1, metaStats.TitlesUpdated)
+
+				updated := antigravityStoredSession(t, archive, changedFullID)
+				assert.Equal(t, "/tmp/ws-new", updated.Cwd)
+				assert.Equal(t, "ws_new", updated.Project)
+				assert.Equal(t, new(string(tc.agent)+":"+antigravitySummaryParent), updated.ParentSessionID)
+				assert.Equal(t, "subagent", updated.RelationshipType)
+				assert.Equal(t, new("Alpha renamed"), updated.SessionName)
+
+				siblingAfter := antigravityStoredSession(t, archive, siblingFullID)
+				assert.Equal(t, new("Beta renamed"), siblingAfter.SessionName)
+				assert.Equal(t, siblingInitial.FileHash, siblingAfter.FileHash)
+
+				// An uncheckpointed WAL update clearing the parent refreshes via -wal.
+				conn, err := sql.Open("sqlite3", store)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, conn.Close()) })
+				_, err = conn.ExecContext(t.Context(), "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(
+					t.Context(),
+					"UPDATE conversation_summaries SET workspace_uris = ?, parent_conversation_id = '' WHERE conversation_id = ?",
+					`["file:///tmp/ws-wal"]`, changedID,
+				)
+				require.NoError(t, err)
+
+				walStats := runChangedPath(store + "-wal")
+				assert.Equal(t, 1, walStats.Synced)
+				walUpdated := antigravityStoredSession(t, archive, changedFullID)
+				assert.Equal(t, "/tmp/ws-wal", walUpdated.Cwd)
+				assert.Equal(t, "ws_wal", walUpdated.Project)
+				assert.Nil(t, walUpdated.ParentSessionID)
+			})
+		}
+	}
 }

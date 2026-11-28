@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SettingsService } from "../api/generated/index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { DaemonService, HealthService, SettingsService } from "../api/generated/index";
 import { ApiError, setServerUrl } from "../api/runtime.js";
 
 let settings: typeof import("./settings.svelte.js").settings;
@@ -28,8 +28,13 @@ vi.mock("../api/generated/index", async (importOriginal) => {
       getApiV1Settings: vi.fn(),
       putApiV1Settings: vi.fn(),
     },
+    DaemonService: { postApiV1DaemonRestart: vi.fn() },
+    HealthService: { getApiPing: vi.fn() },
   };
 });
+
+const restartDaemon = vi.mocked(DaemonService.postApiV1DaemonRestart);
+const ping = vi.mocked(HealthService.getApiPing);
 
 const settingsService = SettingsService as unknown as {
   getApiV1Settings: ReturnType<typeof vi.fn>;
@@ -44,6 +49,7 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   ({ ui } = await import("./ui.svelte.js"));
   ({ settings } = await import("./settings.svelte.js"));
 });
@@ -581,5 +587,366 @@ describe("SettingsStore.load auth handling", () => {
 
     expect(settings.needsAuth).toBe(false);
     expect(settings.error).toBe(detail);
+  });
+});
+
+describe("SettingsStore.save", () => {
+  it("reports a saved image policy when restart status is missing", async () => {
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      tool_result_images: "drop",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    expect(await settings.save({ tool_result_images: "drop" })).toBe(false);
+    expect(settings.toolResultImages).toBe("drop");
+    expect(settings.saveError).toMatch(/saved/i);
+    expect(settings.saveError).toMatch(/update|restart/i);
+  });
+});
+
+describe("SettingsStore.restartDaemon", () => {
+  let reload: ReturnType<typeof vi.fn>;
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    reload = vi.fn();
+    Object.defineProperty(window, "location", { value: { reload }, writable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+  });
+
+  it.each([false, true])(
+    "sends restart to its original server with queued save %s",
+    async (queued) => {
+      const generated =
+        await vi.importActual<typeof import("../api/generated/index")>("../api/generated/index");
+      ping.mockImplementation((options) => generated.HealthService.getApiPing(options));
+      restartDaemon.mockImplementation((options) =>
+        generated.DaemonService.postApiV1DaemonRestart(options),
+      );
+      setServerUrl("https://first.example");
+      localStorage.setItem("agentsview-auth-token::https://first.example", "first-token");
+      localStorage.setItem("agentsview-auth-token::https://second.example", "second-token");
+      let finishPing!: (response: Response) => void;
+      const calls: { url: string; auth: string | null }[] = [];
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+        calls.push({ url: String(url), auth: new Headers(options?.headers).get("Authorization") });
+        if (calls.length === 1) return new Promise((resolve) => (finishPing = resolve));
+        return new Response(
+          JSON.stringify(calls.length === 2 ? { restarting: true } : { instance_id: "new" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+      try {
+        let finishSave!: () => void;
+        const save = queued
+          ? settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)))
+          : null;
+        const restart = settings.restartDaemon();
+        if (save) {
+          setServerUrl("https://second.example");
+          finishSave();
+          await save;
+        }
+        expect(finishPing).toBeDefined();
+        setServerUrl("https://second.example");
+        finishPing(
+          new Response(JSON.stringify({ instance_id: "old" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        await restart;
+        expect(calls.map((call) => call.url)).toEqual([
+          "https://first.example/api/ping",
+          "https://first.example/api/v1/daemon/restart",
+          "https://first.example/api/ping",
+        ]);
+        expect(calls.map((call) => call.auth)).toEqual(Array(3).fill("Bearer first-token"));
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
+
+  it("checks the original server after switching servers during recovery", async () => {
+    setServerUrl("https://first.example");
+    localStorage.setItem("agentsview-auth-token::https://first.example", "first-token");
+    localStorage.setItem("agentsview-auth-token::https://second.example", "second-token");
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    setServerUrl("https://second.example");
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(ping.mock.calls.at(-1)?.[0]).toMatchObject({
+      baseUrl: "https://first.example",
+      headers: { Authorization: "Bearer first-token" },
+    });
+  });
+
+  it("clears restart recovery when settings are loaded for another server", async () => {
+    setServerUrl("https://first.example");
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      terminal: { mode: "auto" },
+      restart_required: true,
+      restart_supported: true,
+    });
+    await settings.load();
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    setServerUrl("https://second.example");
+    await settings.load();
+    expect(settings.restartFailed).toBe(false);
+    expect(settings.restartSupported).toBe(true);
+    expect(settings.restartRequired).toBe(true);
+  });
+
+  it("queues restart behind saves and reconnects after a lost response", async () => {
+    let finishSave!: () => void;
+    const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));
+    ping
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    // The old process can drop the connection before it answers.
+    restartDaemon.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const restart = settings.restartDaemon();
+    void settings.restartDaemon();
+    expect(settings.restarting).toBe(true);
+    expect(restartDaemon).not.toHaveBeenCalled();
+
+    finishSave();
+    await save;
+    await vi.advanceTimersByTimeAsync(3_000);
+    await restart;
+
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(settings.restarting).toBe(true);
+    expect(settings.restartFailed).toBe(false);
+  });
+
+  it("releases the settings queue when the first request stalls", async () => {
+    ping.mockImplementation(
+      (options) =>
+        new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          ),
+        ),
+    );
+
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+
+    expect(restartDaemon).not.toHaveBeenCalled();
+    expect(settings.saving).toBe(false);
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartError).toContain("identify");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const retry = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retry;
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("reports the server's reason without polling when it refuses", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValue(new ApiError(500, "restart failed"));
+
+    await settings.restartDaemon();
+
+    expect(ping).toHaveBeenCalledOnce();
+    expect(settings.saving).toBe(false);
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartError).toBe("restart failed");
+  });
+
+  it("stops offering the restart when the server cannot restart itself", async () => {
+    settings.restartSupported = true;
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValue(new ApiError(501, "restart unavailable"));
+
+    await settings.restartDaemon();
+
+    expect(settings.restartSupported).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+    expect(settings.restartError).toBeNull();
+    expect(settings.restarting).toBe(false);
+  });
+
+  it("shows recovery when the restart POST stalls", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockImplementation(
+      (options) =>
+        new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          ),
+        ),
+    );
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restarting).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("offers retry when a lost request leaves the original server answering", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const first = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await first;
+    expect(settings.restartCanRetry).toBe(true);
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restarting).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    restartDaemon.mockResolvedValueOnce({ restarting: true });
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    const retry = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retry;
+    expect(restartDaemon).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("keeps recovery available when the server stops during an accepted restart", async () => {
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockRejectedValue(new TypeError("Failed to fetch"));
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartCanRetry).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the original instance", { healthy: true, ok: true, pid: 100, instance_id: "old" }],
+    ["an unidentified server", { healthy: true, ok: true, pid: 100 }],
+    ["a non-string identity", { healthy: true, ok: true, pid: 100, instance_id: 123 }],
+    ["an API error", new ApiError(500, "unavailable")],
+  ])("checks again without accepting %s as the replacement", async (_, answer) => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartCanRetry).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    if (answer instanceof ApiError) ping.mockRejectedValueOnce(answer);
+    else ping.mockResolvedValueOnce(answer as never);
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reload).not.toHaveBeenCalled();
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(reload).toHaveBeenCalledOnce();
+    expect(restartDaemon).toHaveBeenCalledOnce();
+  });
+
+  it("asks for a token when the restarted daemon requires one", async () => {
+    ping
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockRejectedValue(new ApiError(401, "Unauthorized"));
+    restartDaemon.mockResolvedValue({ restarting: true });
+
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await restart;
+
+    expect(settings.needsAuth).toBe(true);
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does not ask the selected server for a token when another server rejects the restart", async () => {
+    setServerUrl("https://first.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    let rejectRestart!: (error: Error) => void;
+    restartDaemon.mockImplementationOnce(
+      () => new Promise((_, reject) => (rejectRestart = reject)),
+    );
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(0);
+    setServerUrl("https://second.example");
+    rejectRestart(new ApiError(401, "Unauthorized"));
+    await restart;
+    expect(settings.needsAuth).toBe(false);
+    expect(settings.restarting).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does not reload the selected server when another server finishes restarting", async () => {
+    setServerUrl("https://first.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(0);
+    setServerUrl("https://second.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await restart;
+    expect(reload).not.toHaveBeenCalled();
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+  });
+
+  it("asks for a token when checking the replacement connection", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    ping.mockRejectedValueOnce(new ApiError(401, "Unauthorized"));
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(settings.needsAuth).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
   });
 });

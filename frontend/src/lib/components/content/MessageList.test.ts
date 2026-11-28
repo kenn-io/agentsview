@@ -209,6 +209,7 @@ describe("MessageList follow cancellation", () => {
     messages.clear();
     sessions.activeSessionId = null;
     ui.followLatest = false;
+    ui.linkedMessage = null;
     readProgress.reset();
     document.body.innerHTML = "";
   });
@@ -300,14 +301,21 @@ describe("MessageList follow cancellation", () => {
     expect(ui.selectedOrdinal).toBe(12);
   });
 
-  it("lands a jump on the target card of an open empty row", async () => {
+  it.each(["empty-group", "tool-group"])("lands a jump on a member of a %s", async (kind) => {
     ui.followLatest = false;
-    const empty = (ordinal: number) => ({
+    const member = (ordinal: number) => ({
       ...makeMessage(ordinal),
       content: "",
       content_length: 0,
+      ...(kind === "tool-group"
+        ? {
+            role: "assistant",
+            has_tool_use: true,
+            tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+          }
+        : {}),
     });
-    messages.messages = [makeMessage(10), empty(11), empty(12)];
+    messages.messages = [makeMessage(10), member(11), member(12)];
     setVirtualRows(2);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -322,12 +330,8 @@ describe("MessageList follow cancellation", () => {
     });
     component = mount(MessageList, { target: document.body });
     await flushScrollUpdates();
-
     component.scrollToOrdinal(12);
-
-    await vi.waitFor(() => {
-      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
-    });
+    await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
   });
 
   it("refreshes Docbank when the same transcript is remounted", async () => {
@@ -580,6 +584,36 @@ describe("MessageList follow cancellation", () => {
     await sessions.refreshActiveSession();
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a failed transcript load with Retry instead of an empty transcript", async () => {
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({
+      id: "s1",
+      message_count: 1,
+    } as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>);
+    const page = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockRejectedValueOnce(new Error("database is locked"));
+    messages.messages = [];
+
+    component = mount(MessageList, { target: document.body });
+    await messages.loadSession("s1");
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    expect(alert.textContent).toContain("Failed to load");
+    expect(alert.textContent).toContain("database is locked");
+    expect(reportErrorShown).toHaveBeenCalledWith("session");
+
+    page.mockResolvedValueOnce({ messages: [makeMessage(0)], count: 1 } as Awaited<
+      ReturnType<typeof SessionsService.getApiV1SessionsByIdMessages>
+    >);
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+    expect(messages.messages.map((message) => message.content)).toEqual(["msg 0"]);
   });
 
   it("renders empty and loading states in Simplified Chinese", async () => {
@@ -1096,6 +1130,143 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".system-boundary")).toBeNull();
   });
 
+  it("shows a standalone skill invocation row as a collapsed skill block with its own label", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "assistant", content: "reviewing" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const rows = document.querySelectorAll(".message");
+    expect(rows).toHaveLength(2);
+    const skillRow = rows[0]!;
+    expect(skillRow.querySelector(".skill-label")?.textContent?.trim()).toBe("Skill: review");
+    expect(skillRow.querySelector(".skill-header")?.getAttribute("aria-expanded")).toBe("false");
+    expect(skillRow.querySelector(".skill-content")).toBeNull();
+    expect(skillRow.querySelector(".role-label")).toBeNull();
+    expect(skillRow.classList.contains("is-user")).toBe(false);
+    expect(document.querySelector(".system-boundary")).toBeNull();
+
+    ui.setBlockVisible("system", false);
+    await tick();
+    expect(document.querySelectorAll(".message")).toHaveLength(1);
+  });
+
+  it("attaches a skill invocation to the user prompt that follows it", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "user", content: "check the diff" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const rows = document.querySelectorAll(".message");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.querySelector(".role-label")?.textContent?.trim()).toBe("User");
+    expect(row.querySelector(".skill-label")?.textContent?.trim()).toBe("Skill: review");
+    expect(row.querySelector(".skill-header")?.getAttribute("aria-expanded")).toBe("false");
+    expect(row.textContent).toContain("check the diff");
+
+    ui.setBlockVisible("system", false);
+    await tick();
+    const after = document.querySelectorAll(".message");
+    expect(after).toHaveLength(1);
+    expect(after[0]!.querySelector(".skill-label")).toBeNull();
+    expect(after[0]!.textContent).toContain("check the diff");
+  });
+
+  it("shows the whole skill body when it contains a literal closing marker", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nUse this:\n\n```\n[/Skill]\n```\n\nAfter the example.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "assistant", content: "ok" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".skill-header")!.click();
+    await tick();
+    expect(document.querySelector(".skill-content")?.textContent).toContain("After the example.");
+  });
+
+  it("marks a transcript read when an appended skill row ends in a merged card", async () => {
+    messages.messages = [
+      makeMessage(0),
+      {
+        ...makeMessage(1),
+        role: "user",
+        content: "[Skill: review]\nbody\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(2), role: "user", content: "check the diff" },
+    ];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = 1;
+    setVirtualRows(2);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
+  it("keeps hiding system rows with an unknown subtype", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "internal bookkeeping",
+        is_system: true,
+        source_subtype: "mystery_subtype",
+      },
+      makeMessage(1),
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).not.toContain("internal bookkeeping");
+    expect(document.querySelector(".skill-block")).toBeNull();
+  });
+
   it("keeps a code-only message visible as a collapsed placeholder when Code is filtered", async () => {
     const content = ["```latex", "\\subsection{Deployment Considerations}", "```"].join("\n");
     messages.messages = [
@@ -1119,6 +1290,58 @@ describe("MessageList follow cancellation", () => {
       "Code block collapsed · latex · Expand",
     );
     expect(document.querySelector(".code-content")).toBeNull();
+  });
+
+  it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
+    ui.setBlockVisible("assistant", false);
+    ui.followLatest = false;
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
+    messages.messages = [makeMessage(0), linked, makeMessage(2), makeMessage(3)];
+    messages.messageCount = 4;
+    const { element } = realJumpScroll();
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    component.scrollToOrdinal(1);
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll(".virtual-row .text-content")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(rows).toEqual(["msg 0", "linked answer", "msg 2"]);
+    expect(element.scrollTop).toBe(100);
+  });
+
+  it("renders only the linked system message", async () => {
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [
+      makeMessage(0),
+      { ...makeMessage(1), role: "user", is_system: true, content: "linked system message" },
+      { ...makeMessage(2), role: "user", is_system: true, content: "other system message" },
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("linked system message");
+    expect(document.body.textContent).not.toContain("other system message");
+  });
+
+  it("selects the neighboring message when leaving a revealed target", async () => {
+    ui.setBlockVisible("assistant", false);
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    messages.messageCount = 3;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("msg 1");
+    document.querySelector<HTMLElement>('.virtual-row[data-index="2"] .role-label')!.click();
+    await flushScrollUpdates();
+    expect(ui.selectedOrdinal).toBe(2);
+    expect(document.body.textContent).not.toContain("msg 1");
   });
 
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {

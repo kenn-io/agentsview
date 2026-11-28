@@ -10,7 +10,7 @@
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import { resolveRootColor } from "../../utils/calmSeriesColor.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
-  import { treemapLabelSize, type TreemapLabelScale } from "./treemapLabelSize.js";
+  import { treemapAreas, treemapLabelSize, type TreemapScale } from "./treemapScale.js";
 
   interface TreemapItem {
     id: string;
@@ -29,7 +29,7 @@
     onSelect?: (id: string) => void;
     onOpen?: (id: string) => void;
     formatValue?: (value: number) => string;
-    labelScale?: TreemapLabelScale;
+    scale?: TreemapScale;
   }
 
   const uid = $props.id();
@@ -44,16 +44,22 @@
     onSelect,
     onOpen,
     formatValue = formatCost,
-    labelScale = "sqrt",
+    scale = "linear",
   }: Props = $props();
 
-  const root = $derived.by(() =>
-    hierarchy<{ children?: TreemapItem[]; value?: number }>({ children: items })
-      .sum((item) => item.value ?? 0)
-      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
-  );
+  // The layout sizes tiles by their scaled area; labels and titles still
+  // show each item's real value.
+  type TreemapNode = TreemapItem & { area: number };
 
-  const total = $derived(root.value ?? 0);
+  const root = $derived.by(() => {
+    const areas = treemapAreas(items.map((item) => item.value), scale);
+    const children: TreemapNode[] = items.map((item, i) => ({ ...item, area: areas[i] ?? 0 }));
+    return hierarchy<{ children?: TreemapNode[]; area?: number }>({ children })
+      .sum((node) => node.area ?? 0)
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  });
+
+  const totalArea = $derived(root.value ?? 0);
 
   let measuredWidth = $state(0);
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
@@ -99,8 +105,8 @@
       <SeriesPatternDefs scope={uid} styles={items.map((item) => item.style)} />
       <LayerTreemap hierarchy={root} padding={2}>
         {#snippet children({ nodes })}
-          {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapItem).id)}
-            {@const tile = node.data as TreemapItem}
+          {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapNode).id)}
+            {@const tile = node.data as TreemapNode}
             {@const tileWidth = node.x1 - node.x0}
             {@const tileHeight = node.y1 - node.y0}
             {@const large = tileWidth > 60 && tileHeight > 40}
@@ -135,7 +141,7 @@
                   fill={seriesPaint(uid, tile.style)}
                 />
                 {#if large}
-                  {@const fontSize = treemapLabelSize(tile.value, total, tileHeight, labelScale)}
+                  {@const fontSize = treemapLabelSize(tile.area, totalArea, tileHeight)}
                   <Text value={tile.label} x={6} y={fontSize + 5} width={tileWidth - 12} truncate class="tile-label" style={`font-size: ${fontSize}px`} />
                   <Text value={formatValue(tile.value)} x={6} y={fontSize + 19} width={tileWidth - 12} truncate class="tile-value" />
                   {#if tile.meta}

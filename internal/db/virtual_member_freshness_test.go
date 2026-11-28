@@ -107,48 +107,57 @@ func TestVirtualContainerMemberFreshnessStreamingPlan(t *testing.T) {
 
 func TestVirtualContainerMemberFreshnessGrowth(t *testing.T) {
 	if testing.Short() {
-		t.Skip("measures full container scans at two sizes")
+		t.Skip("measures full container scans")
 	}
-	var medians []time.Duration
-	for _, count := range []int{5000, 50000} {
-		d := testDB(t)
-		const container = "/data/opencode.db"
-		_, err := d.getWriter().Exec(t.Context(), `
-			WITH RECURSIVE members(n) AS (
-				SELECT 1 UNION ALL SELECT n + 1 FROM members WHERE n < ?
-			)
-			INSERT INTO sessions (id, project, agent, file_path, file_mtime, data_version, file_hash)
-			SELECT printf('member-%05d', n), 'proj', 'opencode',
-				? || printf('#%05d', n), 100, 5, 'hash' FROM members`, count, container)
-		require.NoError(t, err)
-		var elapsed []time.Duration
-		for pass := range 8 {
-			start := time.Now()
-			after, total := "", 0
-			for {
-				page, done, err := d.ListVirtualContainerMemberFreshnessPage(t.Context(), container, "opencode:", after, 256)
-				require.NoError(t, err)
-				total += len(page)
-				if done {
-					break
-				}
-				require.NotEmpty(t, page)
-				after = page[len(page)-1].Path
+	d := testDB(t)
+	const container = "/data/opencode.db"
+	const members = 50000
+	_, err := d.getWriter().Exec(t.Context(), `
+		WITH RECURSIVE members(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM members WHERE n < ?
+		)
+		INSERT INTO sessions (id, project, agent, file_path, file_mtime, data_version, file_hash)
+		SELECT printf('member-%05d', n), 'proj', 'opencode',
+			? || printf('#%05d', n), 100, 5, 'hash' FROM members`, members, container)
+	require.NoError(t, err)
+	listAll := func(limit int) time.Duration {
+		start := time.Now()
+		after, total := "", 0
+		for {
+			page, done, err := d.ListVirtualContainerMemberFreshnessPage(t.Context(), container, "opencode:", after, limit)
+			require.NoError(t, err)
+			total += len(page)
+			if done {
+				break
 			}
-			duration := time.Since(start)
-			require.Equal(t, count, total)
-			if pass > 0 {
-				elapsed = append(elapsed, duration)
-			}
+			require.NotEmpty(t, page)
+			after = page[len(page)-1].Path
 		}
-		slices.Sort(elapsed)
-		medians = append(medians, elapsed[len(elapsed)/2])
+		duration := time.Since(start)
+		require.Equal(t, members, total)
+		return duration
 	}
-	ratio := float64(medians[1]) / float64(medians[0])
-	t.Logf("5000 members: %s; 50000 members: %s; growth ratio: %.2fx", medians[0], medians[1], ratio)
-	// Leave room for CI noise around linear growth while rejecting the
-	// roughly 100x growth of rescanning the remaining container on each page.
-	assert.LessOrEqual(t, ratio, 30.0, "10x membership must remain near linear")
+	// Compare paging with one unpaged pass over the same rows. Both read the
+	// same pages, so their ratio does not depend on whether the container
+	// fits in SQLite's page cache, which makes absolute timings at two sizes
+	// grow faster than the row count on some machines.
+	var paged, unpaged []time.Duration
+	for pass := range 8 {
+		pagedPass, unpagedPass := listAll(256), listAll(members+1)
+		if pass > 0 {
+			paged = append(paged, pagedPass)
+			unpaged = append(unpaged, unpagedPass)
+		}
+	}
+	slices.Sort(paged)
+	slices.Sort(unpaged)
+	pagedMedian, unpagedMedian := paged[len(paged)/2], unpaged[len(unpaged)/2]
+	ratio := float64(pagedMedian) / float64(unpagedMedian)
+	t.Logf("%d members: paged %s; unpaged %s; ratio: %.2fx", members, pagedMedian, unpagedMedian, ratio)
+	// Paging that resumes from the previous page costs about one unpaged
+	// pass. Rescanning the rest of the container on every page reads about
+	// members/(2*256), roughly 100, times as many rows.
+	assert.LessOrEqual(t, ratio, 10.0, "paging must not rescan the container on each page")
 }
 
 // TestListVirtualContainerMemberFreshnessPageMarksTrashedAndExcluded pins the

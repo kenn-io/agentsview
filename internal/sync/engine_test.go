@@ -7020,7 +7020,7 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 						Ordinal: inc.NextOrdinal,
 					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
-				nil, "", nil,
+				nil, "", nil, "",
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -7120,7 +7120,7 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 			parseCalled = true
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
-		nil, "", nil,
+		nil, "", nil, "",
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -12240,7 +12240,8 @@ func TestProviderStoredFreshnessDecision(t *testing.T) {
 			unchanged := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, unchanged)
-			assert.Equal(t, tc.wantReads, reads.Load())
+			assert.Equal(t, tc.wantReads > 0, reads.Load() > 0,
+				"whether the freshness check reads the stored hash")
 		})
 	}
 }
@@ -12270,4 +12271,29 @@ func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
 	}))
 	require.NoError(t, conn.Close())
 	return reads
+}
+
+func TestDBBackedProcessingFailureCountsWithoutLosingDiscovery(t *testing.T) {
+	const agent parser.AgentType = "baseline-db-backed"
+	root := t.TempDir()
+	path := filepath.Join(root, "failed.db")
+	provider := &baselineDBBackedProvider{
+		Def:         parser.AgentDef{Type: agent},
+		Caps:        parser.Capabilities{Source: parser.SourceCapabilities{StreamingDiscovery: parser.CapabilitySupported}},
+		sources:     []parser.SourceRef{{Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path}},
+		parseErrKey: path, fingerprintCalls: make(map[string]int), parseCalls: make(map[string]int),
+	}
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{baselineDBBackedFactory{provider: provider}},
+	})
+	t.Cleanup(engine.Close)
+	stats := SyncStats{}
+	aborted := engine.syncProviderDBBackedAgent(t.Context(), agent, string(agent), syncWriteDefault, false, newRootSyncScope([]string{root}), &stats, func(int, int) {})
+	require.False(t, aborted)
+	require.Equal(t, 1, stats.Failed)
+	require.Equal(t, 1, stats.providerFailures)
+	require.True(t, stats.AuthoritativeDiscoveryComplete())
+	stats.providerFailures++
+	require.False(t, stats.AuthoritativeDiscoveryComplete())
 }

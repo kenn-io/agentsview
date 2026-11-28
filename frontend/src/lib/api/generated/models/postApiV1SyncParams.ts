@@ -11,4 +11,8 @@ export type PostApiV1SyncParams = {
    * Complete deferred startup ingestion without repeating a completed startup sync
    */
   startup_only?: boolean;
+  /**
+   * Sync only the changes the daemon's file watchers collected. The daemon runs a full discovery pass instead when its watchers cannot cover the archive, such as before its startup sync.
+   */
+  changes_only?: boolean;
 };

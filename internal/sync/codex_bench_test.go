@@ -309,7 +309,6 @@ func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	// the timed loop (same rationale as BenchmarkSyncPathsIncrementalAppend).
 	engine.signalSched.mu.Lock()
 	engine.signalSched.interval = time.Hour
-	engine.signalSched.quiet = time.Hour
 	engine.signalSched.mu.Unlock()
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)

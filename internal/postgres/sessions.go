@@ -25,11 +25,17 @@ import (
 type Store struct {
 	readbase.ReadOnlyStubs
 	hostedRelations bool
+	cockroach       bool
+	serverEncoding  string
 	pg              storeExecutor
 	ownedDB         *sql.DB
 	readTx          *sql.Tx
 	pricingSnapshot *pricingSnapshot
 	usageCache      *db.UsageCacheReader
+	activityDisk    kept.Disk
+	trendsDisk      kept.Disk
+	trendsIdentity  string
+	trendsVersion   string
 	runtimeOnce     sync.Once
 	runtime         *storeRuntime
 }
@@ -37,9 +43,12 @@ type Store struct {
 // storeRuntime is shared by the owning store and its borrowed read views.
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
+	searchKept         kept.Memo[pgSearchEntry]
 	activityKept       kept.Memo[pgActivityKept]
 	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo
+	frustrationFill    frustrationFillState
+	frustrationSaves   frustrationSaveQueue
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
@@ -65,8 +74,10 @@ type storeRuntime struct {
 	usageIdentityDenied atomic.Bool
 	dailyUsage          kept.Reads[db.DailyUsageResult]
 	analytics           kept.Reads[[]byte]
+	search              kept.Reads[db.SearchPage]
 	planUsage           kept.Reads[*db.PlanUsageCountSummary]
 	topUsage            kept.Reads[[]db.TopSessionEntry]
+	standbySearch       kept.Flights[snapshotResult[db.SearchPage]]
 	standbyDaily        kept.Flights[snapshotResult[db.DailyUsageResult]]
 	standbyPlan         kept.Flights[snapshotResult[*db.PlanUsageCountSummary]]
 	standbyTop          kept.Flights[snapshotResult[[]db.TopSessionEntry]]
@@ -80,6 +91,16 @@ type storeRuntime struct {
 	vectorMu                  sync.RWMutex
 	vectorSearcher            db.VectorSearcher
 	semanticUnavailableReason string
+}
+
+type frustrationSaveQueue struct {
+	mu      sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	closed  bool
+	running bool
+	jobs    chan frustrationCountSave
+	wg      sync.WaitGroup
 }
 
 // pgSessionBaseCols is the column list for PG session queries that do not
@@ -472,6 +493,7 @@ func (s *Store) GetSidebarSessionIndex(
 ) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f.SidebarTree = true
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return s.getSidebarSessionIndexPage(ctx, f)
@@ -1217,4 +1239,35 @@ func (s *Store) GetBranches(
 
 func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
 	return db.MatchingMachineIDs(ctx, s.pg, db.PostgresQueryDialect(), candidates)
+}
+
+// GetSessionTreeMarker reads the parent and direct children in one query.
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
+	rows, err := s.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)", id)
+	if err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	defer rows.Close()
+	var parent *db.SessionTreeEntry
+	var children []db.SessionTreeEntry
+	for rows.Next() {
+		var e db.SessionTreeEntry
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
+			return db.SessionTreeSnapshot{}, err
+		}
+		e.Count, e.Version = v.count, v.version()
+		if e.ID == id {
+			parent = &e
+		} else {
+			children = append(children, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	if parent == nil {
+		return db.SessionTreeSnapshot{}, errors.New("session not found")
+	}
+	return db.NewSessionTreeSnapshot(append([]db.SessionTreeEntry{*parent}, children...))
 }

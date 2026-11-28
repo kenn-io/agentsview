@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import { parseContent, isToolOnly, enrichSegments, hasVisibleSegments } from "./content-parser.js";
+import {
+  parseContent,
+  parseSkillInvocation,
+  isToolOnly,
+  enrichSegments,
+  hasVisibleSegments,
+} from "./content-parser.js";
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 
 let nextId = 1;
@@ -973,6 +979,20 @@ describe("hasVisibleSegments", () => {
     expect(hasVisibleSegments(m, noUser)).toBe(true);
   });
 
+  it("skill invocation row answers to the system filter, not its user role", () => {
+    const m = makeMsg({
+      role: "user",
+      content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+      is_system: true,
+      source_subtype: "skill_invocation",
+    });
+    const noSystem = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "code"]));
+    const noUser = visibilityFrom(new Set(["assistant", "thinking", "tool", "code", "system"]));
+
+    expect(hasVisibleSegments(m, noSystem)).toBe(false);
+    expect(hasVisibleSegments(m, noUser)).toBe(true);
+  });
+
   it("boundary card ignores the filters its body would parse into", () => {
     const body = "```sh\nexit 2\n```";
     const noCode = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "system"]));
@@ -1228,5 +1248,22 @@ describe("Codex Cloud tool markers", () => {
     const msg = makeMsg({ content, content_length: content.length, has_tool_use: true });
     expect(isToolOnly(msg)).toBe(true);
     expect(parseContent(content, true).filter((segment) => segment.type !== "tool")).toEqual([]);
+  });
+});
+
+describe("parseSkillInvocation", () => {
+  it("reads the whole body when it contains a literal closing marker", () => {
+    const content =
+      "[Skill: review]\nUse `[/Skill]` like this:\n\n```\n[/Skill]\n```\n\nDone.\n[/Skill]";
+    expect(parseSkillInvocation(content)).toEqual({
+      type: "skill",
+      label: "review",
+      content: "Use `[/Skill]` like this:\n\n```\n[/Skill]\n```\n\nDone.",
+    });
+  });
+
+  it("returns null for content outside the envelope", () => {
+    expect(parseSkillInvocation("plain text")).toBeNull();
+    expect(parseSkillInvocation("[Skill: x]\nbody")).toBeNull();
   });
 });

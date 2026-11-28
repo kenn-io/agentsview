@@ -468,8 +468,9 @@
                 {/if}
               </span>
               <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
-              <span class="item-meta">
-                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
+              <span class="item-meta search-meta">
+                <span class="item-project">{truncate(result.project, 20)}</span>
+                {#if result.timestamp}<span class="item-date">{'\u00a0· '}{formatRelativeTime(result.timestamp, ui.alwaysShowYear)}</span>{/if}
               </span>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -501,7 +502,7 @@
             </span>
             <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
-              {formatRelativeTime(session.ended_at ?? session.started_at)}
+              {formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear)}
             </span>
           </button>
         {/each}
@@ -712,6 +713,21 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .search-meta {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .item-project {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-date {
+    flex-shrink: 0;
+  }
+
   /* Laid out like .palette-item, so rows land about where results will.
      "Searching..." stays for screen readers only; the rows carry the
      state visually. */
@@ -902,6 +918,10 @@
       overflow: hidden;
       text-overflow: ellipsis;
       text-align: left;
+    }
+
+    .search-meta {
+      justify-content: flex-start;
     }
   }
 </style>

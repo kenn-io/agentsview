@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Retrying is safe only for complete SQL transactions whose effects roll back
@@ -22,8 +21,7 @@ func retryPGCuration[T any](ctx context.Context, operation func() (T, error)) (T
 		if err == nil {
 			return value, nil
 		}
-		pgErr, ok := errors.AsType[*pgconn.PgError](err)
-		if !ok || (pgErr.Code != "40P01" && pgErr.Code != "40001") {
+		if !isTransactionConflict(err) {
 			return value, backoff.Permanent(err)
 		}
 		return value, err

@@ -249,6 +249,80 @@ func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t 
 	assert.Empty(t, m.Status().LastError)
 }
 
+func TestManagerPauseDrainsAndBlocksBuilds(t *testing.T) {
+	ix := openTestIndex(t)
+	unblock := make(chan struct{})
+	m := NewManager(ix, twoDocSource(), soloEncoders(blockingEncoder(unblock)), fakeGeneration("fake-model"))
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	t.Cleanup(func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+		m.Wait()
+	})
+	paused := make(chan func(), 1)
+	go func() {
+		release, err := m.Pause(t.Context(), nil)
+		if assert.NoError(t, err) {
+			paused <- release
+		}
+	}()
+	waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.paused }, "pause was not acquired")
+	require.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
+	started, err := m.TryBuild(t.Context(), BuildRequest{})
+	require.NoError(t, err)
+	assert.False(t, started)
+	select {
+	case <-paused:
+		require.FailNow(t, "pause returned before the build finished")
+	default:
+	}
+	close(unblock)
+	var release func()
+	select {
+	case release = <-paused:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "pause did not finish")
+	}
+	require.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
+	release()
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	m.Wait()
+}
+
+func TestManagerPauseCanceledLeavesBuildRunning(t *testing.T) {
+	ix := openTestIndex(t)
+	unblock := make(chan struct{})
+	m := NewManager(ix, twoDocSource(), soloEncoders(blockingEncoder(unblock)), fakeGeneration("fake-model"))
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	t.Cleanup(func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+		m.Wait()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { _, err := m.Pause(ctx, nil); done <- err }()
+	waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.paused }, "pause was not acquired")
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "pause did not stop after cancellation")
+	}
+	assert.True(t, m.Status().Running)
+	close(unblock)
+	m.Wait()
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	m.Wait()
+}
+
 func TestManagerWaitBlocksUntilAsyncBuildCompletes(t *testing.T) {
 	ix := openTestIndex(t)
 	release := make(chan struct{})

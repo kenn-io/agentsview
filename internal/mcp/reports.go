@@ -1,5 +1,5 @@
 // ABOUTME: Read-only MCP tools for archive-wide reports: the Activity
-// ABOUTME: report, tool usage, quality signals, and usage comparison.
+// ABOUTME: report, tool usage, quality signals, term trends, and usage comparison.
 package mcp
 
 import (
@@ -85,6 +85,29 @@ func (t *toolset) qualitySignals(
 		}
 	}
 	return nil, out, nil
+}
+
+// --- get_term_trends ---
+
+type termTrendsIn struct {
+	analyticsIn `json:",inline"`
+	Terms       []string `json:"terms" jsonschema:"Terms to count, one series each, max 12. Separate variants with |. Single words match on word boundaries and also count a plural formed by adding s."`
+	Granularity string   `json:"granularity,omitempty" jsonschema:"Bucket size: day, week (default), or month."`
+	Timezone    string   `json:"timezone,omitempty" jsonschema:"IANA timezone for bucket boundaries. Default UTC."`
+}
+
+func (t *toolset) termTrends(
+	ctx context.Context, _ *mcp.CallToolRequest, in termTrendsIn,
+) (*mcp.CallToolResult, *db.TrendsTermsResponse, error) {
+	filter := in.request()
+	filter.Timezone = in.Timezone
+	res, err := t.svc.TermTrends(ctx, service.TermTrendsRequest{
+		AnalyticsRequest: filter, Terms: in.Terms, Granularity: in.Granularity,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, res, nil
 }
 
 // --- get_activity_report ---

@@ -1,10 +1,9 @@
 //go:build pgtest || chtest
 
-// The plan usage parity test proves that SQLite, PostgreSQL, ClickHouse, and
-// the DuckDB mirror return the same plan-only and partly-captured counts,
-// token totals, and plan usage rows for the same archive. Backends that are
-// not configured are skipped: PostgreSQL needs TEST_PG_URL, ClickHouse needs
-// TEST_CLICKHOUSE_URL. DuckDB is always compared.
+// The plan usage parity test proves that SQLite, PostgreSQL, and ClickHouse
+// return the same plan-only and partly-captured counts, token totals, and plan
+// usage rows for the same archive. Backends that are not configured are
+// skipped: PostgreSQL needs TEST_PG_URL, ClickHouse needs TEST_CLICKHOUSE_URL.
 package service_test
 
 import (
@@ -19,7 +18,6 @@ import (
 	clickhousestore "go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
@@ -158,16 +156,6 @@ func TestPlanUsageCountsParity(t *testing.T) {
 	const sessions = 5
 	stores := map[string]db.Store{}
 
-	duckTarget := filepath.Join(t.TempDir(), "parity.duckdb")
-	duckRes, err := duckdbstore.Push(ctx, duckTarget, local, "parity-machine",
-		storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, sessions, duckRes.SessionsPushed)
-	duck, err := duckdbstore.NewStore(ctx, duckTarget)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, duck.Close()) })
-	stores["duckdb"] = duck
-
 	if pgURL := os.Getenv("TEST_PG_URL"); pgURL != "" {
 		dropSchema := func() {
 			// Also runs from t.Cleanup, where t.Context() is already canceled.
@@ -208,6 +196,9 @@ func TestPlanUsageCountsParity(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, ch.Close()) })
 		stores["clickhouse"] = ch
+	}
+	if len(stores) == 0 {
+		t.Skip("set TEST_PG_URL or TEST_CLICKHOUSE_URL to compare a replica")
 	}
 
 	for _, tc := range []struct {

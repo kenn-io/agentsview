@@ -241,7 +241,7 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 			snapshot.location = tt.local
 			zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(snapshot.location, nil).Key)
 			require.NoError(t, err)
-			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+			require.NoError(t, runCapturedUsageBackfill(t, database, snapshot, zone.installSeq))
 			locations, err := usageBackfillLocations(t.Context(), cache, tt.local)
 			require.NoError(t, err)
 
@@ -431,6 +431,7 @@ func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
 			defer cancel()
 			var sizes []int
 			var cancelledCall *usageRollupCall
+			callerReturned := make(chan struct{})
 			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
 				sizes = append(sizes, len(builds))
 				if cancelFirst && len(sizes) == 1 {
@@ -441,10 +442,19 @@ func TestUsageRollupInstallsInBoundedBatches(t *testing.T) {
 					cache.rollup.mu.Unlock()
 					// Cancellation leaves this detached batch to commit for the next request.
 					cancel()
+					// Wait until the caller unregisters before allowing later batches
+					// to check whether anyone still needs them.
+					<-callerReturned
 				}
 			}
-			_, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
-				export.NewPricingResolver(snapshot.PricingRows))
+			ensureResult := make(chan error, 1)
+			go func() {
+				_, _, err := cache.rollup.Ensure(ctx, snapshot, fills,
+					export.NewPricingResolver(snapshot.PricingRows))
+				close(callerReturned)
+				ensureResult <- err
+			}()
+			err := <-ensureResult
 			if cancelFirst {
 				require.ErrorIs(t, err, context.Canceled)
 				require.NotNil(t, cancelledCall)

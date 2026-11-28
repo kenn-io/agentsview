@@ -45,7 +45,7 @@ type RecentEditsResult struct {
 }
 
 // NormalizeRecentEditsParams clamps paging params; exported so PostgreSQL and
-// DuckDB share identical clamping.
+// ClickHouse share identical clamping.
 func NormalizeRecentEditsParams(p RecentEditsParams) RecentEditsParams {
 	p.Search = strings.TrimSpace(p.Search)
 	if p.Limit <= 0 || p.Limit > 200 {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -53,7 +54,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
@@ -62,7 +63,7 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 20)
+	require.Len(t, tools.Tools, 23)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -79,7 +80,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	})
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 3)
+	require.Len(t, tools.Tools, 4)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
@@ -91,7 +92,86 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 				"memory-profile tools must not refer to unavailable tools")
 		}
 	}
-	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
+	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
+}
+
+func TestNewServer_Instructions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile Profile
+	}{{"default", ""}, {"memory", ProfileMemory}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: tc.profile}))
+			defer func() {
+				require.NoError(t, ct.Close())
+				require.NoError(t, st.Wait())
+			}()
+			instructions := ct.InitializeResult().Instructions
+			if tc.profile == ProfileMemory {
+				assert.Equal(t, "Use returned web_url values when linking to recorded sessions.", instructions)
+				return
+			}
+			catalog, err := ct.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+			for _, route := range []struct {
+				text string
+				tool string
+				args []string
+			}{
+				{"search_content with mode hybrid", ToolSearchContent, nil},
+				{"search_sessions for keywords", ToolSearchSessions, nil},
+				{"search_sessions with its name as query", ToolSearchSessions, []string{"query"}},
+				{"list_sessions with pr=owner/repo#N, include_one_shot and include_automated true", ToolListSessions, []string{"pr", "include_one_shot", "include_automated"}},
+				{"search_content with mode regex and each pattern", ToolSearchContent, []string{"mode", "pattern", "include_active", "include_one_shot", "include_automated", "current_session_id", "cursor"}},
+				{"get_session_overview, then", ToolGetSessionOverview, nil},
+				{"get_tool_calls", ToolGetToolCalls, nil},
+				{"get_messages", ToolGetMessages, nil},
+				{"get_child_sessions", ToolGetChildSessions, nil},
+				{"list_sessions with active_since", ToolListSessions, []string{"active_since"}},
+			} {
+				assert.Contains(t, instructions, route.text)
+				if len(route.args) == 0 {
+					continue
+				}
+				var line string
+				for candidate := range strings.SplitSeq(instructions, "\n") {
+					if strings.Contains(candidate, route.text) {
+						line = candidate
+						break
+					}
+				}
+				for _, arg := range route.args {
+					assert.Regexp(t, `\b`+arg+`\b`, line, "%s instruction", route.tool)
+				}
+				var found bool
+				for _, tool := range catalog.Tools {
+					if tool.Name != route.tool {
+						continue
+					}
+					found = true
+					raw, err := json.Marshal(tool.InputSchema)
+					require.NoError(t, err)
+					var schema struct {
+						Properties map[string]any `json:"properties"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &schema))
+					for _, arg := range route.args {
+						assert.Contains(t, schema.Properties, arg, "%s argument", route.tool)
+					}
+				}
+				assert.True(t, found, "missing tool %s", route.tool)
+			}
+			assert.Contains(t, instructions, "For every PR, including a URL")
+			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
+			assert.Contains(t, instructions, "identifying it by this question or search calls if its ID is unknown")
+			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
+			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
+			assert.Contains(t, instructions, "stored ID such as codex:<uuid>")
+			assert.Contains(t, instructions, "plain UUID works locally")
+			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")
+		})
+	}
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
@@ -121,10 +201,10 @@ func TestServer_GetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryPartial, status.Status)
 }
 
-// Measured catalogs: full 86,462 bytes, memory 21,219 bytes.
-// Budgets allow 10%, rounded up to 1,000 bytes; increases need review and matching docs/mcp.md updates.
+// Measured catalogs: full 96,068 bytes, memory 23,406 bytes.
+// Increases need review and matching docs/mcp.md updates.
 const (
-	fullCatalogBudget   = 96_000
+	fullCatalogBudget   = 97_000
 	memoryCatalogBudget = 24_000
 )
 
@@ -217,9 +297,10 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 18)
+	require.Len(t, tools.Tools, 20)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
+		assert.NotEqual(t, ToolListRecall, tool.Name)
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
@@ -432,4 +513,61 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 		}
 		assert.Equal(t, value, warning)
 	}
+}
+
+func TestCompactionSummaryTool(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "codex:session", "project")
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsSystem: true, IsCompactBoundary: true}}))
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	catalog, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	var minimum *float64
+	for _, tool := range catalog.Tools {
+		if tool.Name == ToolGetCompactionSummaries {
+			raw, err := json.Marshal(tool.InputSchema)
+			require.NoError(t, err)
+			var schema struct {
+				Properties map[string]struct {
+					Minimum *float64 `json:"minimum"`
+				} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &schema))
+			minimum = schema.Properties["limit"].Minimum
+		}
+	}
+	require.NotNil(t, minimum)
+	assert.InDelta(t, 0, *minimum, 0)
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"session_id": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	raw, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var out service.CompactionSummariesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Summaries, 1)
+	assert.Equal(t, "summary", out.Summaries[0].Content)
+	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
+}
+
+func TestServer_BudgetTextResults(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	messages := make([]db.Message, 50)
+	for i := range messages {
+		messages[i] = dbtest.AsstMsg("budget", i, "needle "+strings.Repeat("<&", 950))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.Len(t, result.Content, 1)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
+	assert.Contains(t, content.Text, `\u003c`)
+	assert.Contains(t, content.Text, `\u0026`)
 }

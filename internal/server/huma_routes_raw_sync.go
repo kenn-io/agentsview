@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -248,6 +249,9 @@ func rawSyncHTTPError(err error) error {
 	case errors.Is(err, rawsync.ErrInvalid):
 		return apiErrorWithCode(http.StatusBadRequest, "invalid_request", "invalid raw sync request")
 	default:
+		// The response hides the cause, and clients retry 500s as transient,
+		// so the server log is the only place an operator can see it.
+		log.Printf("raw sync request failed: %v", err)
 		return apiErrorWithCode(
 			http.StatusInternalServerError, "internal_error", "raw sync request failed",
 		)

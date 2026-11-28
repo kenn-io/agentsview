@@ -116,7 +116,7 @@ func (c *usageProbeConn) QueryContext(
 				"band_updated_at",
 			},
 			values: [][]driver.Value{{
-				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), "2026-06-08",
+				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 				nil, nil, nil, nil, nil, nil, nil,
 			}},
 		}, nil

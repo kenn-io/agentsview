@@ -91,6 +91,20 @@ func TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest(t *test
 	assert.Equal(t, finalized.Digest, decoded["digest"])
 }
 
+func TestFinalizeReportingHourDigestIncludesPollTime(t *testing.T) {
+	hour := quietReportingHourFixture("2026-07-28-00")
+	hour.SchemaVersion = ReportingAccountSchemaVersion
+	hour.BucketSeconds = 300
+	hour.Joint = &ReportingJoint{}
+	hour.PolledAt = "2026-07-29T01:00:00.000000Z"
+	first, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	hour.PolledAt = "2026-07-29T02:00:00.000000Z"
+	second, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Digest, second.Digest)
+}
+
 func TestFinalizeReportingHourDigestVector(t *testing.T) {
 	hour := quietReportingHourFixture("2026-07-28-00")
 	hour.Digest = "sha256:stale-derived-field"
@@ -188,4 +202,34 @@ func quietReportingHourFixture(period string) ReportingHour {
 			Buckets: buckets,
 		},
 	}
+}
+
+func TestReportingCursorEventsSortByConversation(t *testing.T) {
+	hour := quietReportingHourFixture("2026-07-29-13")
+	hour.SchemaVersion = ReportingCursorSchemaVersion
+	hour.BucketSeconds = 300
+	hour.Joint = &ReportingJoint{}
+	hour.CursorEvents = []ReportingCursorEvent{
+		{Key: "z", ConversationID: "a"},
+		{Key: "a", ConversationID: "b"},
+		{Key: "a", ConversationID: "a"},
+	}
+	hour.CursorPolls = []ReportingCursorPoll{{Account: "12", PolledAt: "first"}}
+	first, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.Equal(t, []ReportingCursorEvent{{Key: "a", ConversationID: "a"}, {Key: "a", ConversationID: "b"}, {Key: "z", ConversationID: "a"}}, first.CursorEvents)
+	hour.CursorEvents = slices.Clone(hour.CursorEvents)
+	slices.Reverse(hour.CursorEvents)
+	reordered, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.Equal(t, first.Digest, reordered.Digest)
+	hour.CursorEvents[0].OutputTokens++
+	changed, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Digest, changed.Digest)
+	hour.CursorEvents[0].OutputTokens--
+	hour.CursorPolls = []ReportingCursorPoll{{Account: "12", PolledAt: "later"}}
+	changed, _, err = FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Digest, changed.Digest)
 }

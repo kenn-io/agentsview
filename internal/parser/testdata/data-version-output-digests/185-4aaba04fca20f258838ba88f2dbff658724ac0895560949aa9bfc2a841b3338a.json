@@ -1,0 +1,12 @@
+{
+  "version": 185,
+  "digest": "4aaba04fca20f258838ba88f2dbff658724ac0895560949aa9bfc2a841b3338a",
+  "providers": {
+    "antigravity": {
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "d71b9f24ecfe8271f660fc0fe612b43039839b0c7e5ab4ff7fe72163ea09b24a"
+    },
+    "antigravity-cli": {
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "30975e78e06be88651cbf2e68e9ca6d7de5293085f4e49eb8b8c22e89a42677a"
+    }
+  }
+}

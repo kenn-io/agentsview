@@ -4,6 +4,10 @@
 
 export type GetApiV1SessionsParams = {
   /**
+   * Match child sessions individually when include_children is true
+   */
+  flat?: boolean;
+  /**
    * Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
    */
   exclusion_counts?: boolean;
@@ -117,7 +121,7 @@ export type GetApiV1SessionsParams = {
    */
   label?: string[];
   /**
-   * Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123
+   * Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123. Includes URLs in user prompts; a mention does not mean work was done on the PR
    */
   pr?: string;
   /**

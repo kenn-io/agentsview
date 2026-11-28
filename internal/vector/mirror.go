@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -69,7 +70,7 @@ func inPlaceholders(keys []string) (string, []any) {
 // *db.DB): the stream of embedding-unit documents — individual user
 // messages and runs of contiguous assistant messages.
 type UnitSource interface {
-	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
+	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int,
 		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
@@ -80,7 +81,7 @@ type sessionJournalSource interface {
 	GetDatabaseID(context.Context) (string, error)
 	SessionDeletionPublicationRevision(context.Context) (int64, error)
 	LoadSessionDeletionChanges(context.Context, int64, int64) ([]string, error)
-	ScanEmbeddableUnitsForSession(context.Context, string, bool, int, func(db.EmbeddableUnit) error) error
+	ScanEmbeddableUnitsForSession(context.Context, string, bool, []string, int, func(db.EmbeddableUnit) error) error
 }
 
 const (
@@ -218,8 +219,15 @@ func contentHash(content string) string {
 // successful refresh it stores the journal revision and archive id captured
 // before the scan. The watermark advances to the opaque value returned by
 // the source after a successful scan.
+// Refresh includes both user and assistant roles; Build applies role scope.
 func (ix *Index) Refresh(
-	ctx context.Context, src UnitSource, full, includeAutomated bool,
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string,
+) (RefreshStats, error) {
+	return ix.refresh(ctx, src, full, includeAutomated, agents, nil, nil)
+}
+
+func (ix *Index) refresh(
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents, roles []string, seed *reuseGeneration,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
@@ -291,15 +299,9 @@ func (ix *Index) Refresh(
 		return RefreshStats{}, err
 	}
 	visitUnit := func(u db.EmbeddableUnit) error {
-		occurrence := 1
-		if u.SourceUUID != "" {
-			occKey := u.SessionID + "\x00" + u.SourceUUID
-			occurrences[occKey]++
-			occurrence = occurrences[occKey]
-		}
-		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
+		key := unitDocKey(u, occurrences)
 		if u.Deleted {
-			deleted, err := ix.deleteMirrorDocument(ctx, key)
+			deleted, err := ix.deleteMirrorDocument(ctx, key, nil)
 			if err != nil {
 				return fmt.Errorf("deleting tombstoned mirror row %s: %w", key, err)
 			}
@@ -308,7 +310,11 @@ func (ix *Index) Refresh(
 			}
 			return nil
 		}
-		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
+		visited[u.SessionID] = struct{}{}
+		if !UnitKindIncluded(roles, u.Kind) {
+			return nil
+		}
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel, seed)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
@@ -321,11 +327,10 @@ func (ix *Index) Refresh(
 			stats.Upserted++
 		}
 		seen[key] = struct{}{}
-		visited[u.SessionID] = struct{}{}
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, runCap, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -337,7 +342,7 @@ func (ix *Index) Refresh(
 		if _, ok := visited[id]; ok {
 			continue
 		}
-		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); err != nil {
+		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, agents, runCap, visitUnit); err != nil {
 			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
 		}
 	}
@@ -352,7 +357,7 @@ func (ix *Index) Refresh(
 	// already-absent key on its own (see its doc comment), so this ordering
 	// and that guard together make Refresh's accounting robust regardless
 	// of which pass would otherwise see the row first.
-	finalized, err := ix.finalizeEvictions(ctx, evicted)
+	finalized, err := ix.finalizeEvictions(ctx, evicted, seed)
 	if err != nil {
 		return RefreshStats{}, err
 	}
@@ -407,7 +412,28 @@ func (ix *Index) Refresh(
 	return stats, nil
 }
 
-func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, error) {
+func (ix *Index) deleteMirrorDocument(ctx context.Context, key string, seed *reuseGeneration) (bool, error) {
+	if ix.spec.Name == "messages" {
+		query := `DELETE FROM ` + ix.spec.reuseTable() + ` WHERE doc_key = ?`
+		args := []any{key}
+		if seed != nil {
+			var content, hash string
+			if err := ix.db.QueryRowContext(ctx, `SELECT content, content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key).Scan(&content, &hash); err != nil {
+				return false, err
+			}
+			if err := ix.seedReuse(ctx, *seed, key, content, hash); err != nil {
+				return false, err
+			}
+			query += ` AND ordinal != ?`
+			args = append(args, seed.ordinal)
+		}
+		if _, err := ix.db.ExecContext(ctx, query, args...); err != nil {
+			return false, fmt.Errorf("deleting reusable chunks for %s: %w", key, err)
+		}
+		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.chunkTextTable()+` WHERE doc_key = ?`, key); err != nil {
+			return false, err
+		}
+	}
 	if err := ix.store.DeleteVectors(ctx, key); err != nil {
 		return false, fmt.Errorf("deleting vectors for %s: %w", key, err)
 	}
@@ -435,7 +461,7 @@ func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, er
 // is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
 // row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int,
+	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int, seed *reuseGeneration,
 ) (unchanged bool, evicted []string, err error) {
 	evicted, err = ix.evictSlotOccupant(ctx, key, u.SessionID, u.Ordinal, sentinel)
 	if err != nil {
@@ -443,15 +469,21 @@ func (ix *Index) upsertMirrorRow(
 	}
 
 	var existingHash sql.NullString
+	var oldContent sql.NullString
+	hash := contentHash(u.Content)
 	err = ix.db.QueryRowContext(ctx,
-		`SELECT content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-	).Scan(&existingHash)
+		`SELECT content_hash, CASE WHEN ? AND content_hash != ? THEN content END FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, seed != nil, hash, key,
+	).Scan(&existingHash, &oldContent)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
 	}
 
-	hash := contentHash(u.Content)
 	unchanged = existingHash.Valid && existingHash.String == hash
+	if seed != nil && existingHash.Valid && !unchanged {
+		if err := ix.seedReuse(ctx, *seed, key, oldContent.String, existingHash.String); err != nil {
+			return false, evicted, err
+		}
+	}
 
 	offsets, err := marshalOffsets(u.Offsets)
 	if err != nil {
@@ -591,7 +623,7 @@ func (ix *Index) evictSlotOccupant(
 // call order — an evicted key that never reappears in the scan is also
 // absent from seen, so without this guard reconcileDeletions would delete
 // the row once and finalizeEvictions would count deleting it again.
-func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}) (int, error) {
+func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}, seed *reuseGeneration) (int, error) {
 	if len(evicted) == 0 {
 		return 0, nil
 	}
@@ -613,16 +645,8 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 		if ordinal >= 0 {
 			continue // reinserted under its own doc_key later in the same scan
 		}
-		if err := ix.store.DeleteVectors(ctx, key); err != nil {
-			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)
-		}
-		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key, seed); err != nil {
 			return deleted, err
-		}
-		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-		); err != nil {
-			return deleted, fmt.Errorf("deleting evicted mirror row %s: %w", key, err)
 		}
 		deleted++
 	}
@@ -698,16 +722,8 @@ func (ix *Index) reconcileDeletions(
 	rows.Close()
 
 	for _, key := range vanished {
-		if err := ix.store.DeleteVectors(ctx, key); err != nil {
-			return 0, fmt.Errorf("deleting vectors for %s: %w", key, err)
-		}
-		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key, nil); err != nil {
 			return 0, err
-		}
-		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-		); err != nil {
-			return 0, fmt.Errorf("deleting mirror row %s: %w", key, err)
 		}
 	}
 	return len(vanished), nil
@@ -767,5 +783,43 @@ func (ix *Index) Clear(ctx context.Context) error {
 	if _, err := ix.reconcileDeletions(ctx, nil, ""); err != nil {
 		return err
 	}
+	if ix.spec.Name == "messages" {
+		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()); err != nil {
+			return fmt.Errorf("clearing reusable chunks: %w", err)
+		}
+	}
 	return ix.metaDelete(ctx, refreshWatermarkKey)
+}
+
+const scopeAgentsKey = "scope_agents"
+
+func normalizedAgents(agents []string) []string {
+	return slices.Compact(db.SortedCopy(agents))
+}
+
+func normalizedRoles(roles []string) []string {
+	roles = slices.Compact(db.SortedCopy(roles))
+	if slices.Contains(roles, "user") && slices.Contains(roles, "assistant") {
+		return nil
+	}
+	return roles
+}
+
+// scopeValue is the stored scope_agents value. Restricted roles append a
+// ";roles=" suffix, so with roles unset the value matches older writers and an
+// older writer that sees the suffix reconciles back to both roles.
+func scopeValue(agents, roles []string) string {
+	value := strings.Join(agents, ",")
+	if len(roles) > 0 {
+		value += ";roles=" + strings.Join(roles, ",")
+	}
+	return value
+}
+
+// UnitKindIncluded reports whether the selected roles include an embedding unit.
+func UnitKindIncluded(roles []string, kind string) bool {
+	if len(roles) == 0 {
+		return true
+	}
+	return kind == "user" && slices.Contains(roles, "user") || kind == "run" && slices.Contains(roles, "assistant")
 }

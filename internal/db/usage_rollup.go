@@ -154,7 +154,7 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 }
 
 func usagePricingIdentityWithDigest(digest string) string {
-	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion + "\x00" + usageZonePricingIdentityVersion
 	if aliases := pricingpkg.ConfiguredAliasesDigest(); aliases != "" {
 		identity += "\x00" + aliases
 	}
@@ -816,12 +816,7 @@ func installUsageRollupBuilds(
 	// Background rebuilds install here too, so only a new zone takes the
 	// install time; recordUsageTimezoneRequest owns later recency stamps.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
-		timezone_key, timezone_name, interval_fingerprint, last_requested_at
-	) VALUES (?, ?, ?, ?) ON CONFLICT(timezone_key) DO UPDATE SET
-		timezone_name=excluded.timezone_name,
-		interval_fingerprint=excluded.interval_fingerprint`,
-		identity.Key, identity.Name, identity.IntervalFingerprint, now); err != nil {
+	if err := insertUsageTimezone(ctx, conn, identity, time.Now()); err != nil {
 		return err
 	}
 	var timezoneID int64
@@ -994,7 +989,16 @@ func installUsageRollupRows(
 	}
 	for _, row := range build.Exceptions {
 		fact := row.Fact
-		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions (
+			rollup_install_id, group_kind, group_key, cached_session_id, fact_index,
+			source_session_id, local_date, source, message_ordinal, timestamp_ms,
+			timestamp_ns, raw_timestamp, uses_session_start, model, provider_id,
+			input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+			cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
+			reported_cost_microdollars, cost_source, cost_status, request_scoped,
+			is_headless, claude_message_id, claude_request_id, source_uuid,
+			usage_dedup_key, ranking_output_tokens
+		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,

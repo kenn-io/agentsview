@@ -36,7 +36,7 @@ type AnalyticsBackend interface {
 	// order; a backend may sort anyway.
 	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
 	FormatTime(any) string
-	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
+	// ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	// VelocitySessions returns each selected session's velocity contribution
 	// over its messages without Claude hooks.
@@ -50,11 +50,11 @@ type AnalyticsBackend interface {
 	// ToolCountsSQL selects tool call counts for the sessions in idSet, a
 	// relation from VisitSessionIDSets.
 	ToolCountsSQL(idSet string, args []any) (string, []any)
-	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
+	// Session metadata supplies ClickHouse cache versions.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
 
-// Analytics owns DuckDB and ClickHouse report orchestration.
+// Analytics owns ClickHouse report orchestration.
 type Analytics struct {
 	backend AnalyticsBackend
 	name    string
@@ -99,7 +99,7 @@ type AnalyticsSession struct {
 	DuplicatePromptCount        int
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
-	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
+	PushVersion                 uint64 // ClickHouse cache version.
 	// FrustrationMarkers is the count push stored on the
 	// session; nil when the backend has none and must count them.
 	FrustrationMarkers *int
@@ -953,18 +953,19 @@ func (s *Analytics) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	if backend, ok := s.backend.(trendPartsBackend); ok {
+		disk, identity := backend.TrendsDisk()
+		if result, handled, err := db.TrendsFromParts(ctx, disk, identity, f, terms, granularity, trendPartsSource{backend}); handled {
+			return result, err
+		}
+	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {
 			_, _ = acc.Finish()
 		}
 	}()
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.Model = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
+	sessionFilter := f.TrendsSessionFilter()
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
@@ -1002,18 +1003,7 @@ func (s *Analytics) GetTrendsTerms(
 			if err := rows.Scan(&row.content, &timestamp); err != nil {
 				return db.TrendsTermsResponse{}, err
 			}
-			var local time.Time
-			var has bool
-			switch value := timestamp.(type) {
-			case time.Time:
-				local, has = value.In(loc), true
-			case *time.Time:
-				if value != nil {
-					local, has = value.In(loc), true
-				}
-			default:
-				local, has = analyticsLocalTime(s.backend.FormatTime(timestamp), loc)
-			}
+			local, has := trendLocalTime(s.backend, timestamp, loc)
 			if has && flt.MatchesDayHour(local, true) {
 				acc.Add(row.content, local)
 			}

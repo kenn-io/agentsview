@@ -16,7 +16,7 @@ import (
 func TestPGSessionAnnotationParity(t *testing.T) {
 	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(
-		t, "agentsview_session_annotations_test",
+		t, "agentsview",
 	)
 	dbtest.SeedSessionAnnotations(t, local)
 	_, err := syncer.Push(ctx, true, nil)
@@ -31,12 +31,17 @@ func TestPGSessionAnnotationParity(t *testing.T) {
 func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
-		t, "agentsview_session_annotations_repush_test",
+		t, "agentsview",
 	)
 	dbtest.SeedSessionAnnotations(t, local)
 	const id = dbtest.AnnotatedOtherID
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "initial Push")
+	store, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	marker, err := store.GetSessionTreeMarker(ctx, id)
+	require.NoError(t, err)
 
 	readPG := func(t *testing.T) (string, []string) {
 		t.Helper()
@@ -58,6 +63,9 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err, "label-only Push")
 	assert.Equal(t, 1, result.SessionsPushed)
+	updatedMarker, err := store.GetSessionTreeMarker(ctx, id)
+	require.NoError(t, err)
+	assert.NotEqual(t, marker, updatedMarker)
 	_, labels := readPG(t)
 	assert.Equal(t, []string{"role=lead", "ticket=example-b"}, labels)
 
@@ -87,6 +95,9 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 
 func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	t.Parallel()
+	// An empty database: the schema this test upgrades must come from its own
+	// EnsureSchema run, never from a template copy.
+	testPGURL(t)
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_upgrade_test",
 	)
@@ -114,7 +125,7 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 
 func TestSessionExclusionCounts(t *testing.T) {
 	t.Parallel()
-	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_session_exclusions_test")
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview")
 	dbtest.SeedSessionExclusions(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -19,7 +18,6 @@ func testDB(t *testing.T) *db.DB {
 	t.Helper()
 	d, err := db.Open(t.Context(), t.TempDir()+"/test.db")
 	require.NoError(t, err, "opening test db")
-	dbtest.SeedPricingMeta(t, d)
 	t.Cleanup(func() { d.Close() })
 	return d
 }

@@ -79,7 +79,7 @@
 
   $effect(() => {
     if (open) {
-      untrack(() => { sessions.loadAgents(); sessions.loadMachines(); });
+      untrack(() => { sessions.refreshFilterOptions(); });
       agentSearch = "";
       machineSearch = "";
       labelDraft = "";

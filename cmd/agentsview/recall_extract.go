@@ -61,6 +61,10 @@ func resolveExtractDistillation(
 		return dist, fmt.Errorf(
 			"parsing [recall.extract.servers.%s] timeout: %w", serverName, err)
 	}
+	apiKey, err := server.APIKey()
+	if err != nil {
+		return dist, fmt.Errorf("[recall.extract.servers.%s] %w", serverName, err)
+	}
 	profile, err := extract.ResolveProfile(cfg.Prompts.Profile, cfg.Model)
 	if err != nil {
 		return dist, err
@@ -101,7 +105,7 @@ func resolveExtractDistillation(
 	return extractDistillation{
 		Client: &extract.Client{
 			BaseURL:    server.Endpoint,
-			APIKey:     server.APIKey(),
+			APIKey:     apiKey,
 			Model:      cfg.Model,
 			HTTPClient: httpClient,
 			Request:    request,

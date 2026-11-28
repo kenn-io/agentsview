@@ -49,7 +49,7 @@ describe("ActivityTimeline", () => {
     const component = mount(ActivityTimeline, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
     const chart = document.querySelector<SVGSVGElement>("svg");
     expect(chart).not.toBeNull();
     expect(Number(chart!.getAttribute("width"))).toBe(800);
@@ -64,7 +64,7 @@ describe("ActivityTimeline", () => {
     expect(document.body.textContent).toContain("No activity data");
     analytics.errors.activity = "request failed";
     await tick();
-    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".load-error")).not.toBeNull();
     expect(document.body.textContent).toContain("No activity data");
     analytics.activity = null;
     await tick();

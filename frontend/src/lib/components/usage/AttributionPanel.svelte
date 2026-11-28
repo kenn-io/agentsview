@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import type { AttributionView, GroupBy } from "../../stores/usagePreferences.js";
   import { tick } from "svelte";
@@ -7,7 +7,7 @@
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
-  import { TREEMAP_LABEL_SCALES, type TreemapLabelScale } from "./treemapLabelSize.js";
+  import { TREEMAP_SCALES, type TreemapScale } from "./treemapScale.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { formatCount } from "../../utils/format.js";
@@ -35,7 +35,7 @@
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const hasSelection = $derived(usage.hasSelection(groupBy));
   const view = $derived(usage.toggles.attribution.view);
-  const labelScale = $derived(usage.toggles.attribution.labelScale);
+  const tileScale = $derived(usage.toggles.attribution.tileScale);
   const isTokenMode = $derived(usage.mode === "token");
 
   interface Row {
@@ -230,10 +230,10 @@
     usage.setAttributionView(v);
   }
 
-  const labelScaleNames: Record<TreemapLabelScale, () => string> = {
-    linear: m.usage_label_scale_linear,
-    sqrt: m.usage_label_scale_sqrt,
-    log: m.usage_label_scale_log,
+  const tileScaleNames: Record<TreemapScale, () => string> = {
+    linear: m.usage_tile_scale_linear,
+    sqrt: m.usage_tile_scale_sqrt,
+    log: m.usage_tile_scale_log,
   };
 </script>
 
@@ -300,15 +300,15 @@
         </button>
       </div>
       {#if view === "treemap"}
-        <div class="segment-toggle" role="group" aria-label={m.usage_label_scale_title()} title={m.usage_label_scale_title()}>
-          {#each TREEMAP_LABEL_SCALES as scale (scale)}
+        <div class="segment-toggle" role="group" aria-label={m.usage_tile_scale_title()} title={m.usage_tile_scale_title()}>
+          {#each TREEMAP_SCALES as scale (scale)}
             <button
               class="toggle-btn"
-              class:active={labelScale === scale}
-              aria-pressed={labelScale === scale}
-              onclick={() => usage.setAttributionLabelScale(scale)}
+              class:active={tileScale === scale}
+              aria-pressed={tileScale === scale}
+              onclick={() => usage.setAttributionTileScale(scale)}
             >
-              {labelScaleNames[scale]()}
+              {tileScaleNames[scale]()}
             </button>
           {/each}
         </div>
@@ -316,11 +316,17 @@
     </div>
   </div>
   {#if zoomedProject && usage.errors.zoom}
-    <div class="empty" {@attach errorTelemetry("analytics")}>{usage.errors.zoom}</div>
+    <LoadError message={usage.errors.zoom} onRetry={() => void usage.fetchZoom()} telemetry="analytics" />
+  {/if}
+  {#if zoomedProject && usage.errors.zoom && usage.zoomRows === null}
+    <!-- Nothing loaded to keep under the error. -->
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if zoomedProject ? !usage.errors.zoom : (usage.attributionSummary !== null || usage.summary !== null) && !usage.errors.summary}
+      <div class="empty">{m.shared_no_data_for_period()}</div>
+    {/if}
   {:else}
     {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_focus_hint()}</div>{/if}
     {#if view === "treemap"}
@@ -332,7 +338,7 @@
             onSelect={zoomedProject ? undefined : handleSelect}
             onOpen={!zoomedProject && groupBy === "project" ? handleOpen : undefined}
             formatValue={isTokenMode ? formatCount : undefined}
-            {labelScale}
+            scale={tileScale}
           />
         </div>
         <div class="side-rail">

@@ -232,8 +232,10 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			require.NoError(t, cmd.Flags().Parse([]string{"--port", strconv.Itoa(port)}))
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			require.NoError(t, err)
-			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
+			first, firstOpts, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
 			require.NoError(t, err)
+			// The first daemon stops before the update restarts it.
+			require.NoError(t, firstOpts.Listener.Close())
 			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
 			_, err = WriteDaemonRuntimeWithAuthAndNoSync(nil,
 				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
@@ -260,12 +262,13 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			require.NoError(t, err)
 			restartPort, err := cmd.Flags().GetInt("restart-port")
 			require.NoError(t, err)
-			restarted, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, restartPort, nil)
+			restarted, restartedOpts, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, restartPort, nil)
 			if tt.occupied && !tt.ephemeral {
 				require.ErrorContains(t, err, "requested port")
 				return
 			}
 			require.NoError(t, err)
+			require.NoError(t, restartedOpts.Listener.Close())
 			assert.Equal(t, "http://viewer.example.test:8080", restarted.PublicURL)
 			assert.Equal(t, []string{"http://viewer.example.test:8080"}, restarted.PublicOrigins)
 			if tt.ephemeral {

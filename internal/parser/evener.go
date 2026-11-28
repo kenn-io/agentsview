@@ -466,12 +466,23 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 	msg.Content = strings.TrimSpace(strings.Join(content, "\n"))
 	if msg.Content == "" && !msg.HasThinking && len(msg.ToolCalls) == 0 && len(msg.ToolResults) == 0 {
 		msg.Content = "[" + turn.Kind + "]"
+		if msg.IsCompactBoundary {
+			msg.SourceType = EvenerEmptyCompactionSourceType
+		}
+	} else if msg.IsCompactBoundary && msg.Content == "["+turn.Kind+"]" {
+		msg.SourceType = EvenerLiteralCompactionSourceType
 	}
 	msg.ThinkingText = strings.TrimSpace(strings.Join(thinking, "\n"))
 	msg.HasToolUse = len(msg.ToolCalls) > 0
 	msg.ContentLength += len(msg.Content)
 	return msg
 }
+
+// EvenerEmptyCompactionSourceType identifies a generated empty boundary label.
+const EvenerEmptyCompactionSourceType = "evener_empty_compaction"
+
+// EvenerLiteralCompactionSourceType identifies literal text matching a label.
+const EvenerLiteralCompactionSourceType = "evener_literal_compaction"
 
 func evenerResultText(part evenerContent) string {
 	result := part.ToolResult

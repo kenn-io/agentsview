@@ -319,6 +319,66 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 });
 
 describe("AnalyticsStore freshness state", () => {
+  it("updates saved panels while other dashboard requests occupy the queue", async () => {
+    await analytics.fetchAll();
+
+    let active = 0;
+    let releaseOthers!: () => void;
+    const otherRequests = new Promise<void>((resolve) => {
+      releaseOthers = resolve;
+    });
+    const queue: (() => void)[] = [];
+    const request = (response: unknown, saved = false) =>
+      new Promise((resolve) => {
+        const start = () => {
+          active++;
+          void (saved ? Promise.resolve() : otherRequests).then(() => {
+            resolve(response);
+            active--;
+            queue.shift()?.();
+          });
+        };
+        if (active < 6) start();
+        else queue.push(start);
+      });
+
+    const velocity = makeVelocity();
+    velocity.overall.msgs_per_active_min = 12;
+    const tools = { ...makeTools(), total_calls: 34 };
+    const signals = { ...makeSignals(), scored_sessions: 56 };
+    analyticsService.getApiV1AnalyticsVelocity.mockImplementation(() => request(velocity, true));
+    analyticsService.getApiV1AnalyticsTools.mockImplementation(() => request(tools, true));
+    analyticsService.getApiV1AnalyticsSignals.mockImplementation(() => request(signals, true));
+    analyticsService.getApiV1AnalyticsSummary.mockImplementation(() => request(makeSummary()));
+    analyticsService.getApiV1AnalyticsActivity.mockImplementation(() => request(makeActivity()));
+    analyticsService.getApiV1AnalyticsHeatmap.mockImplementation(() => request(makeHeatmap()));
+    analyticsService.getApiV1AnalyticsProjects.mockImplementation(() => request(makeProjects()));
+    analyticsService.getApiV1AnalyticsHourOfWeek.mockImplementation(() =>
+      request(makeHourOfWeek()),
+    );
+    analyticsService.getApiV1AnalyticsSessions.mockImplementation(() =>
+      request(makeSessionShape()),
+    );
+    analyticsService.getApiV1AnalyticsSkills.mockImplementation(() => request(makeSkills()));
+    analyticsService.getApiV1AnalyticsTopSessions.mockImplementation(() =>
+      request(makeTopSessions()),
+    );
+
+    const pending = analytics.fetchAll();
+    try {
+      await vi.waitFor(() => {
+        expect(analytics.velocity?.overall.msgs_per_active_min).toBe(12);
+        expect(analytics.tools?.total_calls).toBe(34);
+        expect(analytics.signals?.scored_sessions).toBe(56);
+      });
+      expect(active).toBe(6);
+      expect(queue.length).toBeGreaterThan(0);
+    } finally {
+      releaseOthers();
+      await pending;
+    }
+  });
+
   it("records Quality freshness without changing dashboard freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
@@ -376,20 +436,6 @@ describe("AnalyticsStore freshness state", () => {
       await analytics.fetchAll();
       expect(analytics.lastQueryDurationMs).toBe(700);
       expect(analytics.qualityLastQueryDurationMs).toBeNull();
-      // One step per panel, in execution order, each with its own timing.
-      expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual([
-        "summary",
-        "activity",
-        "heatmap",
-        "projects",
-        "hourOfWeek",
-        "sessionShape",
-        "velocity",
-        "tools",
-        "skills",
-        "topSessions",
-        "signals",
-      ]);
       // The velocity request carried phase timings: 600 ms waiting on the
       // server, 100 ms downloading, applied at once.
       expect(analytics.lastQuerySteps).toContainEqual({
@@ -435,11 +481,13 @@ describe("AnalyticsStore freshness state", () => {
     expect(analytics.liveQuery.startedAt).not.toBeNull();
     expect(analytics.liveQuery.steps.find((step) => step.running)?.name).toBe("velocity");
     expect(analytics.liveQuery.steps).toHaveLength(11);
+    const liveOrder = analytics.liveQuery.steps.map((step) => step.name);
 
     releaseVelocity();
     await refresh;
     expect(analytics.liveQuery.startedAt).toBeNull();
     expect(analytics.lastQuerySteps.some((step) => step.running)).toBe(false);
+    expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual(liveOrder);
   });
 
   it("does not mark cached partial refresh failures as current", async () => {

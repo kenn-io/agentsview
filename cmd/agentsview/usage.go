@@ -542,9 +542,9 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 func seedPricing(
 	ctx context.Context,
 	database *db.DB,
-	runner remoteSyncExclusiveRunner,
+	engine *sync.Engine,
 ) {
-	err := runPricingExclusive(runner, func() error {
+	err := runPricingExclusive(ctx, engine, func() error {
 		return pricingrefresh.SeedFallbackContext(ctx, database)
 	})
 	if err != nil {

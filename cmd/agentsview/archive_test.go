@@ -450,6 +450,7 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 	require.NoError(t, err)
 	archive, err = rawarchive.Open(ctx, database, data, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte("019eb791cf7d75c184399ed74c122e04"))
 	recovery, err := archive.Backup(ctx, backup, rawarchive.RecoverySettings{LocalMachineName: "original"}, "test")
 	require.NoError(t, err)
@@ -474,4 +475,22 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 		require.Len(t, messages, 1)
 		assert.Equal(t, id, messages[0].Content)
 	}
+}
+
+func TestArchiveCopyPreservesCustomPricing(t *testing.T) {
+	source := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(source, "config.toml"), []byte("[custom_model_pricing.model]\ninput_microdollars_per_mtok = 2000000\n"), 0o600))
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(source, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	destination := filepath.Join(t.TempDir(), "copy")
+	output, err := executeCommand(newRootCommand(), "archive", "copy", destination)
+	require.NoError(t, err)
+	assert.Equal(t, destination+"\n", output)
+	assert.FileExists(t, filepath.Join(destination, "sessions.db"))
+	t.Setenv("AGENTSVIEW_DATA_DIR", destination)
+	cfg, err := config.LoadCapture()
+	require.NoError(t, err)
+	require.Contains(t, cfg.CustomModelPricing, "model")
+	assert.EqualValues(t, 2000000, cfg.CustomModelPricing["model"].InputMicrodollarsPerMTok)
 }

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
-import { flushSync, mount, unmount } from "svelte";
+import { afterEach, describe, expect, it, vi, onTestFinished } from "vite-plus/test";
+import { flushSync, mount, unmount, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -11,6 +13,7 @@ afterEach(() => {
   if (component) unmount(component);
   component = undefined;
   document.body.innerHTML = "";
+  ui.alwaysShowYear = false;
   sessions.machineLabels = {};
   sessions.details.clear();
 });
@@ -54,6 +57,23 @@ describe("SessionItem identity", () => {
     });
     flushSync();
   }
+
+  it.each([false, true])(
+    "updates the date and keeps the full hover time in compact=%s",
+    (compact) => {
+      const ended = "2024-06-01T12:00:00Z";
+      mountSession({ ended_at: ended }, { compact });
+      const time = () => document.querySelector<HTMLElement>(".session-time")!;
+      expect(time().title).toBe(formatTimestamp(ended, true));
+      expect(time().textContent).not.toContain("2024");
+      ui.alwaysShowYear = true;
+      flushSync();
+      expect(time().textContent).toContain("2024");
+      ui.alwaysShowYear = false;
+      flushSync();
+      expect(time().textContent).not.toContain("2024");
+    },
+  );
 
   it("updates a mounted row when its title arrives", () => {
     mountSession({ first_message: null, is_index_only: true });
@@ -115,6 +135,35 @@ describe("SessionItem identity", () => {
 
     expect(document.querySelector(".rename-input")).toBeNull();
     expect(document.querySelector(".star-btn")).not.toBeNull();
+  });
+
+  it("keeps a rejected rename for retry", async () => {
+    const rename = vi
+      .spyOn(sessions, "renameSession")
+      .mockRejectedValueOnce(new Error("retry shortly"))
+      .mockResolvedValueOnce(undefined);
+    onTestFinished(() => rename.mockRestore());
+    mountSession();
+    document
+      .querySelector<HTMLElement>(".session-name")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    input.value = "My new name";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
+    expect(rename).toHaveBeenCalledTimes(1);
+    document
+      .querySelector<HTMLInputElement>(".rename-input")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(rename).toHaveBeenLastCalledWith("session", "My new name");
+    expect(document.querySelector(".rename-input")).toBeNull();
   });
 
   it("uses the singular for one message", () => {

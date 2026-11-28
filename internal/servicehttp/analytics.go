@@ -231,3 +231,37 @@ func (b *httpBackend) ActivityReport(
 	}
 	return report, nil
 }
+
+func (b *httpBackend) TermTrends(
+	ctx context.Context, req service.TermTrendsRequest,
+) (*db.TrendsTermsResponse, error) {
+	// Validate terms and granularity locally so both backends reject bad
+	// input with the same message.
+	if _, _, _, err := service.BuildTermTrendsQuery(req, time.Now()); err != nil {
+		return nil, err
+	}
+	f, err := newAnalyticsQuery(req.AnalyticsRequest)
+	if err != nil {
+		return nil, err
+	}
+	api, err := b.apiClient(b.longRunningClient)
+	if err != nil {
+		return nil, err
+	}
+	query := &apiclient.GetAPIV1TrendsTermsQuery{
+		From: f.from, To: f.to, Timezone: f.timezone, Project: f.project, Agent: f.agent,
+		Machine: f.machine, IncludeOneShot: f.includeOneShot, IncludeAutomated: f.includeAutomated,
+		Term: req.Terms,
+	}
+	if req.Granularity != "" {
+		query.Granularity = new(apiclient.GetAPIV1TrendsTermsQueryGranularity(req.Granularity))
+	}
+	response, err := api.GetAPIV1TrendsTermsWithResponse(ctx, &apiclient.GetAPIV1TrendsTermsRequestOptions{Query: query})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200, nil
+}

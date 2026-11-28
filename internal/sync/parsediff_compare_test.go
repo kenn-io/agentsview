@@ -2601,3 +2601,33 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 	assert.Equal(t, tracePath, stripVirtualSourceSuffix(virtual),
 		"the conversation suffix must strip to the physical trace path")
 }
+
+func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		command, prompt string
+	}{
+		{"full", "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := openTestDB(t)
+			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
+			pw := pdToolSession("pd-pr-links")
+			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"` + tc.command + `"}`
+			pw.msgs[2].IsSystem = false
+			pw.msgs[2].Content = tc.prompt
+			pw.msgs[2].ContentLength = len(tc.prompt)
+			written, _, failed, _ := e.writeBatch([]pendingWrite{pw}, syncWriteBulk, false)
+			require.Equal(t, 1, written)
+			require.Zero(t, failed)
+			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+			require.Equal(t, sessionWriteOK, verdict)
+			stored := pdFetchStored(t, d, prepared.ID)
+			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
+			require.NoError(t, err)
+			for _, diff := range diffs {
+				assert.NotEqual(t, FieldPRLinks, diff.Field)
+			}
+		})
+	}
+}

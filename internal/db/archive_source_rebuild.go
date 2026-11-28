@@ -73,7 +73,7 @@ func copyAttachedArchiveStateTx(ctx context.Context, tx *sql.Tx) error {
 	}
 	if oldDBHasTable(ctx, tx, "pg_sync_state") {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.pg_sync_state(key,value) SELECT key,value FROM old_db.pg_sync_state
-   WHERE key IN ('artifact_local_installation_id','artifact_local_machine_name') OR key LIKE 'machine\_alias:%' ESCAPE '\' OR key LIKE 'machine\_label:%' ESCAPE '\'`); err != nil {
+   WHERE key IN ('artifact_local_installation_id','artifact_local_machine_name') OR key LIKE 'machine\_alias:%' ESCAPE '\' OR key LIKE 'machine\_origin:%' ESCAPE '\' OR key LIKE 'machine\_label:%' ESCAPE '\'`); err != nil {
 			return err
 		}
 	}

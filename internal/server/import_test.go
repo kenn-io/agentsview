@@ -165,7 +165,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"200", 200, `{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"` + strings.Repeat("x", importer.ClaudeAIResponseLimit) + `","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Oversized relay message","created_at":"2026-03-01T10:00:00Z"}]}`},
+		{"200", 200, `{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"` + strings.Repeat("x", importer.BrowserResponseLimit) + `","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Oversized relay message","created_at":"2026-03-01T10:00:00Z"}]}`},
 		{"413 empty body", 413, ""},
 	} {
 		t.Run("oversize "+oversized.name, func(t *testing.T) {
@@ -264,11 +264,11 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					require.NoError(t, result.Body.Close())
 				case "error":
 					if tt.signIn {
-						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`, data)
+						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"browser_sync_auth_required"}`, data)
 					} else if tt.status == 0 {
 						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 					} else if tt.status == 403 {
-						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
+						assert.JSONEq(t, `{"error":"Claude.ai access denied (HTTP 403)"}`, data)
 					} else {
 						assert.Contains(t, data, "unexpected EOF")
 					}
@@ -290,7 +290,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			start := time.Now()
 			srv.mux.ServeHTTP(recorder, req)
 			assert.Equal(t, 2*time.Minute, time.Since(start))
-			assert.Contains(t, recorder.Body.String(), "claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "browser fetch timed out")
 			assert.Contains(t, recorder.Body.String(), "event: error")
 			var request struct {
 				ID string `json:"id"`

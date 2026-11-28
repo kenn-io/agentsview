@@ -1,10 +1,16 @@
 package db
 
 import (
+	"crypto/sha256"
+	"encoding"
+	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestParserCheckpointRoundTrip(t *testing.T) {
@@ -189,7 +195,7 @@ func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
 	d := testDB(t)
 	tx, err := d.getWriter().Begin(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, upsertParserCheckpointTx(tx, ParserCheckpoint{
+	require.NoError(t, d.upsertParserCheckpointTx(t.Context(), tx, ParserCheckpoint{
 		SessionID:        "s-rollback",
 		Agent:            "codex",
 		FilePath:         "/sessions/rollout-s-rollback.jsonl",
@@ -213,4 +219,127 @@ func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok,
 		"an aborted transaction must not leave checkpoint blobs behind")
+}
+
+func sha256StateAfter(t *testing.T, n int) []byte {
+	t.Helper()
+	h := sha256.New()
+	_, _ = h.Write([]byte(strings.Repeat("s", n)))
+	state, err := h.(encoding.BinaryMarshaler).MarshalBinary()
+	require.NoError(t, err)
+	return state
+}
+
+func TestRestrictedArchiveKeepsOnlySourceFreeCheckpoints(t *testing.T) {
+	writes := map[string]func(t *testing.T, d *DB, cp ParserCheckpoint, blobs ParserCheckpointBlobs){
+		"upsert": func(t *testing.T, d *DB, cp ParserCheckpoint, blobs ParserCheckpointBlobs) {
+			t.Helper()
+			require.NoError(t, d.UpsertParserCheckpoint(t.Context(), cp, blobs))
+		},
+		"incremental": func(t *testing.T, d *DB, cp ParserCheckpoint, blobs ParserCheckpointBlobs) {
+			t.Helper()
+			_, err := d.WriteSessionIncremental(t.Context(), cp.SessionID, nil, IncrementalSessionUpdate{
+				MsgCount: 1, NextOrdinal: 1, Checkpoint: &cp, CheckpointBlobs: &blobs,
+			})
+			require.NoError(t, err)
+		},
+	}
+	for _, content := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		for name, write := range writes {
+			for _, tc := range []struct {
+				name  string
+				blobs ParserCheckpointBlobs
+				want  []byte // stored hash state; nil when the checkpoint is dropped
+			}{
+				{"aligned state", ParserCheckpointBlobs{HashState: sha256StateAfter(t, 128)}, sha256StateAfter(t, 128)},
+				{"unaligned state", ParserCheckpointBlobs{HashState: sha256StateAfter(t, 100)}, sha256StateAfter(t, 64)},
+				{"unknown state encoding", ParserCheckpointBlobs{HashState: []byte("state")}, nil},
+				{"unknown cursor", ParserCheckpointBlobs{Cursor: []byte{1}, HashState: sha256StateAfter(t, 128)}, nil},
+			} {
+				t.Run(string(content)+"/"+name+"/"+tc.name, func(t *testing.T) {
+					d := testDB(t)
+					d.SetArchiveContent(content)
+					insertSession(t, d, "s1", "proj")
+					// Start from a stored checkpoint so a refused write must delete it.
+					require.NoError(t, d.UpsertParserCheckpoint(t.Context(), ParserCheckpoint{
+						SessionID: "s1", Agent: "claude", FilePath: "/sessions/s1.jsonl",
+						Offset: 64, TailAnchorDigest: "anchor", Hash: "h", NextOrdinal: 1,
+					}, ParserCheckpointBlobs{Cursor: []byte{}, HashState: sha256StateAfter(t, 64)}))
+					blobs := tc.blobs
+					blobs.SessionID = "s1"
+					if blobs.Cursor == nil {
+						blobs.Cursor = []byte{}
+					}
+					write(t, d, ParserCheckpoint{
+						SessionID: "s1", Agent: "claude", FilePath: "/sessions/s1.jsonl",
+						Offset: 128, TailAnchorDigest: "anchor", Hash: "h",
+						NextOrdinal: 1, Version: ParserCheckpointVersion,
+					}, blobs)
+					_, ok, err := d.GetParserCheckpoint(t.Context(), "s1")
+					require.NoError(t, err)
+					assert.Equal(t, tc.want != nil, ok)
+					stored, ok, err := d.GetParserCheckpointBlobs(t.Context(), "s1")
+					require.NoError(t, err)
+					require.Equal(t, tc.want != nil, ok)
+					if ok {
+						assert.Equal(t, tc.want, stored.HashState)
+					}
+				})
+			}
+		}
+	}
+}
+
+// codexCursorBytes encodes a Codex cursor (codexCursorState.MarshalBinary,
+// version 6) with only a model and no pending tool calls.
+func codexCursorBytes(t *testing.T) []byte {
+	t.Helper()
+	var b []byte
+	b = append(b, 6)
+	for _, str := range []string{"gpt-5.4", "", "", "", ""} {
+		b = binary.LittleEndian.AppendUint32(b, uint32(len(str)))
+		b = append(b, str...)
+	}
+	b = append(b, make([]byte, sha256.Size)...) // first user digest
+	b = append(b, 0)                            // flags
+	b = append(b, make([]byte, sha256.Size)...) // last token usage digest
+	b = binary.LittleEndian.AppendUint32(b, 0)  // last task event
+	b = append(b, 0)                            // pending call count
+	require.True(t, parser.IsCodexCursor(b), "update to the current cursor encoding")
+	return b
+}
+
+func TestParserCheckpointBlobsKeptUnderCodexCursor(t *testing.T) {
+	blobs := ParserCheckpointBlobs{Cursor: codexCursorBytes(t), HashState: sha256StateAfter(t, 128)}
+	assert.True(t, blobs.keptUnder(config.ArchiveContentTranscripts))
+	assert.False(t, blobs.keptUnder(config.ArchiveContentUsage))
+	blobs.HashState = sha256StateAfter(t, 100)
+	assert.False(t, blobs.keptUnder(config.ArchiveContentTranscripts))
+}
+
+func TestParserCheckpointBlobsKeptUnderRestrictedArchives(t *testing.T) {
+	stateAfter := func(n int) []byte { return sha256StateAfter(t, n) }
+	for _, tc := range []struct {
+		name  string
+		blobs ParserCheckpointBlobs
+		want  bool
+	}{
+		{"state at block boundary", ParserCheckpointBlobs{HashState: stateAfter(128)}, true},
+		{"empty input state", ParserCheckpointBlobs{HashState: stateAfter(0)}, true},
+		{"state inside a block", ParserCheckpointBlobs{HashState: stateAfter(100)}, false},
+		{"unknown cursor", ParserCheckpointBlobs{Cursor: []byte{1}, HashState: stateAfter(128)}, false},
+		{"missing state", ParserCheckpointBlobs{}, false},
+		{"unknown encoding", ParserCheckpointBlobs{HashState: make([]byte, 108)}, false},
+		{"aligned count with buffered bytes", ParserCheckpointBlobs{HashState: func() []byte {
+			state := stateAfter(128)
+			state[40] = 'x'
+			return state
+		}()}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.blobs.keptUnder(config.ArchiveContentTranscripts))
+			assert.Equal(t, tc.want, tc.blobs.keptUnder(config.ArchiveContentUsage))
+			assert.True(t, tc.blobs.keptUnder(config.ArchiveContentFull))
+		})
+	}
 }

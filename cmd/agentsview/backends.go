@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/clickhouse"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -24,14 +23,8 @@ func replicaBackendNamed(name string) (storage.Replica, error) {
 	return nil, fmt.Errorf("no replica backend named %q is registered", name)
 }
 
-// mirrorBackend is the derived local mirror the daemon can rebuild.
-var mirrorBackend storage.Mirror = duckdb.Mirror{}
-
 // pushBackendOptions registers every push backend with a server so the
 // daemon and the committed OpenAPI document expose the same push routes.
 func pushBackendOptions() []server.Option {
-	return []server.Option{
-		server.WithReplicas(replicaBackends...),
-		server.WithMirror(mirrorBackend),
-	}
+	return []server.Option{server.WithReplicas(replicaBackends...)}
 }

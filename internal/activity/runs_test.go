@@ -1,7 +1,10 @@
 package activity
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -22,6 +25,20 @@ func runSlice(runs []Run) RunSource {
 		}
 		return nil
 	}
+}
+
+func TestSessionRunsDecodeOldGob(t *testing.T) {
+	// Encoded by SessionRuns.GobEncode at commit 264e6a4b5.
+	data, err := hex.DecodeString("167f0501010b53657373696f6e52756e7301ff80000000fe0119ff8000fe011343ff8103010112656e636f64656453657373696f6e52756e7301ff820001030106426f756e647301ff840001075472696d6d656401ff8600010452756e7301ff8a00000015ff83020101075b5d696e74363401ff84000104000016ff85020101085b5d75696e74363401ff8600010600002bff890201011c5b5d61637469766974792e656e636f64656453657373696f6e52756e01ff8a0001ff8800003cff8703010111656e636f64656453657373696f6e52756e01ff8800010301054d6f64656c010c000105466972737401040001044c617374010400000038ff820105fd1e8480fd3d0900fd5b8d80fd7a1200fd989680010102010201076d6f64656c2d6102040001076d6f64656c2d62010601080000")
+	require.NoError(t, err)
+	var restored SessionRuns
+	require.NoError(t, gob.NewDecoder(bytes.NewReader(data)).Decode(&restored))
+	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
+	require.Equal(t, []Run{
+		{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"},
+		{SessionID: "s", Start: time.UnixMicro(4000000).UTC(), End: time.UnixMicro(4500000).UTC(), Tail: time.UnixMicro(4000000).UTC(), Model: "model-b"},
+	}, restored.AppendClipped(nil, "s", start, end))
+	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
 }
 
 func runsTestQuery(t *testing.T) Query {
@@ -225,5 +242,26 @@ func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
 			runSlice(runs), func() ([]UsageRow, error) { return nil, nil })
 		require.NoError(t, err)
 		require.Equal(t, want, got, "trial %d", trial)
+	}
+}
+
+func TestSessionRunsWireRestore(t *testing.T) {
+	builder := NewSessionRunsBuilder(300)
+	builder.AddPiece("model-a", 1000000, 2000000, false)
+	builder.AddPiece("model-a", 2000000, 3000000, true)
+	builder.AddPiece("model-b", 4000000, 5000000, false)
+	original := builder.Finish()
+	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
+	wireRestored, err := original.Wire().Restore()
+	require.NoError(t, err)
+	want := []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}
+	require.Equal(t, want, wireRestored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
+	for _, invalid := range []encodedSessionRuns{
+		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
+		{Bounds: []int64{1, 2}, Runs: []encodedSessionRun{{First: 1, Last: 1}}},
+		{Bounds: []int64{1, 2, 3}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 1, Last: 2}}},
+	} {
+		_, err := invalid.Restore()
+		require.Error(t, err)
 	}
 }

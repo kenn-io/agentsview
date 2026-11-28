@@ -267,6 +267,7 @@ func materializedProviderMetadataDirs(
 		dir   string
 	}
 	var aliases []aliasHome
+	var homeDirs []string
 	for _, entry := range manifest.Manifest.Entries {
 		if path.Base(entry.Path) != parser.CodexSessionIndexFilename {
 			continue
@@ -274,6 +275,7 @@ func materializedProviderMetadataDirs(
 		ordinal, ok := strings.CutPrefix(path.Dir(entry.Path), "alias-homes/")
 		index, err := strconv.Atoi(ordinal)
 		if !ok || err != nil || index <= 0 || strconv.Itoa(index) != ordinal {
+			homeDirs = append(homeDirs, filepath.Join(materialized.Root(), filepath.FromSlash(path.Dir(entry.Path))))
 			continue
 		}
 		aliases = append(aliases, aliasHome{
@@ -281,12 +283,26 @@ func materializedProviderMetadataDirs(
 		})
 	}
 	slices.SortFunc(aliases, func(a, b aliasHome) int { return cmp.Compare(a.index, b.index) })
-	dirs := []string{materialized.Root()}
-	for _, alias := range aliases {
-		dirs = append(dirs, alias.dir)
+	for _, entry := range manifest.Manifest.Entries {
+		local := filepath.Join(materialized.Root(), filepath.FromSlash(entry.Path))
+		for dir := filepath.Dir(local); dir != materialized.Root() && filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
+			if filepath.Base(dir) == "sessions" || filepath.Base(dir) == "archived_sessions" {
+				if _, _, ok := parser.CodexSessionPathInfo(dir, local); ok && !slices.Contains(roots, dir) {
+					roots = append(slices.Clone(roots), dir)
+				}
+				break
+			}
+		}
 	}
 	metadata := make(map[string][]string, len(roots))
 	for _, root := range roots {
+		dirs := slices.Clone(homeDirs)
+		if len(dirs) == 0 {
+			dirs = append(dirs, materialized.Root())
+		}
+		for _, alias := range aliases {
+			dirs = append(dirs, alias.dir)
+		}
 		metadata[root] = dirs
 	}
 	return metadata

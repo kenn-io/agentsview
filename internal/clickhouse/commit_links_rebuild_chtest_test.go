@@ -14,6 +14,7 @@ import (
 )
 
 func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts} {
 		for _, full := range []bool{false, true} {
 			t.Run(string(policy)+map[bool]string{false: "/generation", true: "/full"}[full], func(t *testing.T) {
@@ -21,7 +22,6 @@ func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				b, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "b.db"))
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, b.Close()) })
-				dbtest.SeedPricingMeta(t, b)
 				dbtest.SeedRetainedCommitLink(t, a, "shared", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 				dbtest.SeedRetainedCommitLink(t, b, "shared", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 				dbtest.SeedRetainedCommitLink(t, a, "distinct", "cccccccccccccccccccccccccccccccccccccccc")
@@ -35,7 +35,6 @@ func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 				resident, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "resident.db"))
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, resident.Close()) })
-				dbtest.SeedPricingMeta(t, resident)
 				dbtest.SeedSession(t, resident, "shared", "commit-project")
 				live := newTestSync(t, resident, target, storage.PusherOptions{})
 				_, err = live.Push(t.Context(), true, nil)

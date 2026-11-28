@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/kit/search/lexical"
 )
 
@@ -48,10 +50,16 @@ const (
 var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
 	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
+var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
+
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
+}
+
+func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -61,9 +69,20 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && goalContextSourceAttrRe.MatchString(openTag)
+		return ok && attrMatch(openTag)
 	}
 	return false
+}
+
+// sqlGoalContextPrefixed is the goal-tag rule the SQL classifiers apply: the
+// open tag must contain source="goal" followed by whitespace, ">", or "/>".
+func sqlGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, func(openTag string) bool {
+		openTag = goalContextWhitespace.Replace(openTag + ">")
+		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
+	})
 }
 
 type systemPrefixSQLDialect int
@@ -71,7 +90,6 @@ type systemPrefixSQLDialect int
 const (
 	systemPrefixSQLite systemPrefixSQLDialect = iota
 	systemPrefixPostgres
-	systemPrefixDuckDB
 )
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
@@ -87,14 +105,14 @@ func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
 }
 
+// PostgresLatin1SearchSQL removes trim characters a LATIN1 database cannot store.
+func PostgresLatin1SearchSQL(query string) string {
+	return strings.ReplaceAll(query, "'"+systemPrefixTrimCutset+"'", "' \t\n\v\f\r\u0085\u00a0'")
+}
+
 // PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
 func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
-}
-
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
-func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
 
 func systemPrefixSQL(
@@ -104,7 +122,7 @@ func systemPrefixSQL(
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
 	// BOM (U+FEFF), and Unicode
 	// spaces (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-	// U+2029, U+202F, U+205F, U+3000). SQLite, PostgreSQL, and DuckDB
+	// U+2029, U+202F, U+205F, U+3000). SQLite and PostgreSQL
 	// handle multi-byte UTF-8 characters in the trim set correctly.
 	trimmed := systemPrefixSQLTrimmed(contentCol)
 	parts := make([]string, 0, len(SystemMsgPrefixes)+1)
@@ -283,6 +301,16 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 // user-role messages match, and leading whitespace is trimmed with the same
 // cutset before the case-sensitive prefix comparison.
 func IsSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, IsGoalContextPrefixed)
+}
+
+// sqlSystemPrefixed is IsSystemPrefixed with the SQL classifiers' goal-tag
+// rule. SystemPrefixRulesVersion fingerprints it.
+func sqlSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, sqlGoalContextPrefixed)
+}
+
+func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -294,7 +322,7 @@ func IsSystemPrefixed(content, role string) bool {
 		}
 		trimmed = remainder
 	}
-	if IsGoalContextPrefixed(trimmed, role) {
+	if goal(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {
@@ -349,6 +377,9 @@ type SearchFilter struct {
 	Limit    int
 }
 
+// Slot identifies an exact search selection.
+func (f SearchFilter) Slot() string { return fmt.Sprintf("%#v", f) }
+
 // SearchPage holds paginated search results.
 type SearchPage struct {
 	Results    []SearchResult `json:"results"`
@@ -378,10 +409,11 @@ func hasFTSColumnFilter(query string) bool {
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
-// Results come from two branches joined with UNION ALL:
+// Results come from three branches joined with UNION ALL:
 //
 //  1. FTS branch — message content matches. ROW_NUMBER() picks the single
-//     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC).
+//     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC),
+//     within the first tier when a broad relevance search sets one.
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
@@ -397,7 +429,47 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
-	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
+	cjk := containsCJK(f.Query) && db.HasCJKFTS(ctx)
+	if db.readOnly || (!cjk && db.searchIndexRepairPending.Load() && containsCJK(f.Query)) {
+		return db.search(ctx, f, cjk)
+	}
+	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
+	version := db.searchVersion(ctx, cjk)
+	if version == "" {
+		return db.search(ctx, f, cjk)
+	}
+	db.trendsPartsDisk()
+	return db.searchKept.DoChecked(ctx, key, version, func(ctx context.Context) (SearchPage, bool, error) {
+		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() bool {
+			return db.searchVersion(ctx, cjk) == version
+		}, func() (SearchPage, error) {
+			if db.afterSearchRead != nil {
+				db.afterSearchRead()
+			}
+			return db.search(ctx, f, cjk)
+		})
+	})
+}
+
+func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
+	var id, token string
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`,
+		archiveMetadataDatabaseIDKey,
+	).Scan(&id, &token)
+	if err != nil || strings.TrimSpace(id) == "" || token == "" {
+		return ""
+	}
+	fingerprint := ""
+	if cjk {
+		fingerprint = simpleFTSRuntimeConfig.fingerprint
+	}
+	return fmt.Sprintf("rank-v1|%s|%s|%s", id, token, fingerprint)
+}
+
+func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
+	ftsQuery, err := db.prepareMessageFTSQueryWithCJK(ctx, f.Query, cjk)
 	if err != nil {
 		return SearchPage{}, err
 	}
@@ -417,8 +489,7 @@ func (db *DB) Search(
 		matchPosSQL = "0"
 	}
 
-	// innerWhere is used in the ROW_NUMBER inner subquery and the NOT IN
-	// subquery for the name branch.
+	// innerWhere selects the message matches used by both search branches.
 	matchSQL := "messages_fts.rendered MATCH ?"
 	if hasFTSColumnFilter(f.Query) {
 		matchSQL = "messages_fts MATCH ?"
@@ -465,8 +536,7 @@ func (db *DB) Search(
 
 	// Relevance pages come from a walk over the matches in rank order when
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
-	// inside the query, and so do project and date filters: most matches
-	// fall outside them, so the walk would read nearly all of them.
+	// inside the query.
 	// The walk and the page query share one snapshot: a sync that edits a
 	// walked message between them would leave its snippet NULL.
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -475,25 +545,35 @@ func (db *DB) Search(
 	}
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
-	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
-		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
+	floor := int64(math.MinInt64)
+	if f.Sort != "recency" {
+		floor, err = searchTierFloor(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs)
+		if err != nil {
+			return SearchPage{}, err
+		}
+		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1, floor)
 		if err != nil {
 			return SearchPage{}, err
 		}
 	}
+	bestTier, rowTier, imageTier, nameTier := "0", "0", "0", "0"
+	if floor != math.MinInt64 {
+		tier := fmt.Sprintf("CASE WHEN %%s >= %d THEN 0 ELSE 1 END", floor)
+		bestTier, rowTier = fmt.Sprintf(tier, "messages_fts.rowid"), fmt.Sprintf(tier, "best.best_rowid")
+		imageTier, nameTier = "1", "2"
+		orderBy = "tier ASC, " + orderBy
+	}
 
-	var args []any
-	withSQL := "WITH "
-	bestSQL := `SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
+	args := ftsArgs
+	withSQL := `WITH best_rows AS MATERIALIZED (SELECT session_id, best_rowid, best_ordinal, best_rank
 				FROM (
 					SELECT m2.session_id,
 						messages_fts.rowid AS best_rowid,
 						m2.ordinal AS best_ordinal,
 						rank AS best_rank,
-						? AS best_query,
 						ROW_NUMBER() OVER (
 							PARTITION BY m2.session_id
-							ORDER BY rank ASC, m2.ordinal ASC,
+							ORDER BY ` + bestTier + ` ASC, rank ASC, m2.ordinal ASC,
 								messages_fts.rowid ASC
 						) AS rn
 					FROM messages_fts
@@ -501,21 +581,14 @@ func (db *DB) Search(
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE ` + innerWhereSQL + `
 				)
-				WHERE rn = 1`
-	ftsSessionsSQL := `SELECT m2.session_id
-					FROM messages_fts
-					JOIN messages m2 ON messages_fts.rowid = m2.id
-					JOIN sessions s2 ON m2.session_id = s2.id
-					WHERE ` + innerWhereSQL
-	bestArgs := append([]any{plainQuery}, ftsArgs...)
-	ftsSessionsArgs := ftsArgs
+				WHERE rn = 1), `
+	bestSQL := "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
+	bestArgs := []any{plainQuery}
+	ftsSessionsSQL := "SELECT session_id FROM best_rows"
+	var ftsSessionsArgs []any
 	includeNames := true
 	if walk != nil {
 		withSQL, args = walk.bestRowsSQL()
-		bestSQL = "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
-		bestArgs = []any{plainQuery}
-		ftsSessionsSQL = "SELECT session_id FROM best_rows"
-		ftsSessionsArgs = nil
 		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}
@@ -534,11 +607,11 @@ func (db *DB) Search(
 			SELECT s.id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
-			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0
+			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0,%s AS tier
 			 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1
 			 %s
 			 JOIN sessions s ON s.id=o.session_id
-			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
+			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageTier, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -563,7 +636,8 @@ func (db *DB) Search(
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				0.0 AS rank,
-				0 AS match_pos
+				0 AS match_pos,
+				%s AS tier
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
@@ -577,7 +651,7 @@ func (db *DB) Search(
 				%s
 				AND s.id NOT IN (
 					%s
-				)`, nameProjectClause, ftsSessionsSQL)
+				)`, nameTier, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
 	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
@@ -588,8 +662,8 @@ func (db *DB) Search(
 	query := fmt.Sprintf(`
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos
-		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
+			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos, tier
+		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY tier, rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
@@ -597,7 +671,8 @@ func (db *DB) Search(
 				best.best_ordinal AS ordinal, best.best_rowid, NULL AS image_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
-				%s AS match_pos
+				%s AS match_pos,
+				%s AS tier
 			FROM (
 				%s
 			) AS best
@@ -621,6 +696,7 @@ func (db *DB) Search(
 		ORDER BY %s`,
 		withSQL,
 		matchPosSQL,
+		rowTier,
 		bestSQL,
 		imageBranchSQL,
 		nameBranchSQL,

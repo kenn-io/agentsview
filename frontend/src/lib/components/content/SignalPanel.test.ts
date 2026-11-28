@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
+import { setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/generated/index.js", () => ({
   FrictionService: {
@@ -62,5 +63,42 @@ describe("SignalPanel", () => {
     expect(orders[0]).toEqual(orders[1]);
     expect(orders[0]!.map((text) => text.split(" ")[0])).toEqual(["-6", "-4", "-4"]);
     expect(orders[0]![2]).toContain("zz_custom");
+  });
+
+  it("names the outcome, score basis, and penalties in the active language", async () => {
+    const scored = {
+      ...session,
+      health_score: 72,
+      health_grade: "C",
+      outcome: "abandoned",
+      health_score_basis: ["outcome", "tool_health"],
+      health_penalties: { edit_churn: 5 },
+    } as unknown as Session;
+    const labels = [];
+    try {
+      for (const locale of ["en", "fr"] as const) {
+        setLocale(locale);
+        component = mount(SignalPanel, { target: document.body, props: { session: scored } });
+        await tick();
+        labels.push({
+          outcome: document.querySelector(".outcome")!.getAttribute("aria-label"),
+          basis: [...document.querySelectorAll(".basis-tag")].map((el) => el.textContent!.trim()),
+          penalty: document.querySelector(".penalty")!.textContent!.replace(/\s+/g, " ").trim(),
+        });
+        await unmount(component);
+        component = undefined;
+      }
+    } finally {
+      setLocale("en");
+    }
+
+    expect(labels).toEqual([
+      { outcome: "Abandoned", basis: ["Outcome", "Tool health"], penalty: "-5 edit churn" },
+      {
+        outcome: "Abandonnée",
+        basis: ["Issue", "Santé des outils"],
+        penalty: "-5 remaniements d’édition",
+      },
+    ]);
   });
 });

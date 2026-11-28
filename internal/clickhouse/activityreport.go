@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -34,7 +35,7 @@ var (
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
 // of the resolved range `q` as RFC3339 strings. ClickHouse compares parsed
-// instants, so the zone suffix stays, matching DuckDB and PostgreSQL.
+// instants, so the zone suffix stays, matching PostgreSQL.
 func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 	return q.RangeStart.UTC().Format(time.RFC3339Nano),
 		q.RangeEnd.UTC().Format(time.RFC3339Nano)
@@ -42,7 +43,7 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
 // for the resolved range `q`, reading from the ClickHouse store. It mirrors
-// the SQLite, PostgreSQL, and DuckDB backends: sessions and activity come
+// the SQLite and PostgreSQL backends: sessions and activity come
 // from the filtered candidate set. Usage loads candidate rows plus only the
 // cross-session Claude peers needed for complete-snapshot selection.
 //
@@ -60,10 +61,54 @@ func (s *Store) GetActivityReport(
 
 type activityReportBackend struct {
 	*Store
+	launchers     activity.Launchers
+	evidence      []activity.SessionMeta
 	candidates    chSessionSet
 	rangeStartUTC string
 	rangeEndUTC   string
 	pairing       *activityReportPairing
+}
+
+func (b activityReportBackend) ActivityReportEvidence(context.Context, activity.Query) ([]activity.SessionMeta, error) {
+	return b.evidence, nil
+}
+
+func (b activityReportBackend) ActivityReportLaunchers(context.Context, []activity.SessionMeta, map[string]bool, activity.Query) (activity.Launchers, error) {
+	return b.launchers, nil
+}
+
+func (s *Store) activityReportLaunchers(ctx context.Context, filter db.AnalyticsFilter, runs []activity.SessionMeta, selected map[string]bool) (activity.Launchers, map[string]uint64, error) {
+	versions := make(map[string]uint64)
+	where, args := chBuildAnalyticsWhere(filter, "COALESCE(s.started_at, s.created_at)", "s.", false, false)
+	result, err := activity.ResolveLaunchers(ctx, runs, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+		table, err := ext.NewTable("activity_launcher_ids", ext.Column("id", "String"))
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if err := table.Append(id); err != nil {
+				return nil, err
+			}
+		}
+		ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+		rows, err := s.queryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', ifNull(s.is_launched, false), if(s.relationship_type = 'subagent', ifNull(s.parent_session_id, ''), ''), (`+where+`), s.push_version FROM sessions s WHERE s.id IN (SELECT id FROM activity_launcher_ids) AND s.deleted_at IS NULL`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []activity.Launcher
+		for rows.Next() {
+			var row activity.Launcher
+			var version uint64
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.IsLaunched, &row.ParentSessionID, &row.MatchesFilter, &version); err != nil {
+				return nil, err
+			}
+			versions[row.ID] = version
+			result = append(result, row)
+		}
+		return result, rows.Err()
+	})
+	return result, versions, err
 }
 
 // ActivityReportSecondRead lets usage run beside the sweep. Pairing already
@@ -129,6 +174,11 @@ func (s *Store) BuildActivityReportArtifacts(
 
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
+	evidenceWhere, evidenceArgs := clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+	sameFilters := candidateWhere == evidenceWhere && reflect.DeepEqual(candidateArgs, evidenceArgs)
+	evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
+	keyWhere := "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
+	keyArgs := append(slices.Clone(candidateArgs), evidenceArgs...)
 	// A range that has ended does not depend on the time of the request, so
 	// its report is kept per the rows it reads; a range in progress moves its
 	// effective end with every request and is always built. The key is taken
@@ -136,7 +186,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	// makes the next request miss.
 	var memoKey string
 	if !q.Partial {
-		memoKey, err = s.endedActivityReportKey(ctx, candidateWhere, candidateArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -151,6 +201,35 @@ func (s *Store) BuildActivityReportArtifacts(
 	sessions, ids, versions, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs, memoKey == "")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
+	}
+	var evidence []activity.SessionMeta
+	evidenceVersions := versions
+	if sameFilters {
+		for _, session := range sessions {
+			if session.IsSubagent {
+				evidence = append(evidence, session)
+			}
+		}
+	} else {
+		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+	}
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	launchers, _, err := s.activityReportLaunchers(ctx, f, append(slices.Clone(sessions), evidence...), selected)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	sweepIDs := slices.Clone(ids)
+	for _, session := range evidence {
+		if !selected[session.SessionID] && launchers.Waiting[session.SessionID] != "" {
+			sweepIDs = append(sweepIDs, session.SessionID)
+			versions[session.SessionID] = evidenceVersions[session.SessionID]
+		}
 	}
 	// Send the already selected IDs as native data instead of repeating discovery.
 	table, err := ext.NewTable("activity_candidate_ids", ext.Column("id", "String"))
@@ -172,9 +251,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	// set, so pair while usage loads instead of serializing the two stages.
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
-	pairs := s.startActivityReportPairs(pairCtx, ids, versions, q)
+	pairs := s.startActivityReportPairs(pairCtx, sweepIDs, versions, q)
 	backend := activityReportBackend{
-		Store: s, candidates: candidates,
+		Store: s, candidates: candidates, launchers: launchers, evidence: evidence,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
@@ -218,17 +297,18 @@ func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool
 // whichever session they belong to, so a push that touches no session with
 // usage in the range leaves the key, and the kept report, in place.
 func (s *Store) endedActivityReportKey(
-	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
+	ctx context.Context, filter db.AnalyticsFilter, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
 ) (string, error) {
 	// The candidate sessions are named by their push versions, which name
 	// the messages and tool events their pairing reads. Two independent
 	// hash sums and the count identify the set without listing it. The read
 	// depends on nothing below, so it runs while they do.
 	var candidates activityCandidateDigest
+	var parents []string
 	candidatesRead := make(chan error, 1)
 	go func() {
-		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+`
-			FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count)
+		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+`, groupUniqArrayIf(ifNull(s.parent_session_id, ''), ifNull(s.is_launched, false) AND ifNull(s.parent_session_id, '') != '')
+			FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count, &parents)
 		if err != nil {
 			err = fmt.Errorf("reading activity candidate sessions: %w", err)
 		}
@@ -238,7 +318,23 @@ func (s *Store) endedActivityReportKey(
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
 		return "", err
 	}
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count))
+	runs := make([]activity.SessionMeta, 0, len(parents))
+	for _, id := range parents {
+		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, IsLaunched: true, ParentSessionID: id})
+	}
+	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
+	if err != nil {
+		return "", err
+	}
+	data := fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count)
+	for _, id := range launchers.Examined {
+		if version, ok := versions[id]; ok {
+			data = fmt.Appendf(data, "|%s@%d", id, version)
+		} else {
+			data = fmt.Appendf(data, "|%s@-", id)
+		}
+	}
+	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -375,6 +471,8 @@ func (s *Store) activityReportSessions(
 		s.ended_at,
 		s.is_automated AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent,
+		ifNull(s.is_launched, false),
+		if(s.relationship_type = 'subagent', ifNull(s.parent_session_id, ''), ''),
 		s.push_version
 	FROM sessions s
 	WHERE ` + where
@@ -395,7 +493,7 @@ func (s *Store) activityReportSessions(
 		var version uint64
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &version,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &m.IsLaunched, &m.ParentSessionID, &version,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf(
 				"scanning clickhouse activity report session: %w", err)
@@ -778,8 +876,11 @@ func chStoredMessageUsable(present, model string) string {
 			AND ` + model + ` != '<synthetic>'`
 }
 
-// chUsageStoredMessageEligibility is chUsageMessageEligibility for reads of
-// usage_messages, which stores a presence flag instead of the raw JSON.
+// chUsageStoredMessageEligibility is the condition a usage_messages row meets
+// when its usage counts. It reads the presence flag the view stores instead of
+// the raw JSON. Like the messages rows it mirrors, it takes no version check: a
+// push deletes the ordinals a session no longer has from both tables in the
+// same step.
 var chUsageStoredMessageEligibility = `
 			` + chStoredMessageUsable("m.usage_present", "m.model") + `
 			AND s.deleted_at IS NULL`

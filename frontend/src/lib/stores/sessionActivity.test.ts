@@ -122,7 +122,7 @@ describe("SessionActivityStore", () => {
 
   it("does not retry after a failed fetch", async () => {
     sessionsService.getApiV1SessionsByIdActivity.mockRejectedValueOnce(new Error("network error"));
-    await sessionActivity.load("s1");
+    expect(await sessionActivity.load("s1")).toBe(false);
 
     expect(sessionActivity.error).toBe("network error");
     expect(sessionActivity.loading).toBe(false);
@@ -132,11 +132,12 @@ describe("SessionActivityStore", () => {
     // because the session is already marked as loaded (even
     // though it failed). The user must use reload() to retry.
     sessionsService.getApiV1SessionsByIdActivity.mockResolvedValueOnce(makeResponse(2));
-    await sessionActivity.load("s1");
+    expect(await sessionActivity.load("s1")).toBe(false);
 
     // Still shows the error, did not auto-retry.
     expect(sessionActivity.error).toBe("network error");
     expect(sessionsService.getApiV1SessionsByIdActivity).toHaveBeenCalledTimes(1);
+    expect(await sessionActivity.reload("s1")).toBe(true);
   });
 
   it("invalidate discards in-flight load and forces refetch", async () => {

@@ -293,3 +293,79 @@ func normalizeReportMinutes(report Report) Report {
 	}
 	return report
 }
+
+func TestWaitingLauncherSweeping(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		includeParent bool
+		inside        bool
+		evidence      bool
+	}{
+		{name: "after own interval", includeParent: true},
+		{name: "launcher outside range"},
+		{name: "own interval inside run", includeParent: true, inside: true},
+		{name: "hidden evidence", evidence: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.evidence {
+				p := baseParams(t, "2026-06-16", "UTC")
+				p.Waiting = map[string]string{"child": "parent"}
+				p.Evidence = map[string]bool{"child": true}
+				candidates := []IntervalCandidate{{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")}}
+				got, err := BuildCandidateArtifacts(t.Context(), p, nil, candidates, nil)
+				require.NoError(t, err)
+				assert.Equal(t, 1, got.Report.Peak.Agents)
+				for _, bucket := range got.Report.Buckets {
+					assert.Zero(t, bucket.MaxSubagentAgents)
+				}
+				assert.Empty(t, got.Report.BySession)
+				assert.Zero(t, got.Report.Totals.AgentMinutes)
+				assert.InDelta(t, 4, got.Report.Totals.ActiveMinutes, 1e-9)
+				assert.Zero(t, got.Report.Totals.Sessions)
+				return
+			}
+			p := baseParams(t, "2026-06-16", "UTC")
+			p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
+			p.Waiting = map[string]string{"child": "parent", "child2": "parent"}
+			sessions := []SessionMeta{
+				{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
+				{SessionID: "child2", IsSubagent: true, ParentSessionID: "parent"},
+			}
+			candidates := []IntervalCandidate{
+				{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},
+				{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:08:00Z")},
+			}
+			if tc.includeParent {
+				sessions = append(sessions, SessionMeta{SessionID: "parent"})
+				candidates = append([]IntervalCandidate{{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:02:00Z")}}, candidates...)
+			}
+			if tc.inside {
+				candidates = []IntervalCandidate{
+					{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},
+					{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:08:00Z")},
+					{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:02:00Z"), End: mustStart(t, "2026-06-16T10:03:00Z")},
+				}
+			}
+			got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 3, got.Report.Peak.Agents)
+			assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
+			matched := 0
+			for _, bucket := range got.Report.Buckets {
+				if bucket.Start == "2026-06-16T10:00:00Z" || bucket.Start == "2026-06-16T10:05:00Z" {
+					matched++
+					assert.Equal(t, 3, bucket.MaxAgents, bucket.Start)
+					assert.Equal(t, 1, bucket.MaxInteractiveAgents, bucket.Start)
+					assert.Equal(t, 2, bucket.MaxSubagentAgents, bucket.Start)
+				}
+			}
+			assert.Equal(t, 2, matched)
+			p.Waiting = nil
+			baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+			require.NoError(t, err)
+			assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
+			assert.Equal(t, baseline.Sessions, got.Sessions)
+			assert.Equal(t, baseline.Membership, got.Membership)
+		})
+	}
+}

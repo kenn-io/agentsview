@@ -152,7 +152,7 @@ func TestClickHouseTerminalSnapshotViewUpgrade(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"SELECT toString(last_terminal_at) FROM terminal_event_snapshots WHERE session_id = ?", id).Scan(&last))
 		assert.Equal(t, "2026-01-11 12:00:00.000000", last)
-		_, err = conn.ExecContext(ctx, "SYSTEM FLUSH LOGS")
+		_, err = conn.ExecContext(ctx, "SYSTEM FLUSH LOGS query_log")
 		require.NoError(t, err)
 		// The connection inserts asynchronously, so the view runs in the
 		// flush, which the log records as a separate entry with the comment.

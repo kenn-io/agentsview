@@ -19,6 +19,35 @@ func newArchiveCommand() *cobra.Command {
 	command.Long = "Retain and verify original provider sources so they can be reparsed or moved with their archive identities."
 	command.Example = "  agentsview archive sources\n" +
 		"  agentsview archive verify --help"
+	copyCmd := &cobra.Command{Use: "copy DESTINATION", Short: "Copy a stopped archive into a new directory", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.LoadReadOnlyFor(config.ScopeLocal)
+		if err != nil {
+			return err
+		}
+		if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+			return err
+		}
+		lock, err := acquireWriteOwnerLock(cmd.Context(), writeLockDataDir(cfg))
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if err := db.RecoverCompactManifest(cfg.DBPath); err != nil {
+			return err
+		}
+		err = rawarchive.Copy(cmd.Context(), rawarchive.CopyOptions{
+			DataDir: cfg.DataDir, Destination: args[0], CustomModelPricing: cfg.CustomModelPricing,
+			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories},
+		})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), args[0])
+		return err
+	}}
+	copyCmd.Long = `Create a throwaway preview copy of a stopped archive.
+
+The copy stays archive-only, with sync and publication permanently disabled, and omits the raw archive vault and external bindings. To keep raw sources, use archive backup.`
 	var captureRoots []string
 	var identityFrom string
 	var writersStopped bool
@@ -180,7 +209,7 @@ func newArchiveCommand() *cobra.Command {
 		})
 	}}
 	extractCmd.Flags().StringVar(&extractCapture, "capture", "", "Capture ID to recover as a portable capture directory")
-	command.AddCommand(captureCmd, importCmd, reparseCmd, verifyCmd, sourcesCmd, backupCmd, restoreCmd, extractCmd)
+	command.AddCommand(copyCmd, captureCmd, importCmd, reparseCmd, verifyCmd, sourcesCmd, backupCmd, restoreCmd, extractCmd)
 	return command
 }
 

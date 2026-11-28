@@ -17,6 +17,7 @@ import type {
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getPostApiV1EmbeddingsBuildUrl = () => {
   return `/api/v1/embeddings/build`;
@@ -261,5 +262,21 @@ export const getApiV1EmbeddingsStatus = async (
   return orvalFetch<VectorBuildStatus>(getGetApiV1EmbeddingsStatusUrl(params), {
     ...options,
     method: "GET",
+  });
+};
+
+export const getPostApiV1EmbeddingsSwitchDrainUrl = () => {
+  return `/api/v1/embeddings/switch-drain`;
+};
+
+/**
+ * @summary Wait for embeddings builds before switching
+ */
+export const postApiV1EmbeddingsSwitchDrain = async (
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getPostApiV1EmbeddingsSwitchDrainUrl(), {
+    ...options,
+    method: "POST",
   });
 };

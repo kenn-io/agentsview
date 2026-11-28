@@ -61,10 +61,22 @@ func schemaColumnMigrations() []columnMigration {
 			`deletion_cause TEXT`,
 			"adding sessions.deletion_cause",
 		},
+		{"sessions", "external_parent_session_id", `external_parent_session_id TEXT`, "adding sessions.external_parent_session_id"},
 		{
 			"sessions", "parser_parent_session_id",
 			`parser_parent_session_id TEXT`,
 			"adding sessions.parser_parent_session_id",
+		},
+		{"sessions", "parser_relationship_type", `parser_relationship_type TEXT`, "adding sessions.parser_relationship_type"},
+		{
+			"sessions", "relationship_inferred",
+			`relationship_inferred BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.relationship_inferred",
+		},
+		{
+			"sessions", "spawn_linked",
+			`spawn_linked BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.spawn_linked",
 		},
 		{
 			"sessions", "total_output_tokens",
@@ -110,6 +122,16 @@ func schemaColumnMigrations() []columnMigration {
 			"messages", "output_tokens",
 			`output_tokens INT NOT NULL DEFAULT 0`,
 			"adding messages.output_tokens",
+		},
+		{
+			"messages", "usage_output_tokens",
+			`usage_output_tokens BIGINT`,
+			"adding messages.usage_output_tokens",
+		},
+		{
+			"messages", "usage_web_search_requests",
+			`usage_web_search_requests BIGINT`,
+			"adding messages.usage_web_search_requests",
 		},
 		{
 			"messages", "provider_id",

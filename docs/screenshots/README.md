@@ -12,6 +12,17 @@ installation, and retained results. Keep corpus files, preparation bundles,
 logs, and receipts in private managed storage. Connect the commands to that
 service before offering routine capture to teammates.
 
+## Capture the checked-out commit
+
+Set `DOCS_SCREENSHOTS_OUTPUT` to a new directory and `DOCS_SCREENSHOTS_CORPUS`
+to an approved corpus `manifest.json`, then run `make docs-screenshots`. It
+builds both images, prepares this commit's dependencies against the current
+`docs-assets` branch, and runs the job below. The results directory receives the
+complete `docs-generated-assets` tree under `assets/`, the assembled website
+under `preview/`, and logs under `logs/`. `DOCS_SCREENSHOTS_REVISION` and
+`DOCS_SCREENSHOTS_DATE` default to `HEAD` and the corpus reference time. The
+host needs Bash, Git, Python 3 and Docker.
+
 ## Prepare the worker inputs
 
 Corpus generation is a separate operation. Follow [corpus.md](corpus.md) to

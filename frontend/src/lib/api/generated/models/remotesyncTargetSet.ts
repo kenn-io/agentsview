@@ -12,5 +12,6 @@ export interface RemotesyncTargetSet {
   extra_files?: string[];
   files?: RemotesyncTargetSetFiles;
   forbidden_roots?: string[];
+  installation_id?: string;
   provider_extra_files?: RemotesyncTargetSetProviderExtraFiles;
 }

@@ -53,7 +53,7 @@ func TestProjectInventoryRulesAndCandidates(t *testing.T) {
 // same labels in another order share one kept map.
 func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
 	require.NoError(t, err)

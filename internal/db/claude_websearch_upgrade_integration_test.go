@@ -81,7 +81,7 @@ func TestClaudeSplitResponseWebSearchUpgradeRestoresTotal(t *testing.T) {
 
 	archivePath := database.Path()
 	require.NoError(t, database.Close())
-	needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, archivePath)
+	needsResync, fullRebuild, _, err := db.ArchiveResyncState(ctx, archivePath)
 	require.NoError(t, err)
 	assert.True(t, needsResync)
 	assert.False(t, fullRebuild)

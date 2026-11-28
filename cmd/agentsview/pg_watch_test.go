@@ -412,6 +412,26 @@ func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
 		"startup full-read, scoped change, full interval, scoped change that defers, reconciling change, scoped change")
 }
 
+// Only a change push may skip when the archive holds nothing new. Startup,
+// interval, shutdown, and full pushes keep the upkeep a skipped push leaves.
+func TestReplicaPusherSkipsOnlyChangePushes(t *testing.T) {
+	target := &fakeTarget{}
+	pusher, _ := newTestReplicaPusher(target)
+	ctx := t.Context()
+
+	require.NoError(t, pusher.push(ctx, reasonStartup, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+	require.NoError(t, pusher.push(ctx, reasonInterval, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, true))
+	require.NoError(t, pusher.push(ctx, reasonShutdown, false))
+
+	skip := make([]bool, 0, len(target.pushOpts))
+	for _, o := range target.pushOpts {
+		skip = append(skip, o.SkipIfUnchanged)
+	}
+	assert.Equal(t, []bool{false, true, false, false, false}, skip)
+}
+
 // TestPGPusherZeroGenerationKeepsReconcile pins that a generation-wide
 // phase reporting no generation id — a daemon predating the field — never
 // clears the reconcile bit. Clearing on it would let the next change push

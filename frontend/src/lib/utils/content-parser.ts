@@ -1,7 +1,11 @@
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { LRUCache } from "./cache.js";
-import { isHookSuccessMessage, isSystemBoundaryMessage } from "./messages.js";
+import {
+  isHookSuccessMessage,
+  isSkillInvocationMessage,
+  isSystemBoundaryMessage,
+} from "./messages.js";
 
 export type SegmentType = "text" | "thinking" | "tool" | "code" | "skill";
 
@@ -25,6 +29,20 @@ const THINKING_MARKED_RE = /\[Thinking\]\n?([\s\S]*?)\n?\[\/Thinking\]/g;
  * Used as fallback for old data that predates [/Thinking].
  */
 const THINKING_LEGACY_RE = /\[Thinking\]\n?([\s\S]*?)(?=\n\[|\n\n|$)/g;
+
+/**
+ * The envelope the parsers write for a skill_invocation row. The body is
+ * opaque Markdown, so only the outermost delimiters count: a literal
+ * `[/Skill]` inside it, such as in a code example, must not end it early.
+ */
+const SKILL_INVOCATION_RE = /^\[Skill: ([^\n]*?)\]\n([\s\S]*)\n\[\/Skill\]$/;
+
+/** Reads the whole skill body out of a skill_invocation row's content. */
+export function parseSkillInvocation(content: string): ContentSegment | null {
+  const m = SKILL_INVOCATION_RE.exec(content.trim());
+  if (!m) return null;
+  return { type: "skill", content: (m[2] ?? "").trim(), label: m[1] ?? "" };
+}
 
 /**
  * Skill blocks use [Skill: name]...[/Skill] delimiters,
@@ -541,6 +559,9 @@ export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) =>
   // the body here would let an unrelated toggle hide the card, and would tie
   // every boundary card to the "user" role it carries for analytics.
   if (isSystemBoundaryMessage(msg)) return isVisible("system");
+  // A skill expansion is a system row, so the system toggle owns it rather
+  // than the user toggle its role would otherwise select.
+  if (isSkillInvocationMessage(msg)) return isVisible("system");
   const role: "user" | "assistant" = msg.role === "user" ? "user" : "assistant";
   const segs = enrichSegments(
     parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length),

@@ -13,10 +13,8 @@ import (
 func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_machine_labels_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))

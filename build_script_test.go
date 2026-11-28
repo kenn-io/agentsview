@@ -421,7 +421,7 @@ set -eu
 printf 'fixture %s\n' "$*" >> "$CALL_LOG"
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -out|-duckdb-out)
+    -out)
       shift
       mkdir -p "$(dirname "$1")"
       printf 'fixture\n' > "$1"

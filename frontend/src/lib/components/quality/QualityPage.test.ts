@@ -7,7 +7,9 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
-import { MetadataService } from "../../api/generated/index.js";
+import { events } from "../../stores/events.svelte.js";
+import { AnalyticsService, MetadataService } from "../../api/generated/index.js";
+import type { DbSignalsAnalyticsResponse as SignalsAnalyticsResponse } from "../../api/generated/index.js";
 import { sync } from "../../stores/sync.svelte.js";
 
 // @ts-ignore
@@ -34,10 +36,46 @@ describe("QualityPage", () => {
     if (component) await unmount(component);
     component = undefined;
     document.body.innerHTML = "";
+    analytics.signals = null;
+    analytics.loading.signals = false;
+    analytics.querying.signals = false;
+    analytics.errors.signals = null;
     router.route = "sessions";
     router.params = {};
     sync.serverVersion = null;
     vi.restoreAllMocks();
+  });
+
+  it("adds newly imported agents to the filter without remounting", async () => {
+    let onEvent: ((event: { scope: "sessions" }) => void) | undefined;
+    vi.spyOn(events, "subscribeDebounced").mockImplementation((listener) => {
+      onEvent = listener;
+      return () => {};
+    });
+    let imported = false;
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockImplementation(async () => {
+      sessions.agents = imported ? [{ name: "codex", session_count: 1 }] : [];
+    });
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+    imported = true;
+    onEvent!({ scope: "sessions" });
+    await tick();
+    await tick();
+    const trigger = document.querySelector<HTMLButtonElement>('[title="Filter insights by agent"]');
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await tick();
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) =>
+      item.textContent?.includes("Codex (1)"),
+    );
+    expect(option).toBeDefined();
+    option!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+    expect(analytics.agent).toBe("codex");
+    analytics.agent = "";
   });
 
   it("loads quality once with the already-selected machine from a label deep link", async () => {
@@ -157,5 +195,131 @@ describe("QualityPage", () => {
 
     expect(document.body.textContent).toContain("Updated 7m ago");
     expect(document.body.textContent).not.toContain("Updated 3m ago");
+  });
+
+  it("keeps the error alert and Retry button mounted during a background refresh after failure", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+
+    let onEvent: ((event: { scope: "sync" }) => void) | undefined;
+    vi.spyOn(events, "subscribeDebounced").mockImplementation((listener) => {
+      onEvent = listener;
+      return () => {};
+    });
+
+    const first = Promise.withResolvers<SignalsAnalyticsResponse>();
+    const backgroundRefresh = Promise.withResolvers<SignalsAnalyticsResponse>();
+    const retryRefresh = Promise.withResolvers<SignalsAnalyticsResponse>();
+    let backgroundAborted = false;
+    const requests = [first, backgroundRefresh, retryRefresh];
+    const getSignals = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSignals")
+      .mockImplementation((_params, options) => {
+        const index = getSignals.mock.calls.length - 1;
+        if (index === 1) {
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              backgroundAborted = true;
+              backgroundRefresh.reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }
+        return requests[index]!.promise;
+      });
+
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+
+    // Initial load with no error still shows the skeleton.
+    expect(document.querySelector(".skeleton-card")).not.toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+
+    first.reject(new Error("injected read failure"));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "injected read failure",
+      );
+    });
+    const retryButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
+    expect(retryButton).not.toBeNull();
+    expect(retryButton!.textContent?.trim()).toBe("Retry");
+
+    // An SSE-driven background refresh starts while the alert is on screen.
+    onEvent!({ scope: "sync" });
+    await tick();
+
+    expect(getSignals).toHaveBeenCalledTimes(2);
+    expect(analytics.loading.signals).toBe(true);
+    expect(document.querySelector(".skeleton-card")).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[role="alert"] button')).toBe(retryButton);
+    expect(retryButton!.isConnected).toBe(true);
+
+    // Clicking the still-mounted Retry button aborts the background refresh and recovers.
+    retryButton!.click();
+    await tick();
+
+    expect(backgroundAborted).toBe(true);
+    expect(getSignals).toHaveBeenCalledTimes(3);
+
+    retryRefresh.resolve({
+      scored_sessions: 1,
+      unscored_sessions: 0,
+      grade_distribution: { A: 1 },
+      avg_health_score: 92,
+      outcome_distribution: { completed: 1 },
+      outcome_confidence_distribution: { high: 1 },
+      tool_health: {
+        total_failure_signals: 0,
+        total_retries: 0,
+        total_edit_churn: 0,
+        sessions_with_failures: 0,
+        failure_rate: 0,
+      },
+      context_health: {
+        avg_compaction_count: 0,
+        sessions_with_compaction: 0,
+        mid_task_compaction_count: 0,
+        sessions_with_mid_task_compaction: 0,
+        sessions_with_context_data: 1,
+        avg_context_pressure: 0.1,
+        high_pressure_sessions: 0,
+      },
+      quality_health: {
+        computed_sessions: 1,
+        totals: {
+          short_prompt_count: 0,
+          unstructured_start: 0,
+          missing_success_criteria_count: 0,
+          missing_verification_count: 0,
+          duplicate_prompt_count: 0,
+          no_code_context_count: 0,
+          runaway_tool_loop_count: 0,
+          frustration_marker_count: 0,
+        },
+        sessions_with_signal: {
+          short_prompt_count: 0,
+          unstructured_start: 0,
+          missing_success_criteria_count: 0,
+          missing_verification_count: 0,
+          duplicate_prompt_count: 0,
+          no_code_context_count: 0,
+          runaway_tool_loop_count: 0,
+          frustration_marker_count: 0,
+        },
+      },
+      trend: [],
+      by_agent: [],
+      by_project: [],
+      calibration: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(document.body.textContent).toContain("92");
   });
 });

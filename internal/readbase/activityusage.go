@@ -14,7 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-// The DuckDB and ClickHouse Activity reports select, price, and sum usage
+// The ClickHouse Activity report selects, prices, and sums usage
 // survivors in SQL. Go resolves each model's rates over the report range
 // into a UsageRateSchedule, the backend's SQL picks each survivor's segment
 // and band and does the integer cost math, and AssembleActivityUsage turns

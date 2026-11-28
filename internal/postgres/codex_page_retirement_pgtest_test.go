@@ -26,9 +26,13 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 		newerPage         bool
 		precedingSessions int
 		restoreLocal      string
+		promptLink        bool
 	}{
 		{name: "unpinned"},
 		{name: "pinned", pinned: true},
+		// Migrates the page directly to check that it carries the page's
+		// stored prompt links; the push that follows has no migration left.
+		{name: "pinned_prompt_link", pinned: true, promptLink: true},
 		{name: "newer_page_curation", pinned: true, newerPage: true},
 		{name: "restore_page", pinned: true, trashAction: "page"},
 		{name: "restore_thread", pinned: true, trashAction: "thread"},
@@ -46,7 +50,6 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			ctx := t.Context()
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
@@ -120,6 +123,9 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, rebuilt.UpsertSession(ctx, sess))
 				message.SessionID = page
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
+				if tc.promptLink {
+					require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: page, Ordinal: 1, Role: "user", Content: "Review https://github.com/o/r/pull/7"}}))
+				}
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 			}
 			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
@@ -159,6 +165,24 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+			if tc.promptLink {
+				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+				require.NoError(t, err)
+				marker, err := upgraded.pushMarkerID(ctx)
+				require.NoError(t, err)
+				pageSession, err := rebuilt.GetArtifactExportSession(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, pageSession)
+				tx, err := upgraded.pg.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = tx.Rollback() })
+				require.NoError(t, upgraded.migrateCodexPages(ctx, tx, []db.Session{*pageSession}, marker, nil))
+				require.NoError(t, tx.Commit())
+				migrated, err := store.GetSessionFull(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, migrated)
+				assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7}}, migrated.PRLinks)
+			}
 			if tc.newerPage {
 				// A page already published by an earlier push has its own newer
 				// curation. Seed it through the normal session/message writers.
@@ -223,7 +247,11 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			assert.Empty(t, headMessages, "the retired thread must not retain the page transcript")
 			pageMessages, err := store.GetMessages(ctx, page, 0, 10, true)
 			require.NoError(t, err)
-			require.Len(t, pageMessages, 1)
+			wantMessages := 1
+			if tc.promptLink {
+				wantMessages = 2
+			}
+			require.Len(t, pageMessages, wantMessages)
 			assert.Equal(t, "retained page answer", pageMessages[0].Content)
 			pageRow, err := store.GetSessionFull(ctx, page)
 			require.NoError(t, err)
@@ -348,11 +376,9 @@ func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
 	const threadUUID = "11111111-1111-4111-8111-111111111111"
 	const thread = "codex:" + threadUUID
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_page_friction_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
 	headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
@@ -418,11 +444,12 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			curated := mode == "curated"
 			const thread = "codex:11111111-1111-4111-8111-111111111111"
 			const page = thread + "_22222222-2222-4222-8222-222222222222"
-			const schema = "agentsview_codex_page_filtered_cleanup_test"
+			const schema = pgPushTestSchema
 			ctx := t.Context()
-			pgURL := testPGURL(t)
-			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			pgURL := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, pgURL, schema) {
+				cleanNamedPGSchema(t, pgURL, schema)
+			}
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
@@ -533,11 +560,9 @@ func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
 	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_page_restored_cleanup_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	source := testDB(t)
 	sourcePath := source.Path()
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")

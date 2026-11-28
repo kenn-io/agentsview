@@ -4,7 +4,7 @@ import "strings"
 
 // MappingEvaluationRow is one prefiltered session row for governed-count
 // evaluation. SourceArchiveID must be the row's real, non-empty source
-// archive ID for mirror callers (PostgreSQL/DuckDB) — an ArchiveMappings
+// archive ID for replica callers (PostgreSQL, ClickHouse) — an ArchiveMappings
 // entry with an empty SourceArchiveID is reserved for the SQLite-local
 // caller, whose own rows legitimately carry empty provenance. A mirror row
 // with empty SourceArchiveID (lost or missing provenance) will never match

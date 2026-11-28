@@ -18,6 +18,7 @@ import { router } from "./router.svelte.js";
 import { events } from "./events.svelte.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
+import { dismissFlash, getFlashMessage } from "@kenn-io/kit-ui";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -215,6 +216,24 @@ beforeEach(() => {
 
 describe("SessionsStore", () => {
   let sessions: ReturnType<typeof createSessionsStore>;
+
+  it.each(["single", "batch"])("shows a failed %s delete and keeps the selection", async (kind) => {
+    const store = createSessionsStore();
+    store.selectedIds = new Set(["saved"]);
+    const error = new ApiError(503, "archive is read-only; retry after maintenance");
+    if (kind === "single") api.deleteSession.mockRejectedValueOnce(error);
+    else api.batchDeleteSessions.mockRejectedValueOnce(error);
+    try {
+      await expect(
+        kind === "single" ? store.deleteSession("saved") : store.batchDeleteSessions(["saved"]),
+      ).rejects.toBe(error);
+      expect(getFlashMessage()).toContain("archive is read-only; retry after maintenance");
+      expect(store.selectedIds.has("saved")).toBe(true);
+      expect(store.recentlyDeleted).toHaveLength(0);
+    } finally {
+      dismissFlash();
+    }
+  });
 
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -2161,15 +2180,40 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("current");
     });
 
-    it("preserves unrelated pagination failures", async () => {
-      sessions.nextCursor = "valid";
-      const error = new ApiError(400, "invalid timezone");
-      api.getSidebarSessionIndex.mockRejectedValueOnce(error);
+    it("reports a failed later page and retries that page", async () => {
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(503, "archive is rebuilding"));
 
-      await expect(sessions.loadMore()).rejects.toBe(error);
+      await sessions.loadMore();
 
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-      expect(sessions.nextCursor).toBe("valid");
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+      expect(sessions.nextCursor).toBe("page-2");
+      expect(sessions.loading).toBe(false);
+
+      // Scrolling near the bottom asks again; it waits for Retry instead.
+      await sessions.loadMore();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "second" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.retrySidebar();
+
+      expect(api.getSidebarSessionIndex.mock.calls.map(([params]) => params.cursor)).toEqual([
+        undefined,
+        "page-2",
+        "page-2",
+      ]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "second"]);
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("should pass the browser timezone in loadMore", async () => {
@@ -2721,6 +2765,23 @@ describe("SessionsStore", () => {
         expect(sessions.sidebarLoadError).toBeNull();
       });
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
+    });
+
+    it("keeps the listed rows and reports a failed refresh until one succeeds", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load();
+
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(
+        new ApiError(503, "archive is rebuilding"),
+      );
+      await sessions.load({ force: true });
+
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load({ force: true });
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("passes label and pull request filters to later pages", async () => {
@@ -3496,17 +3557,14 @@ describe("SessionsStore", () => {
   describe("bare UUID navigation", () => {
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
     const canonical = `pi:${uuid}`;
-    let replace: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       router.navigateToSession(uuid);
-      replace = vi.spyOn(router, "replaceSession");
       vi.mocked(api.getSession)
         .mockRejectedValueOnce(new ApiError(404, "missing"))
         .mockResolvedValue(makeSession({ id: canonical }));
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({ ids: [canonical] });
     });
     afterEach(() => {
-      replace.mockRestore();
       router.replace("sessions");
     });
     async function pendingLookup() {
@@ -3517,12 +3575,13 @@ describe("SessionsStore", () => {
         expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledOnce(),
       );
       return async () => {
+        const currentSessionId = router.sessionId;
         resolve({ ids: [canonical] });
         await navigation;
-        expect(replace).not.toHaveBeenCalled();
+        expect(router.sessionId).toBe(currentSessionId);
       };
     }
-    it("resolves a missing bare UUID and replaces its URL", async () => {
+    it("resolves a missing bare UUID and hands the canonical ID to the router", async () => {
       await sessions.navigateToSession(uuid);
       expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledExactlyOnceWith(
         { partial: uuid, raw_suffix: true, limit: 2 },
@@ -3531,10 +3590,11 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBe(canonical);
       expect(sessions.activeSession?.id).toBe(canonical);
       expect(sessions.activeSessionNotFound).toBe(false);
-      expect(replace).toHaveBeenCalledExactlyOnceWith(canonical);
+      expect(router.sessionId).toBe(canonical);
     });
     it.each([
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
+      { name: "hosted-branch ambiguous", ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`] },
       { name: "failed", ids: null },
     ])("keeps a $name lookup missing", async ({ ids }) => {
       const lookup = vi.mocked(SessionsService.getApiV1SessionIdsResolve);
@@ -3543,16 +3603,7 @@ describe("SessionsStore", () => {
       await sessions.navigateToSession(uuid);
       expect(sessions.activeSessionId).toBe(uuid);
       expect(sessions.activeSessionNotFound).toBe(true);
-      expect(replace).not.toHaveBeenCalled();
-    });
-    it("refuses ambiguity between a hosted branch and an ordinary canonical ID", async () => {
-      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({
-        ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`],
-      });
-      await sessions.navigateToSession(uuid);
-      expect(sessions.activeSessionId).toBe(uuid);
-      expect(sessions.activeSessionNotFound).toBe(true);
-      expect(replace).not.toHaveBeenCalled();
+      expect(router.sessionId).toBe(uuid);
     });
     it("does not resolve an exact Claude UUID hit", async () => {
       vi.mocked(api.getSession)
@@ -3573,8 +3624,7 @@ describe("SessionsStore", () => {
       const finish = await pendingLookup();
       router.navigate("usage");
       await finish();
-      expect(router.route).toBe("usage");
-      expect(window.location.pathname).toBe("/usage");
+      expect(router.sessionId).toBeNull();
     });
     it("an aborted metadata 404 cannot poison a revisit", async () => {
       const { promise, reject } = Promise.withResolvers<Session>();

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -46,6 +47,9 @@ func prepareForegroundServeDaemon(ctx context.Context,
 	decision := decideServeDaemonReplacement(*cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
+		if release, ok := foregroundServeLaunchLocks.Load(backgroundLaunchLockPath(cfg.DataDir)); ok {
+			return true, release.(func()), nil
+		}
 		if runningAsBackgroundChild() {
 			return true, noRelease, nil
 		}
@@ -105,22 +109,44 @@ func prepareForegroundServeDaemon(ctx context.Context,
 	}
 }
 
+var errForegroundLaunchInProgress = errors.New(
+	"agentsview serve --background is already in progress; " +
+		"wait for it to finish or run `agentsview daemon status`",
+)
+
 func acquireForegroundServeLaunchLock(cfg config.Config) (func(), error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 	lock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
 	if !ok {
-		return nil, errors.New("agentsview serve --background is already in progress; " +
-			"wait for it to finish or run `agentsview daemon status`",
-		)
+		return nil, errForegroundLaunchInProgress
 	}
 	path := backgroundLaunchLockPath(cfg.DataDir)
-	foregroundServeLaunchLocks.Store(path, struct{}{})
-	return sync.OnceFunc(func() {
+	release := sync.OnceFunc(func() {
 		foregroundServeLaunchLocks.Delete(path)
 		_ = lock.Unlock()
-	}), nil
+	})
+	foregroundServeLaunchLocks.Store(path, release)
+	return release, nil
+}
+
+// waitForegroundServeLaunchLock retries while a replacement that was just
+// started still holds the launch lock, until it publishes its runtime record.
+func waitForegroundServeLaunchLock(ctx context.Context, cfg config.Config) (func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, backgroundServeReadyTimeout)
+	defer cancel()
+	for ctx.Err() == nil {
+		release, err := acquireForegroundServeLaunchLock(cfg)
+		if !errors.Is(err, errForegroundLaunchInProgress) {
+			return release, err
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return nil, ctx.Err()
 }
 
 func ownsForegroundServeLaunchLock(dataDir string) bool {

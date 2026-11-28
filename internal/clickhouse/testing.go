@@ -30,6 +30,13 @@ const (
 // alpha, and returns a Target pointing at a fresh ClickHouse database.
 func seedFixture(t *testing.T) (*db.DB, Target) {
 	t.Helper()
+	local := seedFixtureArchive(t)
+	dsn, database := chtest.FreshDatabase(t)
+	return local, Target{URL: dsn, Database: database}
+}
+
+func seedFixtureArchive(t *testing.T) *db.DB {
+	t.Helper()
 	local := dbtest.OpenTestDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-test",
@@ -137,8 +144,7 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 	_, err = local.PinMessage(t.Context(), fixtureAlphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
-	dsn, database := chtest.FreshDatabase(t)
-	return local, Target{URL: dsn, Database: database}
+	return local
 }
 
 func fixtureSession(id, project, first, ts string, messageCount int) db.Session {
@@ -228,6 +234,25 @@ func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 		Messages:        msgs,
 		DataVersion:     1,
 		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+}
+
+// growSession adds one assistant message after a session's stored messages
+// the way an incremental sync does, so the earlier rows keep their IDs.
+func growSession(t *testing.T, local *db.DB, sessionID, content, ts string) {
+	t.Helper()
+	ctx := t.Context()
+	sess, err := local.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	sess.MessageCount++
+	sess.EndedAt = &ts
+	sess.LocalModifiedAt = &ts
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     *sess,
+		Messages:    []db.Message{fixtureMessage(sessionID, sess.MessageCount-1, "assistant", content, ts)},
+		DataVersion: 1,
 	}})
 	require.NoError(t, err)
 }

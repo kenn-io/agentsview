@@ -2,8 +2,12 @@ package sessionwatch
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -21,6 +25,72 @@ import (
 type baselineStore struct {
 	db.Store
 	count atomic.Int64
+}
+
+type treeStore struct {
+	baselineStore
+	parentReads atomic.Int32
+	unavailable atomic.Bool
+}
+
+func (s *treeStore) GetSessionVersion(context.Context, string) (int, int64, bool) {
+	s.parentReads.Add(1)
+	return 0, 0, true
+}
+
+func (s *treeStore) GetSessionTreeMarker(context.Context, string) (db.SessionTreeSnapshot, error) {
+	if s.unavailable.Load() {
+		return db.SessionTreeSnapshot{}, errors.New("marker unavailable")
+	}
+	return db.SessionTreeSnapshot{Marker: strconv.FormatInt(s.count.Load(), 10)}, nil
+}
+
+func TestTreeEventsReportReadFailureAndRecoveryOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &treeStore{}
+		updates := New(store, nil).TreeEvents(t.Context(), "parent")
+		synctest.Wait()
+		store.unavailable.Store(true)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case <-updates:
+		default:
+			require.FailNow(t, "read failure was not reported")
+		}
+		time.Sleep(3 * PollInterval)
+		synctest.Wait()
+		select {
+		case <-updates:
+			require.FailNow(t, "repeated read failure triggered another update")
+		default:
+		}
+		store.unavailable.Store(false)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case <-updates:
+		default:
+			require.FailNow(t, "recovery was not reported")
+		}
+	})
+}
+
+func TestTreeEventsDetectChildChangeWithoutExtraParentReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &treeStore{}
+		updates := New(store, nil).TreeEvents(t.Context(), "parent")
+		store.count.Store(1)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case _, ok := <-updates:
+			require.True(t, ok)
+		default:
+			require.FailNow(t, "child change was not reported")
+		}
+		assert.Zero(t, store.parentReads.Load())
+	})
 }
 
 func (s *baselineStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
@@ -48,6 +118,273 @@ func TestEventsBaselineTakenBeforeReturn(t *testing.T) {
 			require.FailNow(t, "reply after watch creation was lost")
 		}
 	})
+}
+
+type changingIdentityStore struct {
+	baselineStore
+	state atomic.Value
+}
+
+func (s *changingIdentityStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	return s.state.Load().(db.SessionWatchState), nil
+}
+
+type unavailableVersionStore struct {
+	changingIdentityStore
+	unavailable atomic.Bool
+}
+
+func (s *unavailableVersionStore) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	if s.unavailable.Load() {
+		return 0, 0, false
+	}
+	return s.baselineStore.GetSessionVersion(ctx, id)
+}
+
+func TestEventsRevisionChange(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("version unavailable=%t", unavailable), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &unavailableVersionStore{}
+				store.count.Store(1)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "one"})
+				updates := New(store, nil).Events(ctx, "session-a")
+				store.unavailable.Store(unavailable)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"})
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				_, ok := <-updates
+				require.True(t, ok)
+				synctest.Wait()
+				if !unavailable {
+					store.state.Store(db.SessionWatchState{State: "ambiguous"})
+					time.Sleep(PollInterval)
+					synctest.Wait()
+					_, ok = <-updates
+					require.True(t, ok)
+					_, ok = <-updates
+					assert.False(t, ok)
+					return
+				}
+				store.unavailable.Store(false)
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case <-updates:
+					require.FailNow(t, "unchanged version emitted a second update")
+				default:
+				}
+			})
+		})
+	}
+}
+
+type transientIdentityStore struct {
+	baselineStore
+	reads atomic.Int32
+	state string
+}
+
+func (s *transientIdentityStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
+	if s.reads.Add(1) == 1 {
+		return db.SessionWatchState{}, errors.New("watch state unavailable")
+	}
+	return db.SessionWatchState{State: s.state, PublicID: id}, nil
+}
+
+func TestEventsRecoversFromInitialWatchStateError(t *testing.T) {
+	for _, state := range []string{db.SessionWatchResolved, "ambiguous"} {
+		t.Run(state, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &transientIdentityStore{state: state}
+				updates := New(store, nil).Events(ctx, "session-a")
+				synctest.Wait()
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "recovery must emit an update")
+				default:
+					require.FailNow(t, "recovery did not emit an update")
+				}
+				synctest.Wait()
+				if state != db.SessionWatchResolved {
+					_, ok := <-updates
+					assert.False(t, ok)
+				} else {
+					select {
+					case _, ok := <-updates:
+						require.True(t, ok, "resolved watch must remain open")
+						require.FailNow(t, "unexpected second update")
+					default:
+					}
+				}
+			})
+		})
+	}
+}
+
+type splitReadStore struct {
+	db.Store
+	mu             gosync.Mutex
+	state          db.SessionWatchState
+	count          int
+	failUnresolved bool
+	onTreeRead     func()
+	onVersionRead  func()
+}
+
+func (s *splitReadStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, nil
+}
+
+func (s *splitReadStore) GetSessionVersion(context.Context, string) (int, int64, bool) {
+	s.mu.Lock()
+	cb := s.onVersionRead
+	s.onVersionRead = nil
+	s.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.count, 1, true
+}
+
+func (s *splitReadStore) GetSessionTreeMarker(_ context.Context, id string) (db.SessionTreeSnapshot, error) {
+	s.mu.Lock()
+	cb := s.onTreeRead
+	s.onTreeRead = nil
+	s.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	s.mu.Lock()
+	state := s.state
+	count := s.count
+	failUnresolved := s.failUnresolved
+	s.mu.Unlock()
+	if failUnresolved && state.State != db.SessionWatchResolved {
+		return db.SessionTreeSnapshot{}, &db.SessionIdentityError{State: state.State, Variants: state.Variants}
+	}
+	return db.NewSessionTreeSnapshot([]db.SessionTreeEntry{{
+		ID:      id,
+		Count:   count,
+		Version: 1,
+		State: &db.SessionTreeState{
+			State:           state.State,
+			PublicID:        state.PublicID,
+			Variants:        state.Variants,
+			ContentRevision: state.ContentRevision,
+		},
+	}})
+}
+
+func TestWatchSplitReadEmitsOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		tree           bool
+		failUnresolved bool
+		next           db.SessionWatchState
+		nextCnt        int
+		wantStop       bool
+	}{
+		{
+			name:    "tree revision change between watch state and tree marker",
+			tree:    true,
+			next:    db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"},
+			nextCnt: 1,
+		},
+		{
+			name:     "tree unresolved transition between watch state and tree marker",
+			tree:     true,
+			next:     db.SessionWatchState{State: "ambiguous", Variants: []string{"session-a~one", "session-a~two"}},
+			nextCnt:  1,
+			wantStop: true,
+		},
+		{
+			name:           "tree unresolved marker error between watch state and tree marker",
+			tree:           true,
+			failUnresolved: true,
+			next:           db.SessionWatchState{State: "ambiguous", Variants: []string{"session-a~one", "session-a~two"}},
+			nextCnt:        1,
+			wantStop:       true,
+		},
+		{
+			name:    "non-tree revision and version change between watch state and version read",
+			tree:    false,
+			next:    db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"},
+			nextCnt: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &splitReadStore{
+					state:          db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "one"},
+					count:          1,
+					failUnresolved: tc.failUnresolved,
+				}
+				var updates <-chan struct{}
+				if tc.tree {
+					updates = New(store, nil).TreeEvents(ctx, "session-a")
+				} else {
+					updates = New(store, nil).Events(ctx, "session-a")
+				}
+				synctest.Wait()
+
+				mutate := func() {
+					store.mu.Lock()
+					store.state = tc.next
+					store.count = tc.nextCnt
+					store.mu.Unlock()
+				}
+				store.mu.Lock()
+				if tc.tree {
+					store.onTreeRead = mutate
+				} else {
+					store.onVersionRead = mutate
+				}
+				store.mu.Unlock()
+
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "change must emit one update")
+				default:
+					require.FailNow(t, "change did not emit an update")
+				}
+				synctest.Wait()
+
+				if tc.wantStop {
+					select {
+					case _, ok := <-updates:
+						assert.False(t, ok, "unresolved watch must close without a duplicate update")
+					default:
+						require.FailNow(t, "unresolved watch did not close")
+					}
+					return
+				}
+
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "resolved watch must stay open")
+					require.FailNow(t, "split read emitted a duplicate update")
+				default:
+				}
+			})
+		})
+	}
 }
 
 // testWatcher creates a Watcher backed by a fresh SQLite database
@@ -103,6 +440,7 @@ func TestCheckDBForChanges_FileDisappears(t *testing.T) {
 		&path,
 		&lastMtime,
 		&mchanged,
+		false, nil,
 	)
 	assert.False(t, changed, "expected no change signal")
 	assert.Empty(t, path)
@@ -144,6 +482,7 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 		&sourcePath,
 		&lastFileMtime,
 		&mchanged,
+		false, nil,
 	)
 
 	assert.True(t, changed,
@@ -210,11 +549,38 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		&sourcePath,
 		&lastFileMtime,
 		&fileMtimeChangedAt,
+		false, nil,
 	)
 	assert.False(t, changed, "the fallback delay must elapse before direct sync")
 	require.False(t, fileMtimeChangedAt.IsZero(),
 		"the sidecar mtime must start the fallback timer")
 	assert.Equal(t, sidecarTime.UnixNano(), lastFileMtime)
+	started := fileMtimeChangedAt
+	before, err := database.GetSessionTreeMarker(t.Context(), sessionID)
+	require.NoError(t, err)
+	checkTree := func() (bool, bool) {
+		current, err := database.GetSessionTreeMarker(t.Context(), sessionID)
+		require.NoError(t, err)
+		changed, parentChanged := current.Marker != before.Marker, treeParentChanged(before, current)
+		before = current
+		return changed, parentChanged
+	}
+	dbtest.SeedSession(t, database, "child", "proj", func(s *db.Session) {
+		s.ParentSessionID = new(sessionID)
+	})
+	changed = watcher.checkDBForChanges(t.Context(), sessionID, &lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, &fileMtimeChangedAt, true, checkTree)
+	assert.True(t, changed)
+	assert.Equal(t, started, fileMtimeChangedAt, "child changes must not delay source fallback")
+
+	parent, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	parent.MessageCount++
+	require.NoError(t, database.UpsertSession(t.Context(), *parent))
+	changed = watcher.checkDBForChanges(t.Context(), sessionID, &lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, &fileMtimeChangedAt, true, checkTree)
+	assert.True(t, changed)
+	assert.True(t, fileMtimeChangedAt.IsZero(), "parent changes must clear source fallback")
+	lastCount, lastDBVersion, ok = database.GetSessionVersion(t.Context(), sessionID)
+	require.True(t, ok)
 
 	fileMtimeChangedAt = time.Now().Add(-SyncFallbackDelay)
 	changed = watcher.checkDBForChanges(t.Context(),
@@ -224,6 +590,7 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		&sourcePath,
 		&lastFileMtime,
 		&fileMtimeChangedAt,
+		false, nil,
 	)
 	require.True(t, changed, "the elapsed fallback must sync the sidecar")
 
@@ -267,7 +634,7 @@ func TestCheckDBForChangesKiroSubagentAppendFallsBackToSync(t *testing.T) {
 	check := func(fileMtimeChangedAt *time.Time) bool {
 		t.Helper()
 		return watcher.checkDBForChanges(t.Context(), childID,
-			&lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, fileMtimeChangedAt)
+			&lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, fileMtimeChangedAt, false, nil)
 	}
 
 	dbtest.WriteTestFile(t, childPath, []byte(testjsonl.JoinJSONL(

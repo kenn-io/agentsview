@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,20 +55,57 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 	if version == "" {
 		return db.getDailyUsageUncached(ctx, filter)
 	}
+	// Reads.Do cannot guard the put by version, carry the request's window
+	// memo into a flight, or bypass flights for progress streams.
 	rows, ok := db.usageKept.Get(slot, version)
 	if !ok {
 		full := filter
 		full.SkipSessionCounts = false
 		full.PairwiseSides = filter.PairwiseSides || filter.Breakdowns
-		loadCtx := context.WithValue(ctx, usageWindowVersionKey{}, version)
-		result, err := db.getDailyUsageUncached(loadCtx, full)
+		build := func(ctx context.Context) (DailyUsageResult, error) {
+			ctx = context.WithValue(ctx, usageWindowVersionKey{}, version)
+			result, err := db.getDailyUsageUncached(ctx, full)
+			if err != nil {
+				return DailyUsageResult{}, err
+			}
+			if db.dailyUsageVersion(ctx) == version {
+				db.usageKept.Put(slot, version, []DailyUsageResult{result})
+			}
+			return result, nil
+		}
+		var result DailyUsageResult
+		var err error
+		if filter.Progress != nil {
+			// A progress stream reports only its own build, so it never joins.
+			result, err = build(ctx)
+		} else {
+			// The flight carries the starting request's memo, so concurrent
+			// reads of one request still prepare each window once.
+			memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+			share := func() (DailyUsageResult, error) {
+				return db.usageFlights.Do(ctx, version+"|"+slot, func(flightCtx context.Context) (DailyUsageResult, error) {
+					if rows, ok := db.usageKept.Get(slot, version); ok {
+						return rows[0], nil
+					}
+					if memo != nil {
+						flightCtx = context.WithValue(flightCtx, usageWindowMemoKey{}, memo)
+					}
+					return build(flightCtx)
+				})
+			}
+			// Another request's flight can cancel a memo entry this flight
+			// waited on; retry until the caller leaves or a build succeeds.
+			for {
+				result, err = share()
+				if !errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					break
+				}
+			}
+		}
 		if err != nil {
-			return result, err
+			return DailyUsageResult{}, err
 		}
 		rows = []DailyUsageResult{result}
-		if db.dailyUsageVersion(ctx) == version {
-			db.usageKept.Put(slot, version, rows)
-		}
 	}
 	result := rows[0].Clone()
 	if filter.SkipSessionCounts {

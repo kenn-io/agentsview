@@ -556,8 +556,7 @@ func finalize(
 	defer cancel()
 	persistedPaths, complete, err := state.loadPersistedSources(finalCtx)
 	if err != nil {
-		reason := reasonForError(err, ReasonIngestFailed)
-		return failureResult(state.manifest, reason, agentsViewVersion), err
+		return captureFailure(state, err, agentsViewVersion)
 	}
 	if complete {
 		return ingestCaptureResult(
@@ -642,19 +641,23 @@ func awaitQuiescentSources(
 	var previous []sourceSnapshot
 	var stableSince time.Time
 	foundRoot := state.manifest.SourceObserved
+	// searched records a completed provider-root lookup. Without one, a
+	// deadline says nothing about whether the session exists.
+	searched := false
 	missingRoot := false
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, finalizationError(foundRoot, missingRoot, err)
+			return nil, finalizationError(foundRoot, searched, missingRoot, err)
 		}
 		roots, err := locateRoot(ctx, state.manifest)
 		if err != nil {
 			if errors.Is(err, context.Canceled) ||
 				errors.Is(err, context.DeadlineExceeded) {
-				return nil, finalizationError(foundRoot, missingRoot, err)
+				return nil, finalizationError(foundRoot, searched, missingRoot, err)
 			}
 			return nil, err
 		}
+		searched = true
 		if len(roots) > 1 {
 			return nil, errorWithReason(
 				ReasonMultipleSessions,
@@ -697,18 +700,18 @@ func awaitQuiescentSources(
 		}
 		if !time.Now().Before(deadline) {
 			return nil, finalizationError(
-				foundRoot, missingRoot, context.DeadlineExceeded)
+				foundRoot, searched, missingRoot, context.DeadlineExceeded)
 		}
 		if err := waitForPoll(ctx, deadline); err != nil {
-			return nil, finalizationError(foundRoot, missingRoot, err)
+			return nil, finalizationError(foundRoot, searched, missingRoot, err)
 		}
 	}
 }
 
-func finalizationError(foundRoot, missingRoot bool, err error) error {
+func finalizationError(foundRoot, searched, missingRoot bool, err error) error {
 	reason := ReasonFinalizationTimeout
 	switch {
-	case !foundRoot:
+	case !foundRoot && searched:
 		reason = ReasonNoSession
 	case missingRoot:
 		reason = ReasonSourceUnavailable

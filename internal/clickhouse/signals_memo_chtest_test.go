@@ -16,7 +16,7 @@ import (
 // the next request scans those sessions again and returns full counts.
 func TestFrustrationMarkersAreNotMemoizedAfterFailedScan(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	rows := func() []db.SignalRow {
 		return []db.SignalRow{{ID: fixtureAlphaID}, {ID: fixtureBetaID}}
 	}

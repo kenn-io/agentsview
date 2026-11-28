@@ -72,6 +72,16 @@ func init() {
 			want: "Fix the failing login test",
 		}},
 	})
+	// Muse Personal reads agent-<uuid>/sessions/<uuid>.jsonl, and the
+	// header's session_id must match the file name.
+	registerProviderFuzzTarget(providerFuzzTarget{
+		agent: AgentMusePersonal,
+		path:  "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl",
+		seeds: []providerFuzzSeed{{
+			file: "muse_personal/agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl",
+			want: "Synthetic daily check complete",
+		}},
+	})
 	// OpenClaw reads both its legacy JSONL files and its SQLite store, so the
 	// input feeds both: as one agent's JSONL transcript and as another
 	// agent's transcript_events rows, one row per line.
@@ -245,6 +255,8 @@ func FuzzProviderFx(f *testing.F) { fuzzProvider(f, AgentFx) }
 func FuzzProviderTau(f *testing.F) { fuzzProvider(f, AgentTau) }
 
 func FuzzProviderMuse(f *testing.F) { fuzzProvider(f, AgentMuse) }
+
+func FuzzProviderMusePersonal(f *testing.F) { fuzzProvider(f, AgentMusePersonal) }
 
 func FuzzProviderOpenClaw(f *testing.F) { fuzzProvider(f, AgentOpenClaw) }
 

@@ -1,3 +1,10 @@
+//go:build !darwin
+
+// macOS watches every root with FSEvents (watch_backend_factory_darwin.go),
+// so this backend is built only where it ships. fsnotify's kqueue Close races
+// its own event reader and can close a descriptor twice, which breaks
+// whatever reused that descriptor number (fsnotify issue #788).
+
 package sync
 
 import (
@@ -1120,23 +1127,6 @@ func (b *fsnotifyBackend) reportError(err error) {
 	}
 }
 
-func normalizeExcludePatterns(patterns []string) []string {
-	if len(patterns) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		pattern = strings.TrimSpace(filepath.Clean(pattern))
-		if pattern == "" || pattern == "." {
-			continue
-		}
-		if !slices.Contains(out, pattern) {
-			out = append(out, pattern)
-		}
-	}
-	return out
-}
-
 // reinstallShallowWatches revalidates shallow-root coverage after overflow.
 // A dropped removal loses the native watch even when the directory was
 // recreated, so every shallow root is re-added; a root that cannot be
@@ -1202,15 +1192,6 @@ func (b *fsnotifyBackend) isUnderShallowRoot(path string) bool {
 	b.rootsMu.RLock()
 	defer b.rootsMu.RUnlock()
 	return slices.Contains(b.shallow, root) && !slices.Contains(b.recursive, root)
-}
-
-func pathAtOrBelow(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return rel == "." ||
-		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (b *fsnotifyBackend) recursiveOwnersForPath(path string) []string {
@@ -1290,26 +1271,11 @@ func (b *fsnotifyBackend) shouldDropEvent(path string) bool {
 // directory rather than an intermediate directory on the way to one.
 func (b *fsnotifyBackend) filesVisibleIn(dir, root string) bool {
 	root = filepath.Clean(root)
-	dir = filepath.Clean(dir)
 	b.depthMu.RLock()
 	limit := b.rootDepths[root]
 	patterns := b.rootExtraDirs[root]
 	b.depthMu.RUnlock()
-	if limit <= 0 {
-		return true
-	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == "." {
-		return true
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) <= limit {
-		return true
-	}
-	return extraCoversFiles(parts, patterns)
+	return watchDepthFilesVisibleIn(dir, root, limit, patterns)
 }
 
 // shouldExcludeForRoot reports whether a directory under root stays unwatched,
@@ -1346,87 +1312,7 @@ func (b *fsnotifyBackend) beyondRootDepth(path, root string, slack int) bool {
 	limit := b.rootDepths[root]
 	patterns := b.rootExtraDirs[root]
 	b.depthMu.RUnlock()
-	if limit <= 0 {
-		return false
-	}
-	rel, err := filepath.Rel(root, filepath.Clean(path))
-	if err != nil || rel == "." || rel == ".." ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) <= limit+slack {
-		return false
-	}
-	if extraCoversDirectory(parts, patterns) {
-		return false
-	}
-	return slack <= 0 || len(parts) < 2 ||
-		!extraCoversFiles(parts[:len(parts)-1], patterns)
-}
-
-// extraCoversDirectory reports whether parts is a listed extra directory or
-// an intermediate directory on the way to one.
-func extraCoversDirectory(parts, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if matchExtraPrefix(parts, want) {
-			return true
-		}
-	}
-	return false
-}
-
-// extraCoversFiles reports whether parts is a listed extra directory whose
-// files should be reported. An intermediate directory listed only because a
-// longer pattern passes through it does not qualify.
-func extraCoversFiles(parts, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if len(want) != len(parts) || !matchExtraPrefix(parts, want) {
-			continue
-		}
-		if extraHasLongerPattern(want, patterns) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func extraHasLongerPattern(prefix, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if len(want) > len(prefix) && matchExtraPrefix(prefix, want) {
-			return true
-		}
-	}
-	return false
-}
-
-func extraPatternParts(pattern string) []string {
-	if pattern == "" {
-		return nil
-	}
-	parts := strings.Split(pattern, "/")
-	if slices.Contains(parts, "") {
-		return nil
-	}
-	return parts
-}
-
-// matchExtraPrefix reports whether parts equals want or a proper prefix of
-// want. "*" matches one directory name.
-func matchExtraPrefix(parts, want []string) bool {
-	if len(want) == 0 || len(parts) == 0 || len(parts) > len(want) {
-		return false
-	}
-	for i := range parts {
-		if want[i] != "*" && want[i] != parts[i] {
-			return false
-		}
-	}
-	return true
+	return watchDepthBeyond(path, root, limit, patterns, slack)
 }
 
 func (b *fsnotifyBackend) shouldEnumerateCreatedSubtree(root, path string) bool {
@@ -1434,41 +1320,6 @@ func (b *fsnotifyBackend) shouldEnumerateCreatedSubtree(root, path string) bool 
 	defer b.rootsMu.RUnlock()
 	return slices.Contains(b.recursive, filepath.Clean(root)) &&
 		pathAtOrBelow(root, path)
-}
-
-func shouldExcludeForRoot(excludes []string, path string, root string) bool {
-	if len(excludes) == 0 {
-		return false
-	}
-	clean := filepath.Clean(path)
-	root = filepath.Clean(root)
-	rel, err := filepath.Rel(root, clean)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	rel = filepath.Clean(rel)
-	if rel == "." {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-
-	for _, pattern := range excludes {
-		if strings.Contains(pattern, string(filepath.Separator)) {
-			if ok, _ := filepath.Match(pattern, rel); ok {
-				return true
-			}
-			continue
-		}
-		for _, part := range parts {
-			if ok, _ := filepath.Match(pattern, part); ok {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (b *fsnotifyBackend) mostSpecificContainingRoot(path string) (string, bool) {

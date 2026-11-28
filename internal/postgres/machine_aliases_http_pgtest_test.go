@@ -23,7 +23,6 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	pgURL := postgres.PGTestURL(t)
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
-	dbtest.SeedPricingMeta(t, local)
 	dbtest.SeedSession(t, local, "current", "project", func(s *db.Session) {
 		s.Machine = "old-owner"
 		s.UserMessageCount = 3

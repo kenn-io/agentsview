@@ -241,7 +241,7 @@ func sanitizeToolCallContent(
 	tc *ToolCall, stats *ValidationStats,
 ) {
 	// InputJSON is raw model output and can carry NUL/control bytes
-	// just like result content; unsanitized rows break DuckDB pushes
+	// just like result content; unsanitized rows break replica pushes
 	// and force the resync copy path to re-scan them (#945).
 	sanitizeStringField(&tc.InputJSON, stats)
 	// The recorded rendering must keep matching the message content byte

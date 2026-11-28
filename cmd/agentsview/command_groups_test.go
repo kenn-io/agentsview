@@ -21,7 +21,7 @@ func TestCommandGroupsCanonicalHelp(t *testing.T) {
 		"source cursor sync-usage", "project list", "session health", "session prune",
 		"report stats", "report activity", "report usage daily", "report usage statusline",
 		"replica pg push", "replica pg vectors list", "replica pg service install",
-		"replica duckdb status", "replica duckdb quack serve", "replica clickhouse push",
+		"replica clickhouse status", "replica clickhouse push",
 		"index embeddings build", "index classifier rebuild", "archive diff", "sync",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	for _, name := range []string{"source", "sync", "project", "report", "replica", "index", "session", "archive", "mcp", "openapi"} {
 		assert.Contains(t, help, "\n  "+name+" ")
 	}
-	for _, name := range []string{"agents", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff", "token-use"} {
+	for _, name := range []string{"agents", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "clickhouse", "embeddings", "parse-diff", "token-use"} {
 		assert.NotContains(t, help, "\n  "+name+" ")
 	}
 	assert.NotContains(t, help, "\n  session list ", "subcommands belong in domain help")
@@ -80,7 +80,7 @@ func TestCommandGroupsAdvertisedExamplesParse(t *testing.T) {
 		"source", "project", "report", "replica", "index", "source cursor",
 		"source list", "source sync", "source import", "source chrome", "source raw",
 		"project list", "session health", "session prune", "report stats", "report activity",
-		"report usage", "replica pg", "replica duckdb", "replica clickhouse",
+		"report usage", "replica pg", "replica clickhouse",
 		"index embeddings", "index classifier", "archive diff",
 	} {
 		cmd, _, err := newRootCommand().Find(strings.Fields(path))

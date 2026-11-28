@@ -149,3 +149,41 @@ func TestServer_ToolUsageAndQualitySignals(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
+
+func TestServer_TermTrends(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	const start = "2024-06-03T09:00:00Z"
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.StartedAt = new(start)
+		s.CreatedAt = start
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	user := dbtest.UserMsg("s1", 0, "a seam here")
+	user.Timestamp = start
+	reply := dbtest.AsstMsg("s1", 1, "two seams")
+	reply.Timestamp = start
+	dbtest.SeedMessages(t, d, user, reply)
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }})
+	st, ct := newInMemoryPair(t, srv)
+	t.Cleanup(func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	})
+
+	res, err := ct.CallTool(t.Context(), callParams(ToolGetTermTrends, map[string]any{
+		"terms": []string{"seam"}, "from": "2024-06-01", "to": "2024-06-09", "granularity": "day",
+	}))
+	require.NoError(t, err)
+	out := decodeStructured[db.TrendsTermsResponse](t, res)
+	assert.Equal(t, "day", out.Granularity)
+	assert.Equal(t, 2, out.MessageCount)
+	require.Len(t, out.Series, 1)
+	assert.Equal(t, 2, out.Series[0].Total)
+
+	res, err = ct.CallTool(t.Context(), callParams(ToolGetTermTrends, map[string]any{
+		"terms": []string{"seam"}, "granularity": "year",
+	}))
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+}

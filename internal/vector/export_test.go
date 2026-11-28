@@ -278,7 +278,7 @@ func TestSessionDocHashesChangesWithContent(t *testing.T) {
 	// to, or the fake source's incremental scan would never resurface it.
 	src.rows[0].unit.Content = "changed"
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
-	_, err = ix.Refresh(ctx, src, false, true)
+	_, err = ix.Refresh(ctx, src, false, true, nil)
 	require.NoError(t, err)
 
 	after := sessionDocHashes(t, ix)
@@ -332,7 +332,7 @@ func TestSessionDocHashesChangesWithMetadata(t *testing.T) {
 	src.rows[0].unit.Ordinal = 5
 	src.rows[0].unit.OrdinalEnd = 5
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
-	_, err = ix.Refresh(ctx, src, false, true)
+	_, err = ix.Refresh(ctx, src, false, true, nil)
 	require.NoError(t, err)
 
 	after := sessionDocHashes(t, ix)

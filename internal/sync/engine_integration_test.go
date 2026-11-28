@@ -7514,6 +7514,11 @@ func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
 	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"single-session resync must preserve the stored archived source")
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	require.NoError(t, env.engine.RefreshSessionByIDContext(t.Context(), "codex:"+uuid))
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
+		"ID refresh must preserve the archived source when no labeled copy exists")
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {

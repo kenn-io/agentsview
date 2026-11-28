@@ -168,39 +168,6 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"push_batch_size":  {},
 }
 
-// DuckDBConfig holds DuckDB mirror and Quack connection settings.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type DuckDBConfig struct {
-	Path          string `toml:"path" json:"path"`
-	URL           string `toml:"url" json:"url"`
-	Token         string `toml:"token" json:"token,omitempty"`
-	MachineName   string `toml:"machine_name" json:"machine_name"`
-	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
-	// AttachTimeout bounds how long a remote Quack ATTACH (and its cheap TCP
-	// preflight) may run before the client gives up, so an unresponsive
-	// endpoint fails fast instead of hanging forever. Zero selects the
-	// package default; a negative value disables the guard.
-	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitzero"`
-	Projects        []string      `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-}
-
-type duckDBConfigJSON DuckDBConfig
-
-func (c DuckDBConfig) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, duckDBConfigJSON(c))
-}
-
-func (c *DuckDBConfig) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded duckDBConfigJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*c = DuckDBConfig(decoded)
-	return nil
-}
-
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
@@ -215,6 +182,11 @@ type VectorConfig struct {
 	// `embeddings build --include-automated` can override this for a
 	// one-off build; see that flag's help for the scheduled-build caveat.
 	IncludeAutomated bool `toml:"include_automated" json:"include_automated"`
+	// Agents limits local message embeddings to these session agent IDs.
+	// An empty list includes all agents.
+	Agents []string `toml:"agents" json:"agents,omitempty"`
+	// Roles limits message embeddings to user or assistant; empty includes both.
+	Roles []string `toml:"roles" json:"roles,omitempty"`
 	// RecallMaxRevisionLag is how many Recall corpus revisions the Recall
 	// vector index may trail the corpus and still answer vector and hybrid
 	// queries. Every insert, delete, or text edit of an accepted Recall entry
@@ -295,6 +267,9 @@ type VectorEmbeddingsServerConfig struct {
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// [vector] section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `toml:"api_key_file" json:"api_key_file,omitempty"`
 	// BatchSize is the number of inputs sent per HTTP call. Default 32, or 8
 	// for a built-in server (no endpoint).
 	BatchSize int `toml:"batch_size" json:"batch_size"`
@@ -318,13 +293,19 @@ type VectorEmbeddingsServerConfig struct {
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
 
-	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY or
-	// AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it takes
-	// precedence over APIKeyEnv.
+	// apiKey is read from APIKeyFile, or from AGENTSVIEW_EMBEDDINGS_API_KEY
+	// or AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it
+	// takes precedence over APIKeyEnv.
 	apiKey string
 }
 
-const defaultNomicModel = "nomic-embed-text"
+const (
+	defaultNomicModel       = "nomic-embed-text"
+	nomicMaxInputChars      = 4000
+	nomicModelContextTokens = 2048
+	nomicQueryPrefix        = "search_query: "
+	nomicDocumentPrefix     = "search_document: "
+)
 
 func isNomicModel(model string) bool {
 	return model == defaultNomicModel || model == "nomic-embed-text:latest" || model == "nomic-embed-text:v1.5"
@@ -498,6 +479,18 @@ func (c VectorConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
+	for _, agent := range c.Agents {
+		if !slices.ContainsFunc(parser.Registry, func(def parser.AgentDef) bool {
+			return slices.Contains(parser.ProviderStoredAgents(def.Type), parser.AgentType(agent))
+		}) {
+			return fmt.Errorf("[vector] agents: unknown agent %q", agent)
+		}
+	}
+	for _, role := range c.Roles {
+		if role != "user" && role != "assistant" {
+			return fmt.Errorf("[vector] roles: unknown role %q", role)
+		}
+	}
 	if c.RecallMaxRevisionLag < 0 {
 		return fmt.Errorf(
 			"[vector] recall_max_revision_lag must be 0 or greater, got %d",
@@ -529,6 +522,32 @@ func (c VectorConfig) Validate() error {
 	if backstop == 0 {
 		return errors.New("[vector.embed] backstop_interval must not be zero; " +
 			"use a negative value to disable or omit for the 24h default")
+	}
+	return nil
+}
+
+// resolveVectorSecrets validates the section and, when it is enabled, reads
+// each server's api_key_file.
+func resolveVectorSecrets(c *VectorConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if !c.Enabled {
+		return nil
+	}
+	for _, name := range sortedServerNames(c.Embeddings.Servers) {
+		server := c.Embeddings.Servers[name]
+		if strings.TrimSpace(server.APIKeyFile) == "" {
+			continue
+		}
+		key, err := readSettingSecretFile(
+			fmt.Sprintf("[vector.embeddings.servers.%s] api_key_file", name),
+			server.APIKeyFile)
+		if err != nil {
+			return err
+		}
+		server.apiKey = key
+		c.Embeddings.Servers[name] = server
 	}
 	return nil
 }
@@ -583,16 +602,21 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey returns a deployment-provided key when set. Otherwise it reads the
-// environment variable named by APIKeyEnv, returning "" when unset.
-func (c VectorEmbeddingsServerConfig) APIKey() string {
+// APIKey returns the key read when the config loaded, or a
+// deployment-provided key. Otherwise it reads APIKeyFile, which a command
+// that loaded the config without the [vector] scope has not read yet, or the
+// environment variable APIKeyEnv names. It returns "" when no key is set.
+func (c VectorEmbeddingsServerConfig) APIKey() (string, error) {
 	if c.apiKey != "" {
-		return c.apiKey
+		return c.apiKey, nil
+	}
+	if strings.TrimSpace(c.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", c.APIKeyFile)
 	}
 	if c.APIKeyEnv == "" {
-		return ""
+		return "", nil
 	}
-	return os.Getenv(c.APIKeyEnv)
+	return os.Getenv(c.APIKeyEnv), nil
 }
 
 // validateServers checks available servers, their default and transport
@@ -644,6 +668,10 @@ func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens i
 	}
 	if c.Endpoint == "" && !c.Local {
 		return fmt.Errorf("%s endpoint is required", section)
+	}
+	if err := oneSecretSource(section, "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
 	}
 	endpoint, err := c.EmbedDeployment().Canonical()
 	if err != nil && !c.Local {
@@ -810,10 +838,16 @@ type InsightsConfig struct {
 	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint"`
 	Model     string `json:"model,omitempty" toml:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
-	AllowHTTP bool   `json:"allow_http,omitempty" toml:"allow_http"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `json:"api_key_file,omitempty" toml:"api_key_file"`
+	AllowHTTP  bool   `json:"allow_http,omitempty" toml:"allow_http"`
 	// DefaultAgent selects the agent CLI insight generation uses when a
 	// request does not choose one. Empty keeps DefaultInsightAgent.
 	DefaultAgent string `json:"default_agent,omitempty" toml:"default_agent"`
+
+	// apiKey holds the key read from APIKeyFile.
+	apiKey string
 }
 
 // DefaultInsightAgent is the insight agent used when neither the request nor
@@ -850,13 +884,33 @@ func ParseInsightAgent(value string) (string, error) {
 	)
 }
 
-// APIKey reads the configured key from the environment. The key itself is
-// intentionally never part of the serialized configuration.
+// APIKey returns the key read from APIKeyFile, or else the value of the
+// environment variable APIKeyEnv names. The key itself is intentionally never
+// part of the serialized configuration.
 func (c InsightsConfig) APIKey() string {
+	if c.apiKey != "" {
+		return c.apiKey
+	}
 	if strings.TrimSpace(c.APIKeyEnv) == "" {
 		return ""
 	}
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
+}
+
+// resolveInsightsSecrets validates the section and reads APIKeyFile.
+func resolveInsightsSecrets(c *InsightsConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.APIKeyFile) == "" {
+		return nil
+	}
+	key, err := readSettingSecretFile("[insights] api_key_file", c.APIKeyFile)
+	if err != nil {
+		return err
+	}
+	c.apiKey = key
+	return nil
 }
 
 // Validate checks endpoint intent, transport safety, and the default agent.
@@ -869,9 +923,14 @@ func (c InsightsConfig) Validate() error {
 	endpoint := strings.TrimSpace(c.Endpoint)
 	model := strings.TrimSpace(c.Model)
 	configured := endpoint != "" || model != "" ||
-		strings.TrimSpace(c.APIKeyEnv) != "" || c.AllowHTTP
+		strings.TrimSpace(c.APIKeyEnv) != "" ||
+		strings.TrimSpace(c.APIKeyFile) != "" || c.AllowHTTP
 	if !configured {
 		return nil
+	}
+	if err := oneSecretSource("[insights]", "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
 	}
 	if endpoint == "" || model == "" {
 		return errors.New("[insights] endpoint and model are required together")
@@ -1134,7 +1193,6 @@ type Config struct {
 	ClickHouse           ClickHouseConfig            `json:"clickhouse,omitempty" toml:"clickhouse"`
 	DefaultClickHouse    string                      `json:"default_clickhouse,omitempty" toml:"default_clickhouse"`
 	ClickHouseTargets    map[string]ClickHouseConfig `json:"-" toml:"-"`
-	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
@@ -1152,6 +1210,9 @@ type Config struct {
 	InstallationCreatedAt time.Time `json:"-" toml:"-"`
 	// LocalMachineName is the display label, defaulting to the system hostname.
 	LocalMachineName string `json:"-" toml:"local_machine_name"`
+	// CursorAdminAPIKeyFile names a private file holding the Cursor admin API
+	// key, read by ResolveCursorAdminAPIKey.
+	CursorAdminAPIKeyFile string `json:"-" toml:"cursor_admin_api_key_file"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -1209,8 +1270,12 @@ type Config struct {
 	SyncIdleAfter     time.Duration `json:"sync_idle_after,omitzero" toml:"sync_idle_after"`
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
-	// SyncInterval is the minimum time between starts of watcher-triggered syncs.
+	// SyncInterval is the minimum time between starts of watcher-triggered
+	// syncs while someone is watching the archive, and in archive push commands.
 	SyncInterval time.Duration `json:"sync_interval,omitzero" toml:"sync_interval"`
+	// BackgroundSyncInterval is the same minimum for the daemon while nobody is
+	// watching. Restart to apply changes.
+	BackgroundSyncInterval time.Duration `json:"background_sync_interval,omitzero" toml:"background_sync_interval"`
 
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
@@ -1229,6 +1294,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+	// AuthSettingsSaved records that Settings owns authentication for this lifetime.
+	AuthSettingsSaved bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -1263,6 +1330,13 @@ func (c *Config) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	}
 	*c = Config(decoded)
 	return nil
+}
+
+// BackgroundSyncFloor is the minimum time between watcher-triggered syncs in
+// the daemon while nobody is watching the archive: background_sync_interval,
+// or sync_interval when that is longer or the background interval is off.
+func (c Config) BackgroundSyncFloor() time.Duration {
+	return max(c.BackgroundSyncInterval, c.SyncInterval)
 }
 
 func (c Config) ResolvedChartPalette() ChartPalette {
@@ -1508,6 +1582,9 @@ func Default() (Config, error) {
 				filepath.Join(home, ".hermes", "profiles"),
 			)
 		}
+		if root == "" {
+			dirs = append(dirs, resolveMetaHarnessDefaultDirs(def.Type, home)...)
+		}
 		agentDirs[def.Type] = dirs
 		agentDirSource[def.Type] = dirDefault
 	}
@@ -1530,6 +1607,7 @@ func Default() (Config, error) {
 		DaemonIdleTimeout:              20 * time.Minute,
 		SyncIdleAfter:                  10 * time.Minute,
 		SyncInterval:                   5 * time.Second,
+		BackgroundSyncInterval:         10 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
@@ -1616,6 +1694,22 @@ func Load(fs *flag.FlagSet) (Config, error) {
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return LoadPFlagsFor(fs, 0)
+}
+
+// LoadSettingsRestartConfig keeps a successful Settings auth save authoritative
+// across Settings restarts while reading later edits to the saved config.
+func LoadSettingsRestartConfig(current Config, fs *pflag.FlagSet) (Config, error) {
+	cfg, err := LoadPFlags(fs)
+	if err != nil || !current.AuthSettingsSaved {
+		return cfg, err
+	}
+	saved, err := loadReadOnlyFor(ScopeLocal, current.DataDir)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.RequireAuth = saved.RequireAuth
+	cfg.AuthSettingsSaved = true
+	return cfg, nil
 }
 
 // LoadPFlagsFor loads a command's config, warning about invalid unused sections.
@@ -1951,6 +2045,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
 		CursorAdminAPIKey              string                 `toml:"cursor_admin_api_key"`
+		CursorAdminAPIKeyFile          string                 `toml:"cursor_admin_api_key_file"`
 		CursorAdminEmail               string                 `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                 `toml:"cursor_admin_user_id"`
 		Host                           string                 `toml:"host"`
@@ -1976,7 +2071,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		PG                             PGConfig               `toml:"pg"`
 		DefaultClickHouse              string                 `toml:"default_clickhouse"`
 		ClickHouse                     ClickHouseConfig       `toml:"clickhouse"`
-		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		ImageText                      ImageTextConfig        `toml:"image_text"`
@@ -1990,6 +2084,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SyncInterval                   time.Duration          `toml:"sync_interval"`
+		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
@@ -2048,8 +2143,14 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 		c.LocalMachineName = name
 	}
-	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
+	if err := oneSecretSource("", "cursor_admin_api_key", file.CursorAdminAPIKey,
+		"cursor_admin_api_key_file", file.CursorAdminAPIKeyFile); err != nil {
+		return err
+	}
+	// An environment key replaces both config-file sources.
+	if c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
+		c.CursorAdminAPIKeyFile = strings.TrimSpace(file.CursorAdminAPIKeyFile)
 	}
 	if file.CursorAdminEmail != "" && c.CursorAdminEmail == "" {
 		c.CursorAdminEmail = file.CursorAdminEmail
@@ -2205,32 +2306,6 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
 		}
 	}
-	// Merge duckdb field-by-field so env vars override only
-	// the fields they set, preserving config-file settings.
-	if file.DuckDB.Path != "" && c.DuckDB.Path == "" {
-		c.DuckDB.Path = file.DuckDB.Path
-	}
-	if file.DuckDB.URL != "" && c.DuckDB.URL == "" {
-		c.DuckDB.URL = file.DuckDB.URL
-	}
-	if file.DuckDB.Token != "" && c.DuckDB.Token == "" {
-		c.DuckDB.Token = file.DuckDB.Token
-	}
-	if file.DuckDB.MachineName != "" && c.DuckDB.MachineName == "" {
-		c.DuckDB.MachineName = file.DuckDB.MachineName
-	}
-	if file.DuckDB.AllowInsecure {
-		c.DuckDB.AllowInsecure = true
-	}
-	if file.DuckDB.AttachTimeout != 0 && c.DuckDB.AttachTimeout == 0 {
-		c.DuckDB.AttachTimeout = file.DuckDB.AttachTimeout
-	}
-	if file.DuckDB.Projects != nil && c.DuckDB.Projects == nil {
-		c.DuckDB.Projects = file.DuckDB.Projects
-	}
-	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
-		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
-	}
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true
 	}
@@ -2242,6 +2317,12 @@ func (c *Config) applyConfigTOML(data string) error {
 	// section fields' treatment even though both currently agree.
 	if meta.IsDefined("vector", "include_automated") {
 		c.Vector.IncludeAutomated = file.Vector.IncludeAutomated
+	}
+	if meta.IsDefined("vector", "agents") {
+		c.Vector.Agents = file.Vector.Agents
+	}
+	if meta.IsDefined("vector", "roles") {
+		c.Vector.Roles = file.Vector.Roles
 	}
 	if meta.IsDefined("vector", "recall_max_revision_lag") {
 		c.Vector.RecallMaxRevisionLag = file.Vector.RecallMaxRevisionLag
@@ -2282,16 +2363,16 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.Vector.Embeddings.Dimension = 768
 		}
 		if !meta.IsDefined("vector", "embeddings", "max_input_chars") {
-			c.Vector.Embeddings.MaxInputChars = 4000
+			c.Vector.Embeddings.MaxInputChars = nomicMaxInputChars
 		}
 		if !meta.IsDefined("vector", "embeddings", "model_context_tokens") {
-			c.Vector.Embeddings.ModelContextTokens = 2048
+			c.Vector.Embeddings.ModelContextTokens = nomicModelContextTokens
 		}
 		if !meta.IsDefined("vector", "embeddings", "query_prefix") {
-			c.Vector.Embeddings.QueryPrefix = "search_query: "
+			c.Vector.Embeddings.QueryPrefix = nomicQueryPrefix
 		}
 		if !meta.IsDefined("vector", "embeddings", "document_prefix") {
-			c.Vector.Embeddings.DocumentPrefix = "search_document: "
+			c.Vector.Embeddings.DocumentPrefix = nomicDocumentPrefix
 		}
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
@@ -2315,6 +2396,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
+		c.Insights.APIKeyFile = strings.TrimSpace(c.Insights.APIKeyFile)
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
@@ -2365,6 +2447,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval
+	}
+	if meta.IsDefined("background_sync_interval") {
+		c.BackgroundSyncInterval = file.BackgroundSyncInterval
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
@@ -2620,28 +2705,6 @@ func (c *Config) loadEnv() {
 		"CURSOR_ADMIN_USER_ID",
 	); v != "" {
 		c.CursorAdminUserID = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
-		c.DuckDB.Path = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_URL"); v != "" {
-		c.DuckDB.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_TOKEN"); v != "" {
-		c.DuckDB.Token = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_MACHINE"); v != "" {
-		c.DuckDB.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.DuckDB.AttachTimeout = d
-		} else {
-			log.Printf(
-				"warning: invalid AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT %q: %v",
-				v, err,
-			)
-		}
 	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
@@ -3861,42 +3924,14 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 	return targets, nil
 }
 
-// ResolveDuckDB returns a copy of DuckDB config with defaults applied
-// and environment variables expanded in path, URL, and token.
-func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
-	duck := c.DuckDB
-	if duck.Path != "" {
-		expanded, err := expandBracedEnv(duck.Path)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		expanded, err = pathutil.ExpandHome(expanded)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		duck.Path = expanded
+// ResolveCursorAdminAPIKey returns the Cursor admin API key from the
+// environment or cursor_admin_api_key, or reads the file
+// cursor_admin_api_key_file names. It returns "" when none is set.
+func (c *Config) ResolveCursorAdminAPIKey() (string, error) {
+	if c.CursorAdminAPIKey != "" || c.CursorAdminAPIKeyFile == "" {
+		return c.CursorAdminAPIKey, nil
 	}
-	if duck.URL != "" {
-		expanded, err := expandBracedEnv(duck.URL)
-		if err != nil {
-			return duck, fmt.Errorf("expanding url: %w", err)
-		}
-		duck.URL = expanded
-	}
-	if duck.Token != "" {
-		expanded, err := expandBracedEnv(duck.Token)
-		if err != nil {
-			return duck, fmt.Errorf("expanding token: %w", err)
-		}
-		duck.Token = expanded
-	}
-	if duck.Path == "" {
-		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
-	}
-	if duck.MachineName == "" {
-		duck.MachineName = c.InstallationID
-	}
-	return duck, nil
+	return readSettingSecretFile("cursor_admin_api_key_file", c.CursorAdminAPIKeyFile)
 }
 
 var (
@@ -4113,6 +4148,7 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
+				c.AuthSettingsSaved = true
 			}
 		}
 		if v, ok := patch["chart_palette"]; ok {
@@ -4237,13 +4273,103 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate()
+		_, candidate, err := c.vectorSetupCandidate(nil)
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
 		}
 		return err
 	})
 	return embeddings, err
+}
+
+// SaveVectorEmbeddingsServer replaces the configured servers with one named
+// OpenAI-compatible server after validating the complete config.
+func (c *Config) SaveVectorEmbeddingsServer(
+	endpoint, model string, dimension int, apiKeyFile string,
+) error {
+	if err := c.migrateJSONToTOML(); err != nil {
+		return err
+	}
+	return c.withConfigLock(func() error {
+		existing, _, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+		if err != nil {
+			return err
+		}
+		return c.writeConfigMap(existing)
+	})
+}
+
+// VectorEmbeddingsServerCandidate returns the validated in-memory config that
+// SaveVectorEmbeddingsServer would write, without changing the saved config.
+func (c *Config) VectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+		if err != nil {
+			return err
+		}
+		embeddings = candidate.Vector.Embeddings
+		return nil
+	})
+	return embeddings, err
+}
+
+func (c *Config) vectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (map[string]any, Config, error) {
+	server := map[string]any{"endpoint": endpoint}
+	if apiKeyFile != "" {
+		server["api_key_file"] = apiKeyFile
+	}
+	existing, candidate, err := c.vectorSetupCandidateFrom(c.readConfigMapOrLegacy, func(section map[string]any) {
+		embeddings, _ := section["embeddings"].(map[string]any)
+		oldModel, _ := embeddings["model"].(string)
+		_, hasServers := embeddings["servers"]
+		preserveDefaultModelConfig := oldModel == "" && !hasServers && model == defaultNomicModel
+		if oldModel == model {
+			servers, _ := embeddings["servers"].(map[string]any)
+			name, _ := embeddings["default_server"].(string)
+			if name == "" && len(servers) == 1 {
+				for name = range servers {
+				}
+			}
+			previous, _ := servers[name].(map[string]any)
+			for _, key := range []string{"timeout", "batch_size", "max_batch_tokens", "concurrency", "max_retries"} {
+				if value, ok := previous[key]; ok {
+					server[key] = value
+				}
+			}
+		}
+		if embeddings == nil || (oldModel != model && !preserveDefaultModelConfig) {
+			embeddings = make(map[string]any)
+		}
+		delete(embeddings, "default_server")
+		embeddings["model"] = model
+		embeddings["dimension"] = dimension
+		embeddings["servers"] = map[string]any{"default": server}
+		if isNomicModel(model) && oldModel != model {
+			for key, value := range map[string]any{
+				"max_input_chars":      nomicMaxInputChars,
+				"model_context_tokens": nomicModelContextTokens,
+				"query_prefix":         nomicQueryPrefix,
+				"document_prefix":      nomicDocumentPrefix,
+			} {
+				if _, ok := embeddings[key]; !ok {
+					embeddings[key] = value
+				}
+			}
+		}
+		section["embeddings"] = embeddings
+	})
+	if err != nil {
+		return nil, Config{}, err
+	}
+	if err := candidate.ApplyDeploymentEmbeddings(); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	return existing, candidate, nil
 }
 
 // VectorExplicitlyDisabled reports a saved opt-out.
@@ -4301,7 +4427,7 @@ func (c *Config) SharedVectorSetup() (Config, bool, error) {
 				return nil
 			}
 		}
-		_, candidate, err = c.vectorSetupCandidate()
+		_, candidate, err = c.vectorSetupCandidate(nil)
 		if err != nil {
 			return err
 		}
@@ -4321,7 +4447,7 @@ func (c *Config) SharedVectorSetup() (Config, bool, error) {
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
 func (c *Config) SaveVectorSetup() error {
 	return c.withConfigLock(func() error {
-		existing, _, err := c.vectorSetupCandidate()
+		existing, _, err := c.vectorSetupCandidate(nil)
 		if err != nil {
 			return err
 		}
@@ -4329,8 +4455,39 @@ func (c *Config) SaveVectorSetup() error {
 	})
 }
 
-func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
-	existing, err := c.readConfigMap()
+// readConfigMapOrLegacy reads config.toml, or an unmigrated config.json when
+// config.toml is absent, without changing either file.
+func (c *Config) readConfigMapOrLegacy() (map[string]any, error) {
+	if _, err := os.Stat(c.configPath()); !os.IsNotExist(err) {
+		return c.readConfigMap()
+	}
+	existing := make(map[string]any)
+	data, err := os.ReadFile(c.jsonConfigPath())
+	if os.IsNotExist(err) {
+		return existing, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config.json: %w", err)
+	}
+	converted, err := legacyJSONToTOML(data)
+	if err != nil {
+		return nil, err
+	}
+	_, err = toml.Decode(converted, &existing)
+	return existing, err
+}
+
+func (c *Config) vectorSetupCandidate(
+	mutate func(section map[string]any),
+) (map[string]any, Config, error) {
+	return c.vectorSetupCandidateFrom(c.readConfigMap, mutate)
+}
+
+func (c *Config) vectorSetupCandidateFrom(
+	read func() (map[string]any, error),
+	mutate func(section map[string]any),
+) (map[string]any, Config, error) {
+	existing, err := read()
 	if err != nil {
 		if _, ok := errors.AsType[toml.ParseError](err); ok {
 			err = invalidVectorSetupError{err}
@@ -4345,6 +4502,9 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 		section = make(map[string]any)
 	}
 	section["enabled"] = true
+	if mutate != nil {
+		mutate(section)
+	}
 	existing["vector"] = section
 	encoded, err := toml.Marshal(existing)
 	if err != nil {
@@ -4358,7 +4518,7 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
-	if err := candidate.Vector.Validate(); err != nil {
+	if err := resolveVectorSecrets(&candidate.Vector); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	return existing, candidate, nil

@@ -9,20 +9,25 @@ import (
 
 // Session publication follows dependent inserts and removal of older versions.
 // Recompute the maximum there so corrections and empty replacements can lower it.
-// The events carry the session's content_version, which a push that keeps them
-// carries over when it republishes only the session row.
+// The session's events carry versions from its content_version through its
+// rows_version: a push that keeps them carries both over when it republishes
+// only the session row, and a push that appends events keeps content_version.
+// Events another push left after rows_version are not published.
 //
 // A materialized view runs inside the insert and reads the joined table in
 // full. Inside the view, the inner sessions reference is the inserted block, so
 // the filter keeps each publish to its own sessions' events rather than every
 // event in the mirror.
+//
+// The version test sits in maxIf, not the join condition, because servers
+// before inequality joins reject a non-equality ON clause.
 const terminalEventSnapshotSelect = `SELECT s.id AS session_id, s.push_version AS push_version,
- max(tre.timestamp) AS last_terminal_at, %s AS revision
+ maxIf(tre.timestamp, tre.push_version >= s.content_version AND tre.push_version <= s.rows_version) AS last_terminal_at, %s AS revision
  FROM sessions s LEFT JOIN (
   SELECT session_id, push_version, timestamp FROM tool_result_events
   WHERE session_id IN (SELECT id FROM sessions)
   AND source = 'tool_execution' AND status IN ('completed', 'errored')
- ) tre ON tre.session_id = s.id AND tre.push_version = s.content_version
+ ) tre ON tre.session_id = s.id
  GROUP BY s.id, s.push_version`
 
 var terminalEventSnapshotView = mirrorView{

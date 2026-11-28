@@ -26,7 +26,7 @@ func TestKataConfigValidate(t *testing.T) {
 		{name: "discovery", config: base},
 		{name: "unix_socket", config: with(func(c *KataConfig) { c.Endpoint = "unix:///run/kata/daemon.sock" })},
 		{name: "https_with_token_env", config: with(func(c *KataConfig) { c.Endpoint = "https://kata.example.test"; c.TokenEnv = "KATA_TOKEN" })},
-		{name: "https_without_token_env", config: with(func(c *KataConfig) { c.Endpoint = "https://kata.example.test" }), wantErr: "[kata] token_env is required for https endpoints"},
+		{name: "https_without_token_env", config: with(func(c *KataConfig) { c.Endpoint = "https://kata.example.test" }), wantErr: "[kata] token_env or token_file is required for https endpoints"},
 		{name: "loopback_http", config: with(func(c *KataConfig) { c.Endpoint = "http://127.0.0.1:7777" })},
 		{name: "localhost_http", config: with(func(c *KataConfig) { c.Endpoint = "http://localhost:7777" })},
 		{name: "remote_http_refused", config: with(func(c *KataConfig) { c.Endpoint = "http://kata.example.test" }), wantErr: "[kata] endpoint \"http://kata.example.test\" uses plaintext http"},
@@ -84,7 +84,7 @@ func TestKataConfigTOMLLoadAndDefaults(t *testing.T) {
 func TestKataConfigTOMLFinalizeRejectsHTTPSWithoutToken(t *testing.T) {
 	err := loadMinimalErrWithConfig(t, map[string]any{"kata": map[string]any{"enabled": true, "endpoint": "https://kata.example.test"}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "[kata] token_env is required for https endpoints")
+	assert.Contains(t, err.Error(), "[kata] token_env or token_file is required for https endpoints")
 }
 
 func TestKataEnabledOnPusherIsNotAConfigError(t *testing.T) {

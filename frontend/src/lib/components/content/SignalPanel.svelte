@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { m } from "../../i18n/index.js";
   import type { Session } from "../../api/types/core.js";
   import SessionFrictionFindings from "../friction/SessionFrictionFindings.svelte";
@@ -19,9 +20,10 @@
 
   interface Props {
     session: Session;
+    headerActions?: Snippet;
   }
 
-  let { session }: Props = $props();
+  let { session, headerActions }: Props = $props();
 
   const gradeStyle = $derived(
     getGradeStyle(session.health_grade),
@@ -63,7 +65,12 @@
 </script>
 
 <div class="signal-panel">
-  <div class="signal-panel-label">{m.analytics_session_health_title()}</div>
+  <div class="signal-panel-heading">
+    <div class="signal-panel-label">{m.analytics_session_health_title()}</div>
+    {#if headerActions}
+      {@render headerActions()}
+    {/if}
+  </div>
   {#if !hasUsefulData}
     <div class="no-signal-note">
       {m.signal_panel_not_enough_activity()}
@@ -180,8 +187,15 @@
   }
   /* A small section label names the band, in the same voice as its
      Friction findings subsection header. */
-  .signal-panel-label {
+  .signal-panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     margin-bottom: 4px;
+  }
+  .signal-panel-label {
     color: var(--text-secondary);
     font-weight: 600;
   }

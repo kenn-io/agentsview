@@ -93,7 +93,7 @@ func iflowSessionIDFromPath(root, path string) string {
 }
 
 func iflowProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -101,5 +101,5 @@ func iflowProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
 		},
-	}
+	})
 }

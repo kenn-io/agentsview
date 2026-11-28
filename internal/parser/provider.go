@@ -233,6 +233,8 @@ type ReconciliationSourceStateProvider interface {
 type ReconciliationSourceRank struct {
 	Class   int64
 	Recency int64
+	// TieBreak resolves provider-specific representation preferences after recency.
+	TieBreak int64
 	// Path breaks otherwise equal ranks in favor of the smaller path.
 	// Providers that do not rank by path leave it empty.
 	Path string
@@ -1283,6 +1285,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAugureDesktopProviderFactory(def)
 	case AgentGrok:
 		return newGrokProviderFactory(def)
+	case AgentFactory:
+		return newFactoryProviderFactory(def)
 	case AgentGoose:
 		return newGooseProviderFactory(def)
 	case AgentIflow:
@@ -1291,7 +1295,7 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGptmeProviderFactory(def)
 	case AgentGemini:
 		return newGeminiProviderFactory(def)
-	case AgentGeminiApps:
+	case AgentGeminiApps, AgentGrokWeb:
 		return newImportOnlyProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
@@ -1329,6 +1333,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newFxProviderFactory(def)
 	case AgentTau:
 		return newTauProviderFactory(def)
+	case AgentMusePersonal:
+		return newMusePersonalProviderFactory(def)
 	case AgentMuse:
 		return newMuseProviderFactory(def)
 	case AgentPrimeAgent:

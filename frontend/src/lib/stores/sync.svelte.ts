@@ -1,7 +1,9 @@
-import type { EventSource } from "eventsource";
+import { supportsLiveSessionUpdates } from "../api/remoteVersion.js";
+import type { LiveSource } from "../api/client.js";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
+import { failureMessage } from "../utils/failure.js";
 import { m } from "../i18n/index.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { fileReferences } from "./file-references.svelte.js";
@@ -48,9 +50,13 @@ export function commitsDisagree(a: string | undefined, b: string | undefined): b
   return a.slice(0, minLen) !== b.slice(0, minLen);
 }
 
+type SyncRead = "status" | "stats" | "version";
+
 class SyncStore {
   archiveStale: boolean = $state(false);
   syncPending: boolean = $state(false);
+  upgradePending: boolean = $state(false);
+  writesPaused: boolean = $state(false);
 
   syncing: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
@@ -71,11 +77,32 @@ class SyncStore {
   // becomes reachable.
   backendDegraded: boolean = $state(false);
   backendDegradedMessage: string | null = $state(null);
+  // Why the status, stats, or version read from a local server last failed,
+  // when neither flag above covers it. Each read clears only its own entry
+  // when it succeeds, so one read recovering does not hide another that is
+  // still failing. Surfaced in the status bar so stale sync times and counts
+  // are not silent.
+  private failedReads = $state<Record<SyncRead, string | null>>({
+    status: null,
+    stats: null,
+    version: null,
+  });
+
+  get statusError(): string | null {
+    return this.failedReads.status ?? this.failedReads.stats ?? this.failedReads.version;
+  }
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
   readonly buildCommit: string = import.meta.env.VITE_BUILD_COMMIT;
   readonly isDesktop: boolean =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
+
+  get remoteLiveAllowed(): boolean {
+    return (
+      !isRemoteConnection() ||
+      (this.serverVersion !== null && supportsLiveSessionUpdates(this.serverVersion.api_version))
+    );
+  }
 
   get readOnly(): boolean {
     return this.serverVersion?.read_only === true;
@@ -85,7 +112,13 @@ class SyncStore {
     return this.serverVersion?.archive_only === true;
   }
 
-  private watchEventSource: EventSource | null = null;
+  // False until version metadata arrives, so a copied archive never
+  // offers host actions while it loads.
+  get hostSessionActionsAvailable(): boolean {
+    return this.serverVersion !== null && this.serverVersion.host_paths_detached !== true;
+  }
+
+  private watchEventSource: LiveSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -137,18 +170,27 @@ class SyncStore {
     this.backendDegradedMessage = null;
   }
 
-  private markBackendFailure(error: unknown) {
+  private markBackendFailure(error: unknown, read: SyncRead) {
     if (error instanceof ApiError && error.status >= 500) {
       this.markBackendDegraded();
       return;
     }
     this.markRemoteReachable(false);
+    if (!isRemoteConnection()) this.failedReads[read] = failureMessage(error);
+  }
+
+  /** Re-read every source of the status bar after a failure it reported. */
+  async retryStatus(): Promise<void> {
+    if (this.failedReads.version !== null) await this.loadVersion();
+    await this.loadStatus();
+    await this.loadStats();
   }
 
   async loadStatus() {
     try {
       const status = await SyncService.getApiV1SyncStatus();
       this.markRemoteReachable(true);
+      this.failedReads.status = null;
       if (this.serverVersion === null) {
         await this.loadVersion({ updateBackendHealth: false });
       }
@@ -160,6 +202,8 @@ class SyncStore {
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
       this.syncPending = status.sync_pending === true;
+      this.upgradePending = status.upgrade_pending === true;
+      this.writesPaused = status.writes_paused === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {
@@ -189,9 +233,8 @@ class SyncStore {
         await this.loadStats();
       }
     } catch (error) {
-      this.markBackendFailure(error);
+      this.markBackendFailure(error, "status");
       this.pendingHydration = false;
-      console.warn("Failed to load sync status:", error);
     }
   }
 
@@ -228,11 +271,11 @@ class SyncStore {
       if (this.statsVersion === version) {
         this.stats = result;
         this.clearBackendDegraded();
+        this.failedReads.stats = null;
       }
     } catch (error) {
       if (this.statsVersion === version) {
-        this.markBackendFailure(error);
-        console.warn("Failed to load sync stats:", error);
+        this.markBackendFailure(error, "stats");
       }
     }
   }
@@ -244,11 +287,12 @@ class SyncStore {
       fileReferences.enabled = this.serverVersion.docbank_enabled === true;
       events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
+      this.failedReads.version = null;
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
       events.settleStartup();
       if (updateBackendHealth) {
-        this.markBackendFailure(error);
+        this.markBackendFailure(error, "version");
       }
       console.warn("Failed to load version info:", error);
     }
@@ -359,7 +403,11 @@ class SyncStore {
     return true;
   }
 
-  watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
+  watchSession(
+    sessionId: string,
+    onUpdate: () => Promise<boolean>,
+    onTiming?: (t: SessionTiming) => void,
+  ) {
     this.unwatchSession();
     let settle!: (seen: boolean) => void;
     const ready = new Promise<boolean>((resolve) => {
@@ -370,16 +418,36 @@ class SyncStore {
       };
     });
     const open = () => {
-      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+      this.closeSessionStream();
+      let generation = 0;
+      const refresh = (event?: Event) => {
+        const current = ++generation;
+        const receipt = (event as (Event & { receipt?: string }) | undefined)?.receipt;
+        void onUpdate().then((success) => {
+          if (
+            success &&
+            receipt !== undefined &&
+            current === generation &&
+            this.watchEventSource === es
+          )
+            es.acknowledge(receipt);
+        });
+      };
+      this.watchEventSource = watchSession(sessionId, refresh, onTiming);
       const es = this.watchEventSource;
       es.addEventListener("error", () => {
         if (this.watchEventSource !== es) return;
         settle(false);
       });
-      es.addEventListener("session_ready", () => {
+      es.addEventListener("session_missing", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+        refresh();
+      });
+      es.addEventListener("session_ready", (event) => {
         if (this.watchEventSource !== es) return;
         settle(true);
-        onUpdate();
+        refresh(event);
       });
     };
     if (typeof document === "undefined") {
@@ -392,7 +460,7 @@ class SyncStore {
       } else if (!this.watchEventSource || this.watchEventSource.readyState === 2) {
         open();
         // A rejected reconnect, such as a deleted session's 404, never sends session_ready.
-        onUpdate();
+        void onUpdate();
       }
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);

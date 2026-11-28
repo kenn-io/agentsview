@@ -13,6 +13,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -32,6 +33,9 @@ type ConversationExportOptions struct {
 	Checkpoint string
 	Cursor     string
 	Limit      int
+	// ToolSummaries adds a tool_summary change for each session whose tool
+	// calls changed.
+	ToolSummaries bool
 }
 
 // ConversationSession describes the session independently of optional usage summaries.
@@ -54,6 +58,8 @@ type ConversationChange struct {
 	Digest    string                  `json:"digest"`
 	TextBytes int64                   `json:"text_bytes"`
 	Project   export.ProjectReference `json:"project"`
+	// ToolSummary is set on a live tool_summary change whose calls are stored.
+	ToolSummary *ConversationToolSummary `json:"tool_summary,omitempty"`
 }
 
 type ConversationExportResult struct {
@@ -103,6 +109,12 @@ type conversationPosition struct {
 	Through    int64  `json:"through,string"`
 	// Pruned is the tombstone floor when this position was issued.
 	Pruned int64 `json:"pruned,string,omitempty"`
+	// ToolAfter and ToolThrough are this walk's place in the tool journal,
+	// which has its own revisions. A position issued without tool summaries
+	// has neither, so the first walk that asks for them starts from the
+	// beginning of the journal.
+	ToolAfter   int64 `json:"tool_summary_after,string,omitzero"`
+	ToolThrough int64 `json:"tool_summary_through,string,omitzero"`
 }
 
 const conversationChangeColumns = `session_id, message_id, CAST(revision AS TEXT), ordinal,
@@ -177,6 +189,13 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if err != nil {
 		return result, err
 	}
+	// After the identity check: a cold archive gains the journal from the
+	// writable open that builds its index.
+	if opts.ToolSummaries {
+		if err := requireConversationToolSchema(ctx, tx); err != nil {
+			return result, err
+		}
+	}
 	var current int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = ?), 0)`, conversationRevisionKey).Scan(&current); err != nil {
 		return result, err
@@ -218,18 +237,50 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if more {
 		result.Changes = result.Changes[:opts.Limit]
 	}
-	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, result.Changes, mode); err != nil {
-		return result, err
-	}
 	position.Version, position.DatabaseID, position.TextMode, position.Pruned = 1, result.DatabaseID, mode, pruned
 	if more {
-		position.Kind = "cursor"
 		position.After, err = strconv.ParseInt(result.Changes[len(result.Changes)-1].Revision, 10, 64)
 		if err != nil {
 			return result, err
 		}
 	} else {
-		position.Kind, position.After = "checkpoint", position.Through
+		position.After = position.Through
+	}
+	if !opts.ToolSummaries {
+		position.ToolAfter, position.ToolThrough = 0, 0
+	} else {
+		// A walk that starts asking, or starts over, reads the journal through
+		// its current head.
+		if opts.Cursor == "" || position.ToolThrough == 0 {
+			position.ToolThrough, err = archiveJournalRevision(ctx, tx, conversationToolRevisionKey, "conversation tool")
+			if err != nil {
+				return result, err
+			}
+		}
+		// Summaries follow the walk's message and session changes.
+		if !more {
+			summaries, remaining, err := conversationToolChangesTx(ctx, tx, position.ToolAfter, position.ToolThrough, opts.Limit-len(result.Changes))
+			if err != nil {
+				return result, err
+			}
+			if len(summaries) > 0 {
+				position.ToolAfter, err = strconv.ParseInt(summaries[len(summaries)-1].Revision, 10, 64)
+				if err != nil {
+					return result, err
+				}
+			}
+			result.Changes, more = append(result.Changes, summaries...), remaining
+		}
+	}
+	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, result.Changes, mode); err != nil {
+		return result, err
+	}
+	if err := attachConversationToolSummaries(ctx, tx, result.Changes, time.Now().UTC()); err != nil {
+		return result, err
+	}
+	position.Kind = "checkpoint"
+	if more {
+		position.Kind = "cursor"
 	}
 	data, err := json.Marshal(position)
 	if err != nil {

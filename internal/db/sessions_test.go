@@ -600,8 +600,8 @@ func TestUpsertSessionNameOwnership(t *testing.T) {
 
 // TestGetSessionFullPopulatesSessionName verifies that GetSessionFull
 // keeps the raw session_name on the Go struct while DisplayName carries
-// the visible name (user rename, else session_name), matching the PG and
-// DuckDB GetSessionFull implementations. session_name is a backend-only
+// the visible name (user rename, else session_name), matching the replica
+// GetSessionFull implementations. session_name is a backend-only
 // field: it is NOT serialised in JSON responses (json:"-" on
 // Session.SessionName). Push paths that need display_name unmerged read
 // via ListSessionsModifiedBetween, not GetSessionFull.

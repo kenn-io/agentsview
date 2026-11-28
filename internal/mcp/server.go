@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 const (
 	ToolSearchSessions       = "search_sessions"
 	ToolQueryRecall          = "query_recall"
+	ToolListRecall           = "list_recall"
 	ToolListSessions         = "list_sessions"
 	ToolGetSessionOverview   = "get_session_overview"
 	ToolGetMessages          = "get_messages"
@@ -41,12 +43,26 @@ const (
 	ToolGetActivityReport    = "get_activity_report"
 	ToolGetToolUsage         = "get_tool_usage"
 	ToolGetQualitySignals    = "get_quality_signals"
+	ToolGetTermTrends        = "get_term_trends"
 	ToolSearchDocs           = "search_docs"
 	ToolGetFrictionDigest    = "get_friction_digest"
 	ToolListFrictionPatterns = "list_friction_patterns"
 )
 
 const ToolGetSessionFileReferences = "get_session_file_references"
+
+const ToolGetCompactionSummaries = "get_compaction_summaries"
+
+var routeInstructions = "\nFind sessions by topic: use " + ToolSearchContent + " with mode hybrid, or " + ToolSearchSessions + " for keywords.\n" +
+	"Find a named session: use " + ToolSearchSessions + " with its name as query.\n" +
+	"Find who owns a PR or task:\n" +
+	"Use " + ToolListSessions + " with pr=owner/repo#N, include_one_shot and include_automated true; page with next_cursor as cursor.\n" +
+	"For every PR, including a URL, use " + ToolSearchContent + " with mode regex and each pattern: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b; for a task ID, use mode substring. Set include_active, include_one_shot, and include_automated true, and current_session_id if known; page with next_cursor as cursor.\n" +
+	"Discard the lookup session, identifying it by this question or search calls if its ID is unknown. Confirm repository and work evidence; use " + ToolGetSessionOverview + " to compare activity, follow children to their parent, and choose the newest valid top-level session.\n" +
+	"See what a session did: use " + ToolGetSessionOverview + ", then " + ToolGetToolCalls + ", " + ToolGetMessages + ", or " + ToolGetChildSessions + ".\n" +
+	"Find recently active sessions: use " + ToolListSessions + " with active_since as an RFC3339 timestamp.\n" +
+	"Session tools accept a stored ID such as codex:<uuid>. A plain UUID works locally or against a --server with API version " + strconv.Itoa(service.RawSessionLookupAPIVersion) + " or later; for an older --server, use the full stored ID from search or list results.\n" +
+	"Results can hide sessions unless a flag is set: include_active in " + ToolSearchSessions + " and " + ToolSearchContent + "; include_one_shot and include_automated in " + ToolListSessions + " and " + ToolSearchContent + "."
 
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
@@ -79,6 +95,7 @@ func ParseProfile(name string) (Profile, error) {
 // tests can control the self-reference exclusion window (defaults to
 // time.Now).
 type ServeOptions struct {
+	CallLogDir         string
 	DiscoveryDirectory string
 	BackendURL         string
 	Service            service.SessionService
@@ -101,6 +118,10 @@ func newServer(opts ServeOptions) *mcp.Server {
 	if version == "" {
 		version = "dev"
 	}
+	instructions := "Use returned web_url values when linking to recorded sessions."
+	if opts.Profile != ProfileMemory {
+		instructions += routeInstructions
+	}
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:       "agentsview",
 		Title:      "agentsview session history",
@@ -111,7 +132,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 			MIMEType: "image/png",
 			Sizes:    []string{"256x256"},
 		}},
-	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
+	}, &mcp.ServerOptions{Instructions: instructions})
+
+	s.AddReceivingMiddleware(argumentHints)
 
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
@@ -119,9 +142,26 @@ func newServer(opts ServeOptions) *mcp.Server {
 				return next(ctx, method, request)
 			}
 			ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+			start := time.Now()
 			result, err := next(ctx, method, request)
+			elapsed := time.Since(start)
 			if call, ok := result.(*mcp.CallToolResult); ok && call != nil && stale() {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
+			}
+			if req, ok := request.(*mcp.CallToolRequest); ok {
+				var tool *mcp.Tool
+				if call, ok := result.(*mcp.CallToolResult); opts.CallLogDir != "" && req.Params != nil && ok && call != nil && call.IsError {
+					listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session})
+					if list, ok := listed.(*mcp.ListToolsResult); listErr == nil && ok {
+						for _, item := range list.Tools {
+							if item.Name == req.Params.Name {
+								tool = item
+								break
+							}
+						}
+					}
+				}
+				warnCallLogFailure(recordToolCall(opts.CallLogDir, req, result, err, elapsed, tool))
 			}
 			return result, err
 		}
@@ -141,6 +181,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 	memoryOnly := opts.Profile == ProfileMemory
 
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
+
 	if !memoryOnly {
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
@@ -152,15 +194,18 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
 				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
 				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
-				"unless include_active is set. Set session_id to look up one raw UUID or full stored ID. " +
+				"unless include_active is set. Empty pages with excluded active sessions return a hints entry " +
+				"with code: excluded_active, the count, and retry_with. " +
+				"Set session_id to look up one raw UUID or full stored ID. " +
 				"That lookup returns one metadata row, includes active sessions, ignores other search " +
 				"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
 				"match_ordinal is 0; call get_messages with that anchor for the first message. " +
-				"Use get_session_overview for a known full ID when you need a message preview.",
+				"Use get_session_overview when you need a message preview.",
 			Annotations: readOnly,
 		}, t.searchSessions)
 
 		if service.SupportsRecallQueries(opts.Service) {
+			mcp.AddTool(s, &mcp.Tool{Name: ToolListRecall, Description: "List distilled recall entries without a query. Lists bounded by updated_since or created_since return the oldest change first and include every status.", Annotations: readOnly}, t.listRecall)
 			mcp.AddTool(s, &mcp.Tool{
 				Name: ToolQueryRecall,
 				Description: "Search distilled knowledge extracted from prior sessions. " +
@@ -217,8 +262,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
-			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. On SQLite, a substring search of several words lists exact text first, " +
+			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea; concepts always use semantic mode. " +
+			"Use session_id without pattern or concepts to list messages. " +
+			"The default mode remains substring. On SQLite, PostgreSQL, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +
@@ -252,10 +298,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.sessionUsage)
 
 		mcp.AddTool(s, &mcp.Tool{
-			Name: ToolGetToolCalls,
-			Description: "List the tool calls one session made, in order: tool name, category, input, and " +
-				"result size. Filter by category (for example Edit, Write, or Bash) to see what the agent " +
-				"ran or changed. Inputs have secret-shaped values masked and are cut to max_input_chars.",
+			Name:        ToolGetToolCalls,
+			Description: "List tool calls with masked inputs. Set include_results for saved results and events.",
 			Annotations: readOnly,
 		}, t.toolCalls)
 
@@ -302,6 +346,16 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"also get example sessions for one signal.",
 			Annotations: readOnly,
 		}, t.qualitySignals)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetTermTrends,
+			Description: "Legacy term-frequency counts over time, kept for agent harnesses that used the " +
+				"removed Trends page. Counts case-insensitive matches of each term in user and assistant " +
+				"messages, by day, week (default), or month, with each bucket's message count for computing " +
+				"rates. Up to 12 terms; join variants with | to count them as one series, e.g. " +
+				"\"load bearing | load-bearing\". Use the search tools to find prior work.",
+			Annotations: readOnly,
+		}, t.termTrends)
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchDocs,

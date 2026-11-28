@@ -35,6 +35,16 @@ async function installMessages(
 ) {
   const control = { failTail: options.failTail ?? false };
   const hidden = options.hidden ?? ["thinking", "code", "system"];
+  if (options.failTail) {
+    // This fixture owns history recovery. A late live-stream readiness event
+    // can start a background reload that removes the manual retry button.
+    // Keep stream requests in the page where Playwright can intercept them.
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "SharedWorker", { value: undefined });
+    });
+    // HTTP 204 ends an event stream without reconnecting.
+    await page.route("**/api/v1/events*", (route) => route.fulfill({ status: 204 }));
+  }
   await page.addInitScript(
     ({ filters }) => {
       localStorage.setItem("agentsview-block-filters", filters);

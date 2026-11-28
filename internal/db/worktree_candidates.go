@@ -201,7 +201,7 @@ func (db *DB) worktreeCandidatesFromSelection(
 // machine/path worktree reclassification candidates, using snapshot
 // evidence first, then compatible aggregate observation evidence, then an
 // exact-cwd fallback. It is the single implementation of the grouping
-// pipeline shared by every backend (SQLite, PostgreSQL, DuckDB): each
+// pipeline shared by every backend (SQLite, PostgreSQL, ClickHouse): each
 // backend loads its own WorktreeCandidateSession rows and
 // export.ProjectIdentityObservation list, then calls this function.
 func BuildWorktreeCandidates(

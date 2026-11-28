@@ -1,6 +1,7 @@
 <script module lang="ts">
-  import type {
-    DisplayItem as PromptDisplayItem,
+  import {
+    primaryOrdinal,
+    type DisplayItem as PromptDisplayItem,
   } from "./lib/utils/display-items.js";
 
   export function findUserPromptOrdinal(
@@ -17,7 +18,7 @@
       switch (item.kind) {
         case "message":
           return [{
-            ordinal: item.ordinals[0]!,
+            ordinal: primaryOrdinal(item),
             prompt: item.message.role === "user" && !item.message.is_system,
           }];
         case "tool-group":
@@ -55,6 +56,7 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
+  import StateNotice from "./lib/components/shared/StateNotice.svelte";
   import SessionVitals from "./lib/components/content/SessionVitals.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
@@ -71,7 +73,6 @@
   import EmptyArchivePanel from "./lib/components/content/EmptyArchivePanel.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
-  import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
   import RecallPage from "./lib/components/recall/RecallPage.svelte";
   import QualityPage from "./lib/components/quality/QualityPage.svelte";
   import FrictionPage from "./lib/components/friction/FrictionPage.svelte";
@@ -98,8 +99,10 @@
     type PanelDateState,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
+  import { documentTitle } from "./lib/utils/documentTitle.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
+  import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
@@ -114,6 +117,12 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  let remoteLiveAllowed = $derived(sync.remoteLiveAllowed);
+  let title = $derived(documentTitle({
+    route: router.route,
+    needsAuth: settings.needsAuth,
+    sessionId: router.sessionId,
+  }));
   function handleGlobalAuth() {
     const token = globalAuthToken.trim();
     if (!token) return;
@@ -136,20 +145,25 @@
       }
     | undefined = $state(undefined);
 
-  // Load active session's messages when selection changes.
-  // Only track activeSessionId and activeSessionLoadVersion (bumped
-  // when a not-found session recovers, so the same id reloads) —
-  // untrack the rest to prevent reactive loops from
-  // messages.loading / messages.messages.
+  // Reload messages when the route, selection, recovery version, or remote live availability changes.
+  // Untrack message state to prevent reactive loops.
   let lastMessageLoadSessionId: string | null = null;
+  let lastMessageLoadRoute: typeof router.route | null = null;
+  let lastMessageLoadVersion: number | null = null;
+  let lastMessageLoadLiveAllowed: boolean | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
-    void sessions.activeSessionLoadVersion;
+    const liveAllowed = remoteLiveAllowed;
+    const loadVersion = sessions.activeSessionLoadVersion;
     let current = true;
     untrack(() => {
       const idChanged = id !== lastMessageLoadSessionId;
+      const liveOnly = !idChanged && route === lastMessageLoadRoute && loadVersion === lastMessageLoadVersion && liveAllowed !== lastMessageLoadLiveAllowed;
       lastMessageLoadSessionId = id;
+      lastMessageLoadRoute = route;
+      lastMessageLoadVersion = loadVersion;
+      lastMessageLoadLiveAllowed = liveAllowed;
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
@@ -174,7 +188,7 @@
         (ui.pendingScrollSession === null ||
           ui.pendingScrollSession === id ||
           (!idChanged && ui.pendingScrollSession === router.sessionId));
-      if (!pendingMatchesSession) {
+      if (!pendingMatchesSession && !liveOnly) {
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
         ui.pendingScrollSession = null;
@@ -183,22 +197,21 @@
         if (ui.isMobileViewport) {
           ui.closeSidebar();
         }
-        const ready = sync.watchSession(
+        const ready = liveAllowed ? sync.watchSession(
           id,
-          () => {
-            messages.reload();
-            sessions.refreshActiveSession();
-            sessions.loadChildSessions(id);
+          async () => {
+            const reads = [messages.reload(), sessions.refreshActiveSession(), sessions.loadChildSessions(id)];
             if (ui.vitalsOpen) {
-              sessionActivity.reload(id);
+              reads.push(sessionActivity.reload(id));
             } else {
               sessionActivity.invalidate();
             }
+            return (await Promise.all(reads)).every(Boolean) && current;
           },
           (t) => {
             sessionTiming.applyEvent(t);
           },
-        );
+        ) : Promise.resolve(false);
         messages.loadSession(id, ready);
         void ready.then((seen) => {
           if (!seen && current) sessions.loadChildSessions(id);
@@ -309,7 +322,7 @@
     const selected = ui.selectedOrdinal;
     if (selected === null) {
       const first = sorted[0]!;
-      navigateToMessageOrdinal(first.ordinals[0]!);
+      navigateToMessageOrdinal(primaryOrdinal(first));
       return;
     }
 
@@ -323,7 +336,7 @@
     if (nextIdx === curIdx) return;
 
     const next = sorted[nextIdx]!;
-    navigateToMessageOrdinal(next.ordinals[0]!);
+    navigateToMessageOrdinal(primaryOrdinal(next));
   }
 
   function navigateUserPrompt(delta: number) {
@@ -652,7 +665,7 @@
     let page: string | null = null;
     if (route === "usage" || route === "token-usage") {
       page = "usage";
-    } else if (route === "activity" || route === "trends" || route === "quality") {
+    } else if (route === "activity" || route === "quality") {
       page = route;
     }
     untrack(() => {
@@ -683,28 +696,29 @@
     });
   });
 
+  let linkedMsgParam = $derived(router.params["msg"] ?? null);
+  let linkedCallParam = $derived(router.params["call"]);
+  let linkedToolUseId = $derived(router.params["tool_use_id"]);
+  let linkedRevision = $derived(router.params["rev"]);
+  let linkedFingerprint = $derived(router.params["fp"]);
+
   // Deep-link: apply the ?msg param. Kept separate from the
   // hydration effect above so scroll intent is not re-applied
   // every time hydration state changes.
   $effect(() => {
     const sid = router.sessionId;
-    const msgParam = router.params["msg"] ?? null;
-    const call = parseScrollCall(
-      router.params["call"],
-      router.params["tool_use_id"],
-      router.params["rev"],
-      router.params["fp"],
-    );
+    const msgParam = linkedMsgParam;
+    const call = parseScrollCall(linkedCallParam, linkedToolUseId, linkedRevision, linkedFingerprint);
     untrack(() => {
+      ui.linkedMessage = null;
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
-      } else {
-        const ordinal = parseInt(msgParam, 10);
-        if (Number.isFinite(ordinal)) {
-          ui.scrollToOrdinal(ordinal, sid, call);
-        }
+      } else if (/^\d+$/.test(msgParam)) {
+        const ordinal = Number(msgParam);
+        ui.linkedMessage = { sessionId: sid, ordinal };
+        ui.scrollToOrdinal(ordinal, sid, call);
       }
     });
   });
@@ -852,6 +866,8 @@
 
 </script>
 
+<svelte:head><title>{title}</title></svelte:head>
+
 {#if settings.needsAuth && router.route !== "settings"}
   <div class="auth-overlay">
     <div class="auth-card">
@@ -902,10 +918,6 @@
   <div class="page-scroll">
     <ActivityPage />
   </div>
-{:else if router.route === "trends"}
-  <div class="page-scroll">
-    <TrendsPage />
-  </div>
 {:else if router.route === "recall"}
   <div class="page-scroll">
     <RecallPage />
@@ -951,6 +963,16 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
+        {#if !remoteLiveAllowed && sync.serverVersion}
+          <StateNotice
+            class="session-live-notice"
+            role="status"
+            description={m.settings_remote_live_updates_unavailable({
+              apiVersion: String(sync.serverVersion.api_version),
+              requiredVersion: String(LIVE_SESSION_API_VERSION),
+            })}
+          />
+        {/if}
         <MessageList bind:this={messageListRef} />
       {:else if sessions.archiveEmpty}
         <EmptyArchivePanel />
@@ -1051,6 +1073,17 @@
        right-aligned controls do not shift when content first makes the page
        scroll. */
     scrollbar-gutter: stable;
+  }
+
+  /* Match the transcript's reading column and scrollbar inset. */
+  :global(.session-live-notice) {
+    --column-inset: calc((100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2);
+    flex-shrink: 0;
+    margin: 8px calc(max(12px, var(--column-inset)) + var(--transcript-scrollbar, 0px)) 0 max(12px, var(--column-inset));
+  }
+
+  :global(.session-live-notice .state-notice__description) {
+    color: var(--accent-amber, #f59e0b);
   }
 
   /* Settings and Data scroll inside their own panes. Keep these hosts apart from

@@ -164,7 +164,7 @@ type rawGenAIMatch struct {
 // FetchGenAIPricesContext downloads and parses the current GenAI Prices v2
 // document. The returned value retains the upstream JSON for persistence.
 func FetchGenAIPricesContext(ctx context.Context) (*GenAIPrices, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newClient()
 	return fetchGenAIPrices(ctx, client, GenAIPricesURL)
 }
 
@@ -173,7 +173,7 @@ func FetchGenAIPricesContext(ctx context.Context) (*GenAIPrices, error) {
 func FetchGenAIPricesAtRef(
 	ctx context.Context, ref string,
 ) (*GenAIPrices, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newClient()
 	return fetchGenAIPrices(
 		ctx, client, genAIPricesBaseURL+ref+"/"+genAIPricesPath,
 	)

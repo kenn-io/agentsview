@@ -643,20 +643,20 @@ func TestPGSearchSnippetMatchingField(t *testing.T) {
 	assert.Equal(t, "snippetfieldterm in first message", r.Snippet)
 }
 
+// messagesTestSchema is the schema the GetMessages tests read through.
+const messagesTestSchema = "agentsview_messages_test"
+
 // TestGetMessagesIsSystemField verifies that GetMessages and GetAllMessages
 // correctly populate db.Message.IsSystem from the is_system column.
 func TestGetMessagesIsSystemField(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_is_system_test"
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(t.Context(), `
@@ -704,16 +704,13 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 // GetMessages/GetAllMessages consumers see these fields at parity.
 func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_toolcall_fields_test"
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(t.Context(), `
@@ -771,16 +768,13 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 // and CallRow.MessageID in session_timing.go.
 func TestGetMessagesIDPopulated(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_msg_id_test"
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(t.Context(), `

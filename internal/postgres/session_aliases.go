@@ -12,7 +12,7 @@ import (
 )
 
 func replacePGSessionAliases(
-	ctx context.Context, tx *sql.Tx, sess db.Session,
+	ctx context.Context, tx pgSessionExecer, sess db.Session,
 ) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM session_aliases WHERE session_id = $1`,

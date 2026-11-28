@@ -6,15 +6,16 @@ const mocks = vi.hoisted(() => ({
   getMarkdownExportUrl: vi.fn().mockReturnValue("/api/v1/sessions/sess-123/md"),
   copyToClipboard: vi.fn().mockResolvedValue(true),
   reportTelemetry: vi.fn(),
-  syncClaudeAI: vi.fn(),
+  syncBrowser: vi.fn(),
 }));
 
 vi.mock("../../utils/telemetry.js", () => ({ reportTelemetry: mocks.reportTelemetry }));
 
-vi.mock("../../api/client.js", () => ({
+vi.mock("../../api/client.js", async (original) => ({
+  relayHost: (await original<typeof import("../../api/client.js")>()).relayHost,
   downloadExport: mocks.downloadExport,
   getMarkdownExportUrl: mocks.getMarkdownExportUrl,
-  syncClaudeAI: mocks.syncClaudeAI,
+  syncBrowser: mocks.syncBrowser,
 }));
 
 vi.mock("../../utils/clipboard.js", () => ({
@@ -26,7 +27,7 @@ import { sync } from "../../stores/sync.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { router } from "../../stores/router.svelte.js";
-import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
+import { browserSync } from "../../stores/browserSync.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import type { Session } from "../../api/types.js";
 
@@ -179,22 +180,28 @@ describe("AppHeader export actions", () => {
     },
   );
 
-  it("shows a visible Import button only while Claude.ai Sync runs", async () => {
-    mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
-    component = mount(AppHeader, { target: document.body });
-    await tick();
-    expect(document.querySelector(".import-btn")).toBeNull();
-    void claudeAISync.start(undefined, () => {});
-    await tick();
-    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-    expect(importButton.getAttribute("aria-label")).toBe(
-      "Claude.ai Sync is running. Open Import to see progress or stop it.",
-    );
-    expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
-    claudeAISync.stop();
-    await tick();
-    expect(document.querySelector(".import-btn")).toBeNull();
-  });
+  it.each([
+    ["claude-ai", "Claude.ai"],
+    ["chatgpt", "ChatGPT"],
+  ] as const)(
+    "shows a visible Import button only while %s Sync runs",
+    async (platform, service) => {
+      mocks.syncBrowser.mockReturnValue(new Promise(() => {}));
+      component = mount(AppHeader, { target: document.body });
+      await tick();
+      expect(document.querySelector(".import-btn")).toBeNull();
+      void browserSync.start(platform, undefined, () => {});
+      await tick();
+      const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
+      expect(importButton.getAttribute("aria-label")).toBe(
+        `${service} Sync is running. Open Import to see progress or stop it.`,
+      );
+      expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
+      browserSync.stop();
+      await tick();
+      expect(document.querySelector(".import-btn")).toBeNull();
+    },
+  );
 
   it("leaves the transcript controls to the session header on wide screens", async () => {
     component = mount(AppHeader, { target: document.body });
@@ -347,7 +354,6 @@ describe("AppHeader export actions", () => {
       "Sessions",
       "Usage",
       "Activity",
-      "Trends",
       "Recall",
       "Pinned",
       "Quality",

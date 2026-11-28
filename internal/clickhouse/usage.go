@@ -45,17 +45,14 @@ func chLoadPricing(
 	out := map[string]export.ModelRates{}
 	count := 0
 	for _, p := range rows {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := db.ModelPricingRates(p)
 		out[p.ModelPattern] = rates
 		count++
 	}
 	if count == 0 {
-		out = db.FallbackPricingMap()
+		out = db.FallbackRateMap()
 	} else {
-		fallback := db.FallbackPricingMap()
+		fallback := db.FallbackRateMap()
 		for model, rates := range out {
 			rates.Source = db.ModelPricingSource(model, rates, fallback)
 			out[model] = rates
@@ -149,7 +146,6 @@ SELECT
 	cu.occurred_at AS pricing_ts,
 	if(cu.model = '', '<unknown>', cu.model) AS model,
 	'' AS provider_id,
-	'' AS token_json,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -181,9 +177,6 @@ const chUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
 			AND m.model != '<synthetic>'`
-
-const chUsageMessageEligibility = chUsageMessageSourceEligibility + `
-			AND s.deleted_at IS NULL`
 
 const chUsageMatchingMessageSourceEligibility = `
 			m.role = 'assistant'
@@ -237,7 +230,7 @@ func chUsageSourceWheres(
 
 func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
-		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
+		f, sessionID, chUsageStoredMessageEligibility, chUsageBoundsForFilter(f))
 	return chUsageRawSQLFromWheres(
 		false, messageWhere, messageArgs, eventWhere, eventArgs)
 }
@@ -261,26 +254,10 @@ const chUsageUnjoinedSessionColumns = `
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at`
 
-// chUsageRawMessageUsage selects a messages row's usage. Message rows carry
-// the token JSON, which chUsageRawNormSource reads.
-var chUsageRawMessageUsage = `m.token_usage AS token_json,
-			m.claude_message_id AS claude_message_id,
-			m.claude_request_id AS claude_request_id,
-			m.source_uuid AS source_uuid,
-			'' AS usage_dedup_key,
-				0 AS input_tokens, 0 AS output_tokens,
-				0 AS cache_create, 0 AS cache_read,
-				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
-				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
-				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
-				NULL AS cost_microdollars, '' AS cost_source,
-				` + chRecordedCostSQL("m.token_usage") + ` AS recorded_cost_microdollars,`
-
 // chUsageStoredMessageUsage selects a usage_messages row's usage. The view
 // extracted the counters from the token JSON at insert time, so message rows
 // carry them in the counter columns, which chUsageStoredNormSource reads.
-const chUsageStoredMessageUsage = `'' AS token_json,
-			m.claude_message_id AS claude_message_id,
+const chUsageStoredMessageUsage = `m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
@@ -293,29 +270,27 @@ const chUsageStoredMessageUsage = `'' AS token_json,
 				m.` + usageRecordedCostColumn + ` AS recorded_cost_microdollars,`
 
 // chUsageRawSQLFromWheres renders the message and usage-event raw rows.
-// Readers join each row's session and read messages.
+// Message usage comes from usage_messages, whose counters the view extracted
+// from the token JSON at insert time, so no read parses the JSON again. The
+// table holds only the usage columns and indexes every 64 rows; reading
+// messages instead read whole index granules of the wide table: about 1.5
+// million rows for 100 sessions that held under 3,000 usage rows on a
+// production mirror. Callers normalize with chUsageStoredNormSource.
 //
-// pricing renders the rows for push pricing, which reads them without their
-// sessions: no pricing input comes from the session, and a batch is priced
-// before its session rows land. Its rows then carry empty session columns,
-// and ts is the row's own timestamp. It reads message usage from
-// usage_messages, which holds only the usage columns and indexes every 64
-// rows. Reading messages instead read whole index granules of the wide table
-// for each session in a batch: about 1.5 million rows for 100 sessions that
-// held under 3,000 usage rows on a production mirror. Pricing callers
-// normalize with chUsageStoredNormSource.
+// Readers join each row's session. pricing renders the rows for push
+// pricing, which reads them without their sessions: no pricing input comes
+// from the session, and a batch is priced before its session rows land. Its
+// rows then carry empty session columns, and ts is the row's own timestamp.
 func chUsageRawSQLFromWheres(
 	pricing bool, messageWhere string, messageArgs []any,
 	eventWhere string, eventArgs []any,
 ) (string, []any) {
 	messageTS, eventTS := "m.timestamp", "ue.occurred_at"
-	messageFrom, messageUsage := "usage_messages m", chUsageStoredMessageUsage
 	messageJoin, eventJoin := "", ""
 	sessionColumns := chUsageUnjoinedSessionColumns
 	if !pricing {
 		messageTS = "COALESCE(m.timestamp, s.started_at)"
 		eventTS = "COALESCE(ue.occurred_at, s.started_at)"
-		messageFrom, messageUsage = "messages m", chUsageRawMessageUsage
 		messageJoin = "\n\t\tJOIN sessions s ON s.id = m.session_id"
 		eventJoin = "\n\t\tJOIN sessions s ON s.id = ue.session_id"
 		sessionColumns = chUsageJoinedSessionColumns
@@ -325,13 +300,13 @@ func chUsageRawSQLFromWheres(
 			'message' AS source, %[1]s AS ts,
 			m.timestamp AS pricing_ts,
 			m.model AS model, m.provider_id AS provider_id, %[8]s%[5]s
-		FROM %[9]s%[3]s
+		FROM usage_messages m%[3]s
 		WHERE %[6]s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, %[2]s AS ts,
 			ue.occurred_at AS pricing_ts,
-			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+			ue.model AS model, ue.provider_id AS provider_id,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
 			if(ue.dedup_key != '',
@@ -349,7 +324,7 @@ func chUsageRawSQLFromWheres(
 		FROM usage_events ue%[4]s
 		WHERE %[7]s`,
 		messageTS, eventTS, messageJoin, eventJoin, sessionColumns,
-		messageWhere, eventWhere, messageUsage, messageFrom)
+		messageWhere, eventWhere, chUsageStoredMessageUsage)
 	args := make([]any, 0, len(messageArgs)+len(eventArgs))
 	args = append(args, messageArgs...)
 	args = append(args, eventArgs...)
@@ -526,7 +501,7 @@ func chPreparedUsageRawSQLWith(
 func chPreparedUsageRawSelect() string {
 	return `p.session_id AS session_id, p.message_ordinal AS message_ordinal,
 			p.source AS source, p.ts AS ts, p.pricing_ts AS pricing_ts,
-			p.model AS model, p.provider_id AS provider_id, '' AS token_json,
+			p.model AS model, p.provider_id AS provider_id,
 			p.claude_message_id AS claude_message_id,
 			p.claude_request_id AS claude_request_id,
 			p.source_uuid AS source_uuid,
@@ -743,12 +718,12 @@ func (s *Store) dailyUsageCTE(
 func chUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := chUsageRawSQL(
 		chUsageSnapshotInputFilter(f), sessionID)
-	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageRawNormSource(), sessionID)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageStoredNormSource(), sessionID)
 }
 
 func chDailyUsageCTE(f db.UsageFilter) (string, []any) {
 	rawSQL, args := chDailyUsageRawSQL(f)
-	return chUsageCTEFromRaw(f, rawSQL, args, true)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageStoredNormSource(), "")
 }
 
 func chUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -788,46 +763,22 @@ func chPriceModelCaseSQL() string {
 	return b.String()
 }
 
-func chClampedJSONInt(jsonExpr string, keys ...string) string {
-	args := make([]string, 0, 1+len(keys))
-	args = append(args, jsonExpr)
-	for _, key := range keys {
-		args = append(args, chSQLString(key))
-	}
-	return chClampTokens("JSONExtractInt(" + strings.Join(args, ", ") + ")")
-}
-
 // chClampTokens clamps a token count expression to [0, db.MaxPlausibleTokens].
 func chClampTokens(expr string) string {
 	return fmt.Sprintf("least(greatest(%s, 0), %d)", expr, db.MaxPlausibleTokens)
 }
 
 // chUsageNormSource holds the per-row expressions usage_normalized computes
-// for message rows. Raw rows carry the message's token JSON; prepared rows
-// already carry the normalized counters.
+// for message rows. Stored rows carry the counters the usage_messages view
+// extracted; prepared rows already carry the normalized counters.
 type chUsageNormSource struct {
 	input, output, cacheCreate, cacheCreate1h, cacheRead, reasoning, web string
 	priceModel, priceKey                                                 string
 }
 
-func chUsageRawNormSource() chUsageNormSource {
-	return chUsageNormSource{
-		input:         chClampedJSONInt("token_json", "input_tokens"),
-		output:        chClampedJSONInt("token_json", "output_tokens"),
-		cacheCreate:   chClampedJSONInt("token_json", "cache_creation_input_tokens"),
-		cacheCreate1h: chClampedJSONInt("token_json", "cache_creation", "ephemeral_1h_input_tokens"),
-		cacheRead:     chClampedJSONInt("token_json", "cache_read_input_tokens"),
-		reasoning:     chClampedJSONInt("token_json", "reasoning_tokens"),
-		web:           "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), 0)",
-		priceModel:    chPriceModelCaseSQL(),
-		priceKey:      chUsagePriceKeySQL,
-	}
-}
-
-// chUsageStoredNormSource normalizes the message rows push pricing reads
-// from usage_messages, whose counters arrive in the counter columns. It
-// clamps them as chUsageRawNormSource clamps the token JSON's values, so a
-// row gets the same price key from either table.
+// chUsageStoredNormSource normalizes the message rows read from
+// usage_messages, whose counters arrive in the counter columns. It clamps
+// them to [0, db.MaxPlausibleTokens].
 func chUsageStoredNormSource() chUsageNormSource {
 	return chUsageNormSource{
 		input:         chClampTokens("input_tokens"),
@@ -858,19 +809,13 @@ func chPreparedUsageNormSource() chUsageNormSource {
 	}
 }
 
-func chUsageCTEFromRaw(
-	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool,
-) (string, []any) {
-	return chUsageCTEFromRawSource(f, rawSQL, args, preferCompleteClaudeSnapshots, chUsageRawNormSource(), "")
-}
-
-// chUsageCTEFromRawSource renders the usage CTEs over rawSQL. sessionID names
-// the one session rawSQL is restricted to, or is empty for a read of many
-// sessions.
+// chUsageCTEFromRawSource renders the usage CTEs over rawSQL. localize adds
+// usage_localized after usage_normalized; without it the CTEs end at
+// usage_normalized. sessionID names the one session rawSQL is restricted to,
+// or is empty for a read of many sessions.
 func chUsageCTEFromRawSource(
 	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool, norms chUsageNormSource, sessionID string,
+	localize bool, norms chUsageNormSource, sessionID string,
 ) (string, []any) {
 	localDateSQL, localDateArg := chUsageLocalDateSQL(f)
 	priceModelSQL := norms.priceModel
@@ -884,7 +829,11 @@ func chUsageCTEFromRawSource(
 		datePred += " AND local_date <= ?"
 		dateArgs = append(dateArgs, f.To)
 	}
-	dedupCTE, dedupArgs := chUsageSnapshotDedupCTE(f, preferCompleteClaudeSnapshots, sessionID)
+	var dedupCTE string
+	var dedupArgs []any
+	if localize {
+		dedupCTE, dedupArgs = chUsageSnapshotDedupCTE(f, sessionID)
+	}
 	maxTok := db.MaxPlausibleTokens
 	query := fmt.Sprintf(`
 		WITH usage_raw AS (
@@ -915,7 +864,7 @@ func chUsageCTEFromRawSource(
 				%[13]s AS price_key
 			FROM usage_raw
 			WHERE %[3]s
-		),%[6]s`, rawSQL, localDateSQL, datePred, maxTok,
+		)%[6]s`, rawSQL, localDateSQL, datePred, maxTok,
 		priceModelSQL, dedupCTE,
 		norms.input, norms.output, norms.cacheCreate, norms.cacheCreate1h,
 		norms.cacheRead, norms.reasoning,
@@ -943,12 +892,10 @@ func chUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string
 
 // chUsageSnapshotDedupCTE renders usage_localized: the usage_normalized rows
 // that survive Claude snapshot ranking, the session and model filters, and
-// deduplication, with their session columns.
+// deduplication, with their session columns. The text starts with the comma
+// that separates it from usage_normalized.
 //
-// Without snapshot preference, rows deduplicate by dedup_group alone and keep
-// the session columns usage_raw gave them.
-//
-// With it, each Claude request keeps the row with the most output, credited
+// Each Claude request keeps the row with the most output, credited
 // to the session that saw the request first; every other row keeps the first
 // row of its dedup_group. Both rankings run as one window pass over the
 // columns they read, partitioned by the Claude request for Claude rows and by
@@ -958,32 +905,7 @@ func chUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string
 // columns from one read of sessions. Filters apply where the old per-stage
 // form applied them: before deduplication for other rows, and to the
 // credited session after ranking for Claude rows.
-func chUsageSnapshotDedupCTE(
-	f db.UsageFilter, preferCompleteClaudeSnapshots bool, sessionID string,
-) (string, []any) {
-	if !preferCompleteClaudeSnapshots {
-		evidenceSelect := ""
-		if f.PairwiseSides {
-			evidenceSelect = `,
-				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_models,
-				arrayFilter(value -> value != project, groupUniqArray(project) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_projects`
-		}
-		return `
-		usage_localized AS (
-			SELECT *,
-				row_number() OVER (
-					PARTITION BY dedup_group
-					ORDER BY ts ASC, session_id ASC,
-						COALESCE(message_ordinal, -1) ASC
-				) AS dedup_rank` + evidenceSelect + `
-			FROM usage_normalized
-			QUALIFY dedup_rank = 1
-		)`, nil
-	}
+func chUsageSnapshotDedupCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	var args []any
 	rowFilter, rowFilterArgs := chUsageSessionFilterSQL(f, "session_id", "model")
 	inputWhere := ""
@@ -1032,7 +954,7 @@ func chUsageSnapshotDedupCTE(
 	// Claude rows rank by most output, then latest; other rows by earliest.
 	// One ORDER BY serves both: each row's sort keys for the other kind are
 	// constant within its partition.
-	return `
+	return `,
 		usage_rank_input AS (
 			SELECT session_id, ts, message_ordinal, model,
 				output_tokens_norm, web_search_requests_norm,
@@ -1583,6 +1505,21 @@ func (s *Store) forEachDailyUsageGroupRow(
 			}
 		}
 	}
+	if !top {
+		if rows, ok := carryRawUsage(ctx, s, &s.dailyUsageRows, state, memoSlot, memoVersion, "daily", f, pricingDigest, customModels); ok {
+			if diskReady {
+				if data, err := kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+					s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
+				}
+			}
+			for _, row := range rows {
+				if err := visit(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
 	readCtx, err := withUsageDeltaTables(ctx, state)
 	if err != nil {
 		return err
@@ -1953,7 +1890,7 @@ func (s *Store) usagePricingForCatalog(
 ) (*export.PricingResolver, map[string]chUsagePriceContext, [][2]string, error) {
 	catalog := snapshot.catalog
 	resolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
-	contexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	contexts, err := s.usagePriceContexts(ctx, catalog.digest)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -2489,6 +2426,15 @@ func (s *Store) GetTopSessionsByCost(
 		}
 	}
 	if !ok {
+		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion,
+			"top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
+		if ok && diskReady {
+			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+			}
+		}
+	}
+	if !ok {
 		catalogDigest := pricing.catalog.digest
 		out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
 			catalogDigest = pricing.catalog.digest
@@ -2710,12 +2656,71 @@ var chUsageReadTables = []string{
 // host is read raw; see preparedUsageState.raw.
 var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
+// Preparation changes none of these tables. They name all inputs to a raw
+// read, excluding sync_metadata, which the schema step can update.
+var chUsageCarryTables = slices.Concat(
+	slices.DeleteFunc(slices.Clone(chUsageReadTables), func(table string) bool { return table == "sync_metadata" }),
+	chRawHostUsageTables, []string{"usage_price_models"},
+)
+
+// carryRawUsage promotes an existing raw result only after the published
+// snapshots are shown to contain those same rows.
+func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], state preparedUsageState, slot, version, kind string, f db.UsageFilter, pricing string, custom [][2]string) ([]T, bool) {
+	if !state.ready || len(state.raw) != 0 || slot == "" {
+		return nil, false
+	}
+	rawVersion, err := s.usageReadFingerprint(ctx, preparedUsageState{}, "")
+	if err != nil || rawVersion == "" {
+		return nil, false
+	}
+	rawSlot, err := usageRowMemoKeyFor(kind, f, "", pricing, custom)
+	if err != nil {
+		return nil, false
+	}
+	rows, ok := memo.Get(rawSlot, rawVersion)
+	if !ok || !s.usageCarryPublished(ctx) {
+		return nil, false
+	}
+	memo.Put(slot, version, rows)
+	return rows, true
+}
+
+func (s *Store) usageCarryPublished(ctx context.Context) bool {
+	// Rows older than the session's content_version or newer than its
+	// rows_version identify an interrupted publication. An append keeps older
+	// rows between the two.
+	// Unequal usable-row counts reject a replacement interrupted after deleting old rows.
+	// A newer snapshot can contain metadata the session has not published yet.
+	// Count all rows raw Usage reads, including older content versions.
+	raw := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
+		"usage_messages m JOIN sessions s ON s.id = m.session_id", chStoredMessageRecordedCost,
+		"usage_events ue JOIN sessions s ON s.id = ue.session_id", "1", "")
+	query := `SELECT
+		(SELECT count() FROM (SELECT session_id, min(push_version) AS oldest, max(push_version) AS newest FROM (
+			SELECT session_id, push_version FROM usage_messages UNION ALL
+			SELECT session_id, push_version FROM usage_events) GROUP BY session_id) r
+			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.oldest < s.content_version OR r.newest > s.rows_version)
+		+ (SELECT count() FROM usage_session_snapshots AS s
+			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
+			WHERE if(s.prepares_usage, arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
+				s.usage_facts.usage_present, s.usage_facts.model)
+				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model), 0) != ifNull(r.n, 0))
+		+ (SELECT count() FROM usage_session_snapshots AS u
+			INNER JOIN sessions AS s ON s.id = u.id WHERE u.push_version > s.push_version)`
+	var violations uint64
+	err := s.queryRowContext(ctx, query).Scan(&violations)
+	if s.beforeUsageCarryCheck != nil {
+		s.beforeUsageCarryCheck()
+	}
+	return err == nil && violations == 0 && s.usageCaptureStable(ctx, chUsageCarryTables...)
+}
+
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
 // reads keep their version across merges. Raw and mixed reads name parts.
 // pricingDigest names the price records the read joins; see usageRowsVersion.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
-		return s.partsFingerprint(ctx)
+		return s.tablePartsFingerprint(ctx, chUsageCarryTables)
 	}
 	if len(state.raw) == 0 {
 		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
@@ -2755,7 +2760,7 @@ func usageVersionKey(table, pricingDigest string) string {
 // usageRowsVersion names the rows of the tables as of the request's parts
 // snapshot. The sessions, snapshot, and price record tables are followed
 // by finalRows trackers, whose checks read only the keys new parts hold;
-// the other, small tables are hashed again when their parts change. If
+// the other tables are hashed again when their parts change. If
 // parts move during the probe or the probe fails, the read is served
 // uncached. The version names only pricingDigest's price records: hashing
 // every digest's records read the whole table, which took two minutes on a
@@ -2925,6 +2930,10 @@ func (s *Store) readUsageRowIdentities(
 	for i, table := range tables {
 		columns, where := "*", ""
 		switch table {
+		case "messages":
+			columns = "session_id, ordinal, push_version"
+		case "image_text":
+			columns = "session_id, source_kind, message_ordinal, call_index, event_index, image_index, processor, push_version"
 		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
@@ -3008,9 +3017,12 @@ func tableValuesFingerprint(tables []string, value func(string) string) string {
 type partsSnapshot map[string]tableParts
 
 // tableParts lists one table's active parts and a digest of their names and
-// files.
+// files. uuid names the table itself: a table swapped in under the same name
+// starts its block numbers over, so its parts can look like a merge of the
+// parts the old table had.
 type tableParts struct {
 	digest string
+	uuid   string
 	parts  []partInfo
 }
 
@@ -3018,9 +3030,11 @@ type partsSnapshotKey struct{}
 
 // readPartsSnapshot reads the active parts of every table in one query.
 func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
-	rows, err := s.queryContext(ctx, `SELECT table, name, partition_id, min_block_number, max_block_number,
-		data_version, rows, hash_of_all_files
-		FROM system.parts WHERE database = currentDatabase() AND active ORDER BY table, name`)
+	rows, err := s.queryContext(ctx, `SELECT p.table, p.name, p.partition_id, p.min_block_number, p.max_block_number,
+		p.data_version, p.rows, p.hash_of_all_files, toString(t.uuid)
+		FROM system.parts AS p
+		LEFT JOIN (SELECT name, uuid FROM system.tables WHERE database = currentDatabase()) AS t ON t.name = p.table
+		WHERE p.database = currentDatabase() AND p.active ORDER BY p.table, p.name`)
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse parts: %w", err)
 	}
@@ -3031,7 +3045,9 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 		var table string
 		var p partInfo
 		var dataVersion uint64
-		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &p.files); err != nil {
+		var uuid string
+		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &p.files,
+			&uuid); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
 		}
 		// A part's data version is its first block until a mutation
@@ -3040,6 +3056,7 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 			p.mutation = int64(dataVersion)
 		}
 		tp := snapshot[table]
+		tp.uuid = uuid
 		tp.parts = append(tp.parts, p)
 		snapshot[table] = tp
 		sum, ok := digests[table]

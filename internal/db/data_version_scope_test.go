@@ -29,6 +29,51 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestHermesCompactionUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop},
+		ScopedDataVersionProviders(186, 187))
+}
+
+func TestToolResultImageDecodeUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentClaude,
+		parser.AgentCowork,
+		parser.AgentQoder,
+		parser.AgentIcodemate,
+		parser.AgentOpenClaude,
+		parser.AgentAmp,
+		parser.AgentCursor,
+		parser.AgentFactory,
+		parser.AgentIflow,
+		parser.AgentOpenClaw,
+		parser.AgentQClaw,
+		parser.AgentDevin,
+		parser.AgentOpenHands,
+		parser.AgentZCode,
+		parser.AgentPi,
+		parser.AgentOMP,
+		parser.AgentOMO,
+		parser.AgentPrimeAgent,
+		parser.AgentStepCode,
+		parser.AgentDirectAPI,
+		parser.AgentTau,
+		parser.AgentCommandCode,
+		parser.AgentQwen,
+		parser.AgentQwenPaw,
+		parser.AgentGemini,
+		parser.AgentGoose,
+		parser.AgentGrok,
+		parser.AgentFx,
+		parser.AgentCline,
+		parser.AgentZencoder,
+		parser.AgentWorkBuddy,
+		parser.AgentDeepSeekTUI,
+		parser.AgentKiro,
+		parser.AgentCodebuff,
+		parser.AgentPositAssistant,
+	}, ScopedDataVersionProviders(188, 189))
+}
+
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	d := testDB(t)
 	for _, agent := range []string{"codex", "claude"} {
@@ -78,7 +123,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	const completedVersion = 145
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
-	for _, agent := range []string{"codex", "pi", "hermes"} {
+	for _, agent := range []string{"codex", "pi", "vibe"} {
 		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
 		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
 	}
@@ -91,7 +136,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
-	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "hermes"))
+	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "vibe"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "codex"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
@@ -190,4 +235,34 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScopedUpgradePending(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	pending, err := d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending)
+
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO stats(key, value) VALUES (?, ?)",
+			scopedUpgradePendingKey, dataVersion,
+		)
+		return err
+	}))
+	pending, err = d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending)
+
+	require.NoError(t, d.CompleteScopedUpgrade(ctx))
+	pending, err = d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = d.ScopedUpgradePending(canceled)
+	assert.ErrorIs(t, err, context.Canceled)
 }

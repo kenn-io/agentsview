@@ -108,8 +108,8 @@ func chAnalyticsLocalDateExpr(
 	return "formatDateTime(" + tsExpr + ", '%Y-%m-%d')", nil
 }
 
-// chAnalyticsDayOfWeekExpr is Monday=0..Sunday=6, matching DuckDB
-// ((strftime('%w') + 6) % 7). ClickHouse toDayOfWeek mode 1 uses that mapping.
+// chAnalyticsDayOfWeekExpr is Monday=0..Sunday=6, the mapping ClickHouse
+// toDayOfWeek mode 1 uses.
 func chAnalyticsDayOfWeekExpr(tsExpr string, f db.AnalyticsFilter) (string, []any) {
 	if f.Timezone != "" {
 		return "toDayOfWeek(" + tsExpr + ", 1, ?)", []any{f.Timezone}
@@ -173,8 +173,7 @@ func (s analyticsSQL) ToolCountsSQL(idSet string, args []any) (string, []any) {
 func chAnalyticsBucketExpr(dateExpr, granularity string) string {
 	switch granularity {
 	case "week":
-		// toStartOfWeek mode 1 starts the week on Monday, matching DuckDB
-		// date_trunc('week').
+		// toStartOfWeek mode 1 starts the week on Monday.
 		return "formatDateTime(toStartOfWeek(toDate(" + dateExpr + "), 1), '%Y-%m-%d')"
 	case "month":
 		return "formatDateTime(toStartOfMonth(toDate(" + dateExpr + ")), '%Y-%m-%d')"

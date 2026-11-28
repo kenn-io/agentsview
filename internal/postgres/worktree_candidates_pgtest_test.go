@@ -12,13 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 )
 
-// seedPGCandidateSession inserts a minimal session with one message. Unlike
-// DuckDB, PostgreSQL's push preserves each session's own Machine field, so
-// worktree candidate fixtures can exercise real cross-machine grouping.
+// seedPGCandidateSession inserts a minimal session with one message.
+// PostgreSQL's push preserves each session's own Machine field, so worktree candidate fixtures can exercise real cross-machine grouping.
 func seedPGCandidateSession(
 	t *testing.T, localDB *db.DB, id, project, machine, cwd, started string,
 ) {
@@ -73,7 +71,7 @@ func seedPGCandidateSessionNoSnapshot(
 // must appear in the combined group.
 func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_worktree_candidates_test"
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	const project = "candidate-project"
 	const machine = "host-a.example"
@@ -168,7 +166,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 
 func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 	t.Parallel()
-	push, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_parents_test")
+	push, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	for id, cwd := range map[string]string{
 		"worktree-a": "/srv/repo/.claude/worktrees/run-a",
 		"worktree-b": "/srv/repo/.claude/worktrees/run-b/src",
@@ -199,7 +197,7 @@ func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	t.Parallel()
 	const (
-		schema        = "agentsview_worktree_candidates_generation_test"
+		schema        = pgPushTestSchema
 		sessionID     = "generation-session"
 		machine       = "host-a.example"
 		oldProject    = "old-project"
@@ -233,7 +231,6 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	newLocalDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "new-local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, newLocalDB)
 	t.Cleanup(func() { require.NoError(t, newLocalDB.Close()) })
 	require.NoError(t, newLocalDB.SetArchiveIdentityForTest(
 		ctx, archiveID, archiveSalt,

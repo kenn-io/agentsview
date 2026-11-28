@@ -62,11 +62,10 @@ func (SessionQueries) AllMessagesSQL() string {
 	return "SELECT " + MessageColumns + " FROM messages WHERE session_id = ? ORDER BY ordinal ASC"
 }
 
-func (SessionQueries) SessionVersionSQL() string {
-	return `SELECT message_count, file_mtime, file_hash,
-		COALESCE(local_modified_at, ended_at, started_at, created_at),
-		COALESCE(agentsview_push_fingerprint, '')
-		FROM sessions WHERE id = ?`
+func (SessionQueries) SessionVersionColumns() string {
+	return `message_count, file_mtime, file_hash,
+ COALESCE(local_modified_at, ended_at, started_at, created_at),
+ COALESCE(agentsview_push_fingerprint, '')`
 }
 
 func CountSessionsSQL(countExpr, where string) string {

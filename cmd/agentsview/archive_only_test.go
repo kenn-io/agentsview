@@ -160,7 +160,12 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 	result, err := startServeBackground(t.Context(), cfg, []string{"serve"}, serveReplacementOptions{}, backgroundLaunchPolicy{ConfigOnly: true})
 	require.NoError(t, err)
 	require.NotNil(t, result.Runtime)
-	t.Cleanup(func() { _ = stopDaemonProcess(result.Runtime.Record, 5*time.Second) })
+	// Windows reports the killed daemon's exit before it releases the data
+	// directory's files, and the temp directory cannot be removed until then.
+	t.Cleanup(func() {
+		_ = stopDaemonProcess(result.Runtime.Record, 5*time.Second)
+		assert.NoError(t, waitForStoppedDaemonWriter(context.WithoutCancel(t.Context()), cfg))
+	})
 	client := &http.Client{Timeout: 5 * time.Second}
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, urlFromDaemonRuntime(result.Runtime)+"/api/v1/sessions", nil)
 	require.NoError(t, err)
@@ -171,15 +176,15 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 	require.NoError(t, stopDaemonProcess(result.Runtime.Record, 5*time.Second))
 }
 
-// ordinaryImportInputs writes one valid export per import type. The ChatGPT
-// export includes an image, so a successful import also writes an asset.
+// ordinaryImportInputs writes valid exports for archive-only import refusal
+// checks. The ChatGPT export includes an image, so a successful import also
+// writes an asset.
 func ordinaryImportInputs(t *testing.T) map[string]string {
 	t.Helper()
 	root := t.TempDir()
 	claudeAI := filepath.Join(root, "claude-ai", "conversations.json")
 	chatGPT := filepath.Join(root, "chatgpt")
-	gemini := filepath.Join(root, "gemini-apps")
-	for _, dir := range []string{filepath.Dir(claudeAI), chatGPT, gemini} {
+	for _, dir := range []string{filepath.Dir(claudeAI), chatGPT} {
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
 	require.NoError(t, os.WriteFile(claudeAI, []byte(`[{"uuid":"archive-import","name":"Import",`+
@@ -189,11 +194,7 @@ func ordinaryImportInputs(t *testing.T) map[string]string {
 	for name, data := range testjsonl.ChatGPTImageExport() {
 		require.NoError(t, os.WriteFile(filepath.Join(chatGPT, name), []byte(data), 0o600))
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(gemini, "activity.html"), []byte(`<!doctype html>
-<html><head><title>My Activity History</title></head><body>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>first prompt</p><p>first answer</p></div></div>
-</body></html>`), 0o600))
-	return map[string]string{"claude-ai": claudeAI, "chatgpt": chatGPT, "gemini-apps": gemini}
+	return map[string]string{"claude-ai": claudeAI, "chatgpt": chatGPT}
 }
 
 // archiveImportState captures what an import could change: session rows and
@@ -262,9 +263,6 @@ func TestArchiveOnlyRefusesDaemonPushWatch(t *testing.T) {
 		name string
 		run  func(context.Context, daemonArchiveWriteBackend) error
 	}{
-		{name: "duckdb", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
-			return b.DuckDBPushWatch(ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour)
-		}},
 		{name: "replica", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
 			return b.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil, time.Hour, time.Hour)
 		}},

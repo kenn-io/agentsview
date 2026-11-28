@@ -3,11 +3,15 @@
 package postgres
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +21,199 @@ import (
 // contentSearchSchema is an isolated schema for content-search tests so
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
+
+func TestPGSearchContentNegativeCursor(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "invoice rounding", Cursor: -1,
+	})
+	var inputErr *db.SearchInputError
+	require.ErrorAs(t, err, &inputErr)
+}
+
+func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
+	t.Parallel()
+	baseURL := testPGURL(t)
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("PostgreSQL only")
+	}
+	for _, encoding := range []string{"UTF8", "LATIN1"} {
+		t.Run(encoding, func(t *testing.T) {
+			name := pgDatabaseName(t, baseURL) + "_" + strings.ToLower(encoding)
+			_, err := server.admin.ExecContext(t.Context(), `CREATE DATABASE `+name+` WITH TEMPLATE template0 ENCODING '`+encoding+`' LC_COLLATE 'C' LC_CTYPE 'C'`)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := server.admin.ExecContext(context.WithoutCancel(t.Context()), `DROP DATABASE `+name+` WITH (FORCE)`)
+				assert.NoError(t, err)
+			})
+			url := mustParseURL(t, withPGDatabase(t, baseURL, name))
+			params := url.Query()
+			params.Set("client_encoding", "UTF8")
+			url.RawQuery = params.Encode()
+			pg, err := Open(t.Context(), url.String(), contentSearchSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, contentSearchSchema))
+			require.NoError(t, pg.Close())
+			store, err := NewStore(t.Context(), url.String(), contentSearchSchema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+			if encoding == "UTF8" {
+				for _, tc := range []struct {
+					name, body, pattern string
+				}{
+					{"cjk-after", "invoice漢", "invoice absentword"},
+					{"cjk-before", "漢invoice", "invoice absentword"},
+					{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`},
+					{"accent-adjacent", "caféé", "café absentword"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+						insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
+						page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
+						require.NoError(t, err)
+						assert.Empty(t, page.Matches)
+					})
+				}
+				for _, tc := range []struct {
+					name, body, pattern string
+					count               int
+				}{
+					{"partial-count", "invoice中 rounding", "invoice rounding absentword", 1},
+					{"punctuation", "invoice—rounding", "invoice rounding absentword", 2},
+					{"underscore", "invoice_rounding", "invoice rounding absentword", 2},
+					{"phrase-punctuation", "policy quarterly—forecast", `policy "quarterly forecast"`, 3},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+						insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
+						page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
+						require.NoError(t, err)
+						require.Len(t, page.Matches, 1)
+						assert.Equal(t, tc.count, page.Matches[0].MatchedWords)
+					})
+				}
+				return
+			}
+
+			for _, row := range []struct{ id, body string }{
+				{"match", "invoice ready"},
+				{"adjacent", "éinvoice ready"},
+				{"adjacent-after", "invoiceé ready"},
+			} {
+				insertCSSession(t, store, row.id, "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
+				insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
+			}
+			for _, mode := range []string{"substring", "fts"} {
+				t.Run(mode, func(t *testing.T) {
+					page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+						Pattern: "invoice absentword", Mode: mode, Limit: 10,
+					})
+					require.NoError(t, err)
+					require.Len(t, page.Matches, 1)
+					assert.Equal(t, "match", page.Matches[0].SessionID)
+				})
+			}
+			t.Run("later-page-exclude-system", func(t *testing.T) {
+				insertCSSession(t, store, "match-later", "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
+				insertCSMessage(t, store, "match-later", 0, "user", "invoice ready", "2024-06-15T10:00:00Z", false)
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: "invoice absentword", Project: "project", Cursor: 1, Limit: 1, ExcludeSystem: true,
+				})
+				require.NoError(t, err)
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "match-later", page.Matches[0].SessionID)
+			})
+		})
+	}
+}
+
+type contentPageTracer struct{ rows int64 }
+
+func (tracer *contentPageTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SELECT session_id, project, agent, transcript_revision, location") {
+		return context.WithValue(ctx, tracer, true)
+	}
+	return ctx
+}
+
+func (tracer *contentPageTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if ctx.Value(tracer) == true {
+		tracer.rows = data.CommandTag.RowsAffected()
+	}
+}
+
+func tracedContentReader(t *testing.T, store *Store, tracer pgx.QueryTracer) *Store {
+	t.Helper()
+	conn, err := store.DB().Conn(t.Context())
+	require.NoError(t, err)
+	var config *pgx.ConnConfig
+	err = conn.Raw(func(driver any) error { config = driver.(*stdlib.Conn).Conn().Config(); return nil })
+	require.NoError(t, conn.Close())
+	require.NoError(t, err)
+	config.Tracer = tracer
+	pool := stdlib.OpenDB(*config)
+	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+	return &Store{pg: pool, ownedDB: pool, cockroach: store.cockroach, serverEncoding: store.serverEncoding}
+}
+
+func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	if store.cockroach {
+		t.Skip("ranked search requires PostgreSQL")
+	}
+	insertCSSession(t, store, "snapshot", "snapshot", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "snapshot", 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
+	tracer := &hostedPendingSelectionTracer{argument: "snapshot"}
+	reader := tracedContentReader(t, store, tracer)
+	var updateErr error
+	updated := false
+	tracer.after = func() {
+		tracer.after = nil
+		_, updateErr = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
+		updated = true
+	}
+	page, err := reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"})
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, updateErr)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
+}
+
+func TestSearchContentExactTierPaging(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	if store.cockroach {
+		t.Skip("ranked search requires PostgreSQL")
+	}
+	for i := range 7 {
+		id := fmt.Sprintf("page-%d", i)
+		insertCSSession(t, store, id, "deep-page", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+		insertCSMessage(t, store, id, 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
+	}
+	insertCSSession(t, store, "word-tier", "deep-page", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "word-tier", 0, "user", "rounding invoice", "2026-05-01T10:00:00Z", false)
+	tracer := &contentPageTracer{}
+	reader := tracedContentReader(t, store, tracer)
+	page, err := reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "deep-page", Cursor: 4, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 2)
+	assert.Equal(t, "page-4", page.Matches[0].SessionID)
+	assert.Equal(t, "page-5", page.Matches[1].SessionID)
+	assert.Equal(t, 6, page.NextCursor)
+	assert.EqualValues(t, 3, tracer.rows)
+	page, err = reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "deep-page", Cursor: 6, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 2)
+	assert.Equal(t, "page-6", page.Matches[0].SessionID)
+	assert.Equal(t, "word-tier", page.Matches[1].SessionID)
+	assert.Equal(t, 2, page.Matches[1].MatchedWords)
+	assert.Zero(t, page.NextCursor)
+}
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
 	t.Parallel()
@@ -67,16 +264,17 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 // at it plus a raw *sql.DB for direct inserts.
 func setupContentSearch(t *testing.T) *Store {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, contentSearchSchema)
 
-	pg, err := Open(t.Context(), pgURL, contentSearchSchema, true)
-	require.NoError(t, err, "Open")
-	defer pg.Close()
+	if !takeFreshSchemaCopy(t, pgURL, contentSearchSchema) {
+		pg, err := Open(t.Context(), pgURL, contentSearchSchema, true)
+		require.NoError(t, err, "Open")
+		defer pg.Close()
 
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+contentSearchSchema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	ctx := t.Context()
-	require.NoError(t, EnsureSchema(ctx, pg, contentSearchSchema), "EnsureSchema")
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+contentSearchSchema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(t.Context(), pg, contentSearchSchema), "EnsureSchema")
+	}
 
 	store, err := NewStore(t.Context(), pgURL, contentSearchSchema, true)
 	require.NoError(t, err, "NewStore")
@@ -664,6 +862,9 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 // skipped on an instance where pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	t.Parallel()
+	// An empty database, so setupContentSearch's own EnsureSchema builds the
+	// schema under test instead of reusing a template copy.
+	testPGURL(t)
 	store := setupContentSearch(t)
 	ctx := t.Context()
 
@@ -709,6 +910,9 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 // fastupdate=on gets fastupdate=off reapplied on the next EnsureSchema run.
 func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
 	t.Parallel()
+	// An empty database, so setupContentSearch's own EnsureSchema builds the
+	// schema under test instead of reusing a template copy.
+	testPGURL(t)
 	store := setupContentSearch(t)
 	ctx := t.Context()
 
@@ -787,31 +991,6 @@ func TestPGSearchContentRegexInvalid(t *testing.T) {
 	var inputErr *db.SearchInputError
 	assert.True(t, errors.As(err, &inputErr),
 		"expected *SearchInputError, got %T: %v", err, err)
-}
-
-// TestPGSearchContentFTSMatchesNonContiguousTerms verifies that PG's fts
-// fallback preserves SQLite's implicit-AND term semantics.
-func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
-	t.Parallel()
-	store := setupContentSearch(t)
-	insertCSSession(t, store, "cs-fts-both", "proj", "claude",
-		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-	insertCSMessage(t, store, "cs-fts-both", 0, "user",
-		"the quick brown fox jumps", "2026-05-01T10:00:00Z", false)
-	insertCSSession(t, store, "cs-fts-one", "proj", "claude",
-		"2026-05-01T11:00:00Z", "2026-05-01T11:30:00Z")
-	insertCSMessage(t, store, "cs-fts-one", 0, "user",
-		"the quick answer only", "2026-05-01T11:00:00Z", false)
-
-	ctx := t.Context()
-	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern: "quick fox", Mode: "fts",
-		Sources: []string{"messages"}, Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent fts")
-	require.Len(t, got.Matches, 1)
-	assert.Equal(t, "cs-fts-both", got.Matches[0].SessionID)
-	assert.Equal(t, "message", got.Matches[0].Location)
 }
 
 func TestPGSearchContentTermsAcrossExchangeAndLiterals(t *testing.T) {

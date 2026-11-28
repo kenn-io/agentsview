@@ -3,19 +3,47 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/ccoveille/go-safecast/v2"
 
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
-// ListModelPricing returns every pricing row, including sentinel
-// metadata rows (for example `_fallback_version`).
+// ListModelPricing returns every pricing row with its bands.
 func (db *DB) ListModelPricing(
 	ctx context.Context,
 ) ([]ModelPricing, error) {
 	return db.listModelPricing(ctx)
+}
+
+// ListModelPricingWithOpenRouter returns every pricing row and the
+// OpenRouter ownership list from one read transaction. A refresh writes
+// both together, so separate reads could pair the old rows with the new
+// list, and a push would then drop ownership of a row it still sends.
+func (db *DB) ListModelPricingWithOpenRouter(
+	ctx context.Context,
+) ([]ModelPricing, string, error) {
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, "", fmt.Errorf("starting pricing read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	prices, err := listModelPricingFrom(ctx, tx)
+	if err != nil {
+		return nil, "", err
+	}
+	var owned string
+	err = tx.QueryRowContext(ctx,
+		`SELECT value FROM pricing_meta WHERE key = ?`,
+		pricing.OpenRouterModelsMetaKey,
+	).Scan(&owned)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, "", fmt.Errorf("reading OpenRouter models: %w", err)
+	}
+	return prices, owned, nil
 }
 
 func (db *DB) listModelPricing(

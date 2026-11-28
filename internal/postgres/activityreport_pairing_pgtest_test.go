@@ -58,7 +58,7 @@ const legacyPGActivityReportCandidatesSQL = `SELECT
 
 func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	sessions := map[string][]struct{ role, ts, model string }{
 		"a-mixed": {
 			{"assistant", "2026-06-15T23:40:00Z", "initial"},
@@ -131,7 +131,7 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 
 func TestPGActivityReportCandidateSourceStopsOnConsumerError(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_stop_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedPGDailyFixture(t, store)
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	sentinel := errors.New("consumer stopped")

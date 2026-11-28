@@ -49,8 +49,7 @@ const pricingWriteBatch = 100
 // FilterChangedModelPricing returns the subset of desired rows that
 // would actually insert or update pricing fields. UpdatedAt-only
 // differences are intentionally ignored to match the upsert WHERE
-// clause used by both SQLite and PostgreSQL, except on sentinel
-// metadata rows, whose value lives in updated_at.
+// clause used by both SQLite and PostgreSQL.
 func FilterChangedModelPricing(
 	existing, desired []ModelPricing,
 ) (PricingChangeSummary, []ModelPricing) {
@@ -79,9 +78,6 @@ func FilterChangedModelPricing(
 }
 
 func pricingFieldsEqual(a, b ModelPricing) bool {
-	if isPricingMetaPattern(a.ModelPattern) && a.UpdatedAt != b.UpdatedAt {
-		return false
-	}
 	return a.InputPerMTok == b.InputPerMTok &&
 		a.OutputPerMTok == b.OutputPerMTok &&
 		a.CacheCreationPerMTok == b.CacheCreationPerMTok &&
@@ -202,9 +198,9 @@ func (db *DB) UpsertModelPricingContext(
 	return db.ReconcileModelPricingContext(ctx, prices, nil, PricingMeta{})
 }
 
-// PricingMeta is a sentinel metadata row (see SetPricingMeta) written
-// in the same transaction as a pricing reconciliation. A zero Key
-// writes nothing.
+// PricingMeta is a pricing_meta value (see SetPricingMeta) written in
+// the same transaction as a pricing reconciliation. A zero Key writes
+// nothing.
 type PricingMeta struct {
 	Key   string
 	Value string
@@ -427,8 +423,8 @@ func (db *DB) DeleteModelPricingContext(
 	return nil
 }
 
-// GetPricingMeta reads a metadata value stored as a sentinel
-// row in model_pricing. Returns "" if not found.
+// GetPricingMeta reads a value from pricing_meta. Returns "" if not
+// found.
 func (db *DB) GetPricingMeta(key string) (string, error) {
 	return db.GetPricingMetaContext(context.Background(), key)
 }
@@ -437,8 +433,7 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 func (db *DB) GetPricingMetaContext(ctx context.Context, key string) (string, error) {
 	var val string
 	err := db.getReader().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing
-		 WHERE model_pattern = ?`, key,
+		`SELECT value FROM pricing_meta WHERE key = ?`, key,
 	).Scan(&val)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -451,22 +446,48 @@ func (db *DB) GetPricingMetaContext(ctx context.Context, key string) (string, er
 	return val, nil
 }
 
-const setPricingMetaSQL = `INSERT INTO model_pricing
-		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		 cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok,
-		 cache_read_microdollars_per_mtok, updated_at)
-	 VALUES (?, 0, 0, 0, 0, 0, ?)
-	 ON CONFLICT(model_pattern) DO UPDATE SET
-		updated_at = excluded.updated_at`
+const setPricingMetaSQL = `INSERT INTO pricing_meta (key, value)
+	 VALUES (?, ?)
+	 ON CONFLICT(key) DO UPDATE SET value = excluded.value`
 
-// isPricingMetaPattern reports whether a model_pricing pattern is a
-// sentinel metadata row rather than a model.
-func isPricingMetaPattern(pattern string) bool {
-	return strings.HasPrefix(pattern, "_")
+// pricingMetaDataVersion is the first data version that keeps pricing
+// metadata in pricing_meta. Older binaries read and write it as
+// model_pricing rows.
+const pricingMetaDataVersion = 181
+
+// movePricingMetaLocked moves pricing metadata out of model_pricing.
+// Archives before data version 181 stored each value as a model_pricing
+// row whose pattern starts with "_" and whose updated_at held the value:
+// a version string, an RFC 3339 time, or a JSON list of OpenRouter
+// patterns. Queries over updated_at had to skip those rows, and one
+// that did not reported the JSON list as the newest pricing time.
+// The move runs in one transaction, so a crash leaves either layout.
+func movePricingMetaLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting pricing_meta migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A key already in pricing_meta was written later, so it wins.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pricing_meta (key, value)
+		SELECT model_pattern, updated_at FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'
+		ON CONFLICT(key) DO NOTHING`); err != nil {
+		return fmt.Errorf("copying pricing metadata to pricing_meta: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'`); err != nil {
+		return fmt.Errorf("deleting pricing metadata from model_pricing: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pricing_meta migration: %w", err)
+	}
+	return nil
 }
 
-// SetPricingMeta stores a metadata value as a sentinel row
-// in model_pricing with zero pricing fields.
+// SetPricingMeta stores a value in pricing_meta.
 func (db *DB) SetPricingMeta(key, value string) error {
 	return db.SetPricingMetaContext(context.Background(), key, value)
 }
@@ -484,9 +505,9 @@ func (db *DB) SetPricingMetaContext(ctx context.Context, key, value string) erro
 	return nil
 }
 
-// CopyModelPricingFrom copies every model_pricing row (including
-// sentinel metadata rows such as the fallback-version and
-// refresh-attempt markers) from the database file at sourcePath.
+// CopyModelPricingFrom copies every model_pricing row, the GenAI
+// pricing document, and pricing_meta values such as the fallback-version
+// and refresh-attempt markers from the database file at sourcePath.
 // Called during a resync so the rebuilt DB keeps pricing across the
 // swap; without it every usage cost reads as zero until the next
 // daemon startup re-seeds the table.
@@ -544,6 +565,14 @@ func (db *DB) CopyModelPricingFrom(ctx context.Context, sourcePath string) error
 		FROM old_db.model_pricing_bands`,
 	); err != nil {
 		return fmt.Errorf("copying model pricing bands: %w", err)
+	}
+	// The source archive was opened by this binary, which moved its
+	// metadata into pricing_meta.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO pricing_meta (key, value)
+		SELECT key, value FROM old_db.pricing_meta`,
+	); err != nil {
+		return fmt.Errorf("copying pricing metadata: %w", err)
 	}
 	var hasGenAI bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
@@ -619,16 +648,11 @@ func (db *DB) InsertMissingModelPricing(ctx context.Context,
 	return tx.Commit()
 }
 
-// GetModelPricing returns pricing for an exact model match.
-// Returns nil, nil if not found.
-// HasModelPricingRows reports whether any non-meta pricing rows are
-// stored, using the same meta-row exclusion as pricing map loads.
+// HasModelPricingRows reports whether any pricing rows are stored.
 func (db *DB) HasModelPricingRows(ctx context.Context) (bool, error) {
 	var exists bool
 	err := db.getReader().QueryRowContext(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM model_pricing
-			WHERE model_pattern NOT LIKE '\_%' ESCAPE '\')`,
+		`SELECT EXISTS(SELECT 1 FROM model_pricing)`,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("checking pricing rows: %w", err)
@@ -636,6 +660,8 @@ func (db *DB) HasModelPricingRows(ctx context.Context) (bool, error) {
 	return exists, nil
 }
 
+// GetModelPricing returns pricing for an exact model match.
+// Returns nil, nil if not found.
 func (db *DB) GetModelPricing(
 	model string,
 ) (*ModelPricing, error) {

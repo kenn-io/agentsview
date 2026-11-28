@@ -389,7 +389,6 @@ func TestServeCommandsAcceptHiddenPprofFlag(t *testing.T) {
 		"serve",
 		"replica clickhouse serve", "clickhouse serve",
 		"replica pg serve", "pg serve",
-		"replica duckdb serve", "duckdb serve",
 	} {
 		t.Run(path, func(t *testing.T) {
 			cmd, rest, err := newRootCommand().Find(strings.Fields(path))

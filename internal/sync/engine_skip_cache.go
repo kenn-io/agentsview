@@ -518,6 +518,7 @@ func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearTrustedSQLiteContainers()
 	e.clearVerifiedSources()
+	e.unresolvedCodexForks.clear()
 	parser.EvictAllCodexSessionIndexes()
 }
 

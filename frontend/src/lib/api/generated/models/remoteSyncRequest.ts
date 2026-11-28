@@ -7,4 +7,5 @@ export interface RemoteSyncRequest {
   full: boolean;
   hosts: ConfigRemoteHost[];
   include_local: boolean;
+  local_changes_only?: boolean;
 }

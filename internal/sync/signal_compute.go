@@ -26,10 +26,6 @@ func computeSignalsFromToolRows(
 	return ingest.ComputeSignalsFromToolRows(session, messages, rows)
 }
 
-func extractHeuristicMessages(messages []db.Message) []signals.HeuristicMessage {
-	return ingest.ExtractHeuristicMessages(messages)
-}
-
 func extractToolCallRows(messages []db.Message) []signals.ToolCallRow {
 	return ingest.ExtractToolCallRows(messages)
 }

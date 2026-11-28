@@ -74,7 +74,7 @@ type failingRefreshSource struct {
 }
 
 func (s failingRefreshSource) ScanEmbeddableUnits(
-	_ context.Context, _ string, _ bool, _ int,
+	_ context.Context, _ string, _ bool, _ []string, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	if err := fn(s.unit); err != nil {
@@ -1026,7 +1026,7 @@ func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	genB := fakeGeneration("model-b")
-	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), embedmodel.Descriptor{}, false)
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), false, false)
 	require.NoError(t, err)
 	assert.True(t, wasBuilding)
 	assert.Equal(t, genB.Fingerprint(), target)
@@ -1063,7 +1063,7 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
 	require.NoError(t, err)
@@ -1141,4 +1141,157 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 	_, ok, err := ix.BuildingFingerprint(ctx)
 	require.NoError(t, err)
 	assert.False(t, ok, "no generation should remain in state building")
+}
+
+type agentScopeSource struct {
+	*db.DB
+	since  string
+	agents []string
+}
+
+func (s *agentScopeSource) ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int, fn func(db.EmbeddableUnit) error) (string, error) {
+	s.since = since
+	s.agents = slices.Clone(agents)
+	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, maxRunRunes, fn)
+}
+
+func TestBuildAgentScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, item := range []struct{ agent, ended string }{{"claude", "2024-01-02T00:00:00Z"}, {"codex", "2024-01-01T00:00:00Z"}} {
+		dbtest.SeedSessionWithMessages(t, archive, item.agent, "project", []db.Message{dbtest.UserMsg(item.agent, 0, item.agent+" text")}, func(s *db.Session) { s.Agent = item.agent; s.EndedAt = new(item.ended) })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	source := &agentScopeSource{DB: archive}
+	build := func(agents []string) BuildResult {
+		result, err := ix.Build(ctx, source, fakeBuildEncoder(), gen, BuildOptions{Agents: agents})
+		require.NoError(t, err)
+		return result
+	}
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	assert.Equal(t, 1, build(nil).Fill.Documents)
+	assert.Equal(t, []string{"claude", "codex"}, mirrorSessionIDs(t, ix))
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	build([]string{"claude", "codex"})
+	build([]string{"codex", "claude", "codex"})
+	assert.Equal(t, []string{"claude", "codex"}, source.agents)
+	assert.NotEmpty(t, source.since)
+	build(nil)
+	require.NoError(t, ix.metaDelete(ctx, scopeAgentsKey))
+	source.since = ""
+	build(nil)
+	assert.NotEmpty(t, source.since)
+}
+
+func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, item := range []struct{ id, agent, ended string }{
+		{"a-old", "claude", "2024-01-01T00:00:00Z"},
+		{"b-old", "claude", "2024-01-02T00:00:00Z"},
+		{"c-new", "codex", "2024-01-03T00:00:00Z"},
+	} {
+		dbtest.SeedSessionWithMessages(t, archive, item.id, "project", []db.Message{dbtest.UserMsg(item.id, 0, item.id)}, func(s *db.Session) { s.Agent = item.agent; s.EndedAt = new(item.ended) })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	build := func(agent string) error {
+		_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Agents: []string{agent}})
+		return err
+	}
+	require.NoError(t, build("claude"))
+	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_scope_delete BEFORE DELETE ON vector_messages WHEN OLD.session_id = 'b-old' BEGIN SELECT RAISE(FAIL, 'injected failure'); END`)
+	require.NoError(t, err)
+	require.ErrorContains(t, build("codex"), "injected failure")
+	assert.NotContains(t, mirrorSessionIDs(t, ix), "a-old")
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_scope_delete`)
+	require.NoError(t, err)
+	require.NoError(t, build("claude"))
+	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
+}
+
+func seedRoleSession(t *testing.T, archive *db.DB, msgs ...db.Message) {
+	t.Helper()
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", msgs, func(s *db.Session) {
+		s.Agent = "claude"
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+	})
+}
+
+func roleSessionMessages() []db.Message {
+	return []db.Message{
+		dbtest.UserMsg("s", 0, "first question"), dbtest.AsstMsg("s", 1, "first answer"),
+		dbtest.AsstMsg("s", 2, "more answer"), dbtest.UserMsg("s", 3, "second question"),
+		dbtest.AsstMsg("s", 4, "second answer"),
+	}
+}
+
+func assertEncodedOnly(t *testing.T, encoded []string, want, reject string) {
+	t.Helper()
+	require.NotEmpty(t, encoded)
+	for _, text := range encoded {
+		assert.Contains(t, text, want)
+		assert.NotContains(t, text, reject)
+	}
+}
+
+func TestBuildRoleScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	seedRoleSession(t, archive, roleSessionMessages()...)
+	ix := openTestIndex(t)
+	source := &agentScopeSource{DB: archive}
+	gen := fakeGeneration("fake-model")
+	var encoded []string
+	build := func(roles ...string) {
+		t.Helper()
+		encoded = nil
+		source.since = ""
+		_, err := ix.Build(ctx, source, recordingEncoder(&encoded), gen, BuildOptions{Agents: []string{"claude"}, Roles: roles})
+		require.NoError(t, err)
+	}
+	build("user")
+	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude;roles=user", stored)
+	users := mirrorDocKeys(t, ix)
+	require.Len(t, users, 2)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", append(roleSessionMessages(), dbtest.AsstMsg("s", 5, "late answer"))))
+	build("user")
+	assert.NotEmpty(t, source.since, "the append uses an incremental scan")
+	assert.Empty(t, encoded, "an appended reply adds nothing to a user-only index")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+
+	build("assistant")
+	runs := mirrorDocKeys(t, ix)
+	require.Len(t, runs, 2)
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	build()
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", stored)
+	all := mirrorDocKeys(t, ix)
+	require.Len(t, all, 4)
+	assert.Subset(t, all, runs)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	build("user")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+	assert.Empty(t, encoded, "prompts kept across scope changes are not re-embedded")
+	build("assistant", "user", "assistant")
+	assert.Equal(t, all, mirrorDocKeys(t, ix))
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", stored, "both roles store the value older writers store")
+	build()
+	assert.NotEmpty(t, source.since, "a value with no roles suffix needs no rescan")
+	assert.Empty(t, encoded)
 }

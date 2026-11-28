@@ -123,10 +123,10 @@ export function reportErrorShown(kind: ErrorKind): void {
 
 const syncFailureReasons = new Map<string, SyncFailureReason>([
   ["sync_running", "already_running"],
-  ["claude_ai_sync_running", "already_running"],
-  ["claude_ai_auth_required", "sign_in_required"],
-  ["claude_ai_chrome_host_required", "browser_extension"],
-  ["claude_ai_chrome_host_update_required", "browser_extension"],
+  ["chrome_sync_running", "already_running"],
+  ["browser_sync_auth_required", "sign_in_required"],
+  ["chrome_host_required", "browser_extension"],
+  ["chrome_host_update_required", "browser_extension"],
 ]);
 
 export function reportSyncFailed(error: unknown): void {

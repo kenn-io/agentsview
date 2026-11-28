@@ -21,7 +21,6 @@ func TestPushSchemaCurrentRequiresFrictionTables(t *testing.T) {
 		t.Run(drop, func(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 			pg, err := Open(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err)
 			defer pg.Close()
@@ -107,9 +106,7 @@ func testFrictionRows(id string) []db.FrictionFinding {
 
 func TestPGPushFrictionRoundTrip(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -142,9 +139,7 @@ func TestPGPushFrictionRoundTrip(t *testing.T) {
 
 func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-2", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -196,9 +191,10 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"incremental", "without preload", "full", "messages"} {
 		t.Run(mode, func(t *testing.T) {
-			pgURL := testPGURL(t)
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			pgURL := testPGSchemaURL(t, "agentsview")
+			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
+				cleanPGSchema(t, pgURL)
+			}
 			local := testDB(t)
 			ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 			require.NoError(t, err)
@@ -250,7 +246,7 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 				).Scan(&markerID))
 				var pushed []db.Session
 				rewriteMessages := mode == "messages"
-				result, err := ps.pushBatchAttempt(ctx, sessions, rewriteMessages, markerID, nil, nil, &pushed, rewriteMessages)
+				result, err := ps.pushBatchAttempt(ctx, sessions, rewriteMessages, markerID, nil, nil, nil, &pushed, rewriteMessages, true)
 				require.NoError(t, err)
 				require.True(t, result.ok)
 				require.Equal(t, 1, result.sessions)
@@ -298,9 +294,7 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 
 func TestPushFrictionReportsChange(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-3", true, storage.PusherOptions{})
 	require.NoError(t, err)

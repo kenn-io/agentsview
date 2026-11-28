@@ -70,6 +70,41 @@ func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 	}
 }
 
+func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
+	ensureStoreSchema(t, pgURL)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	_, err = store.DB().ExecContext(t.Context(), `
+		INSERT INTO sessions
+			(id, machine, project, agent, relationship_type, parent_session_id,
+			 message_count, user_message_count, is_automated, labels, created_at, session_kind)
+		VALUES
+			('launcher', 'm', 'launch-project', 'claude', 'root', NULL, 3, 3, false, '{}', NOW(), ''),
+			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
+			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
+			('spawned', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(t.Context(), `UPDATE sessions SET parser_parent_session_id = 'launcher' WHERE id = 'native'`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO tool_calls (session_id, tool_name, category, message_ordinal, subagent_session_id) VALUES ('launcher', 'Task', 'Task', 0, 'spawned')`)
+	require.NoError(t, err)
+	for _, limit := range []int{0, 10} {
+		index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
+			Project: "launch-project", ExcludeOneShot: true, ExcludeAutomated: true, Limit: limit,
+		})
+		require.NoError(t, err)
+		ids := make([]string, 0, len(index.Sessions))
+		for _, row := range index.Sessions {
+			ids = append(ids, row.ID)
+		}
+		assert.ElementsMatch(t, []string{"launcher", "worker"}, ids, "limit %d", limit)
+		assert.Equal(t, 1, index.Total, "limit %d", limit)
+	}
+}
+
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGStoreURL(t)
@@ -480,16 +515,14 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 
 func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_partial_lookup_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	local := testDB(t)
@@ -527,16 +560,14 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 
 func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_raw_suffix_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	insert := func(id, ended string, deleted bool) {

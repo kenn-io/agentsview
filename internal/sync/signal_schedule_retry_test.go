@@ -22,7 +22,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 		Messages: []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: "initial"}},
 	}}, nil)
 	require.NoError(t, err)
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 	defer h.sched.stop()
 	runs, conflicts := 0, 0
 	h.sched.run = func(_ context.Context, id string) {
@@ -47,7 +47,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 	require.Equal(t, 3, conflicts)
 	require.Equal(t, 1, runs, "a failed recompute must not recurse inline")
 	require.Equal(t, 1, h.armedCount())
-	h.advance(2 * time.Second)
+	h.advance(10 * time.Second)
 	h.fireTimer(t)
 	require.Equal(t, 2, runs)
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
@@ -59,7 +59,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 }
 
 func TestSignalSchedulerDoesNotRetryFailedShutdownFlush(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 	runs := 0
 	h.sched.run = func(_ context.Context, id string) {
 		runs++

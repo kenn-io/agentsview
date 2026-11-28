@@ -45,7 +45,6 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
 	ps, err := New(
@@ -90,9 +89,7 @@ func TestSyncEffectiveSyncStateFallsBackToLocalDB(t *testing.T) {
 
 func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -157,7 +154,6 @@ func TestEnsureSchemaMigratesLegacySchema(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "connecting to pg")
@@ -249,9 +245,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 // probe catches the absence.
 func TestCheckSchemaCompatMissingSecretsRulesVersion(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	pg, err := Open(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "connecting to pg")
@@ -269,11 +263,48 @@ func TestCheckSchemaCompatMissingSecretsRulesVersion(t *testing.T) {
 		"CheckSchemaCompat should fail when secrets_rules_version is missing")
 }
 
+func TestSyncEnsureSchemaUpgradesMissingRelationshipProvenanceColumns(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
+
+	pg, err := Open(t.Context(), pgURL, "agentsview", true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema")
+	_, err = pg.ExecContext(ctx, `ALTER TABLE sessions
+		DROP COLUMN parser_relationship_type,
+		DROP COLUMN relationship_inferred,
+		DROP COLUMN spawn_linked`)
+	require.NoError(t, err, "simulating pre-upgrade replica schema")
+
+	require.Error(t, CheckSchemaCompat(ctx, pg),
+		"CheckSchemaCompat must fail when relationship provenance columns are missing")
+	assert.False(t, pushSchemaCurrent(ctx, pg),
+		"pushSchemaCurrent must force EnsureSchema to add missing provenance columns")
+
+	local := testDB(t)
+	started := "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: "upgrade-panel", Project: "proj", Machine: "local", Agent: "claude",
+		Entrypoint: "sdk-cli", RelationshipType: "subagent",
+		FirstMessage: new("You are a code reviewer. Review this change."),
+		StartedAt:    &started, MessageCount: 1, UserMessageCount: 1,
+		CreatedAt: started,
+	}))
+	ps, err := New(ctx, pgURL, "agentsview", local, "upgrade-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	defer ps.Close()
+	require.NoError(t, ps.EnsureSchema(ctx), "Sync.EnsureSchema must add missing columns before repairs")
+	require.NoError(t, CheckSchemaCompat(ctx, pg))
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "Push must succeed after schema upgrade")
+}
+
 func TestPushSingleSession(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -333,9 +364,7 @@ func TestPushSingleSession(t *testing.T) {
 
 func TestPushIdempotent(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -371,9 +400,7 @@ func TestPushIdempotent(t *testing.T) {
 
 func TestPushWithToolCalls(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -435,9 +462,7 @@ func TestPushWithToolCalls(t *testing.T) {
 
 func TestPushWithToolResultEvents(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -503,9 +528,7 @@ func TestPushWithToolResultEvents(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -529,7 +552,6 @@ func TestStatusMissingSchema(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
 	ps, err := New(
@@ -591,9 +613,10 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
 		{"empty session", nil, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			pgURL := testPGURL(t)
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			pgURL := testPGSchemaURL(t, "agentsview")
+			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
+				cleanPGSchema(t, pgURL)
+			}
 
 			local := testDB(t)
 			ps, err := New(
@@ -650,9 +673,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
 
 func TestPushDetectsSchemaReset(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -708,10 +729,6 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, "agentsview_a")
 	cleanNamedPGSchema(t, pgURL, "agentsview_b")
-	t.Cleanup(func() {
-		cleanNamedPGSchema(t, pgURL, "agentsview_a")
-		cleanNamedPGSchema(t, pgURL, "agentsview_b")
-	})
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -785,10 +802,6 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
 	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
-	t.Cleanup(func() {
-		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
-		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
-	})
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -864,9 +877,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -904,10 +915,8 @@ func TestScopedPushFullAfterSchemaDropRecreatesSchema(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_scoped_full_drop"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	ps, err := New(
@@ -940,9 +949,7 @@ func TestScopedPushFullAfterSchemaDropRecreatesSchema(
 
 func TestPushBatchesMultipleSessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -1009,9 +1016,7 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 
 func TestPushBulkInsertManyMessages(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -1096,9 +1101,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 
 func TestPushSimplePK(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -1138,9 +1141,7 @@ func TestPushSimplePK(t *testing.T) {
 
 func TestPushFilteredByProject(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 
@@ -1230,10 +1231,8 @@ func TestPushFilteredByProject(t *testing.T) {
 
 func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_filtered_reset_marker"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -1315,10 +1314,8 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 
 func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_filtered_partial_reset"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -1419,9 +1416,7 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 
 func TestPushExcludeProject(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 
@@ -1471,9 +1466,7 @@ func TestPushExcludeProject(t *testing.T) {
 
 func TestPushFilteredFullIsIncremental(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 

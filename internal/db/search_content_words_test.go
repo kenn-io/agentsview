@@ -1,7 +1,6 @@
 package db
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,18 +24,6 @@ func seedWordSearch(t *testing.T, d *DB, project string, entries ...[3]string) {
 			msg.ToolCalls = []ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "tu-" + id, ResultContent: result}}
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []Message{msg}))
-	}
-}
-
-func TestSearchContentStemmedMatchSnippet(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj", [3]string{"stemmed", strings.Repeat("filler ", 100) + "connecting succeeded", ""})
-	for _, mode := range []string{"fts", "hybrid"} {
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "connection unrelated", Mode: mode, KeywordOnly: mode == "hybrid"})
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1, "mode %q", mode)
-		assert.Contains(t, page.Matches[0].Snippet, "connecting", "mode %q", mode)
 	}
 }
 
@@ -69,42 +56,12 @@ func wordHits(page ContentSearchPage) []wordHit {
 	return out
 }
 
-func TestSearchContentRanksExactTextThenWords(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj",
-		[3]string{"one-word", "an invoice arrived", ""},
-		[3]string{"two-words", "we settled the rounding of invoices", ""},
-		[3]string{"unrelated", "nothing to see", ""},
-		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
-	)
-	search := func(pattern, mode string) []wordHit {
-		t.Helper()
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: mode})
-		require.NoError(t, err)
-		return wordHits(page)
-	}
-
-	assert.Equal(t, []wordHit{
-		{"tool", "tool_result", 3},
-		{"two-words", "message", 2},
-		{"one-word", "message", 1},
-	}, search("invoice rounding decision", ""))
-	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`"rounding of invoices"`, ""))
-	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, search(`“invoice rounding decision”`, ""))
-	assert.Equal(t, []wordHit{
-		{"two-words", "message", 2},
-		{"one-word", "message", 1},
-	}, search("invoice rounding decision", "fts"))
-}
-
 func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"embedded", "prefixrounding happened", ""},
-		[3]string{"words", "rounding of invoices", "invoices need rounding"},
 		[3]string{"curly-tool", "no match", "found “invoices need” here"},
+		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
 	)
 	for _, tc := range []struct {
 		name   string
@@ -112,14 +69,9 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		want   []wordHit
 	}{
 		{
-			"single word",
-			ContentSearchFilter{Pattern: "rounding"},
-			[]wordHit{{"embedded", "message", 0}, {"words", "message", 0}, {"words", "tool_result", 0}},
-		},
-		{
-			"no messages source",
-			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
-			[]wordHit{{"words", "tool_result", 0}, {"curly-tool", "tool_result", 0}},
+			"fully quoted substring includes tool results",
+			ContentSearchFilter{Pattern: `“invoice rounding decision”`},
+			[]wordHit{{"tool", "tool_result", 0}},
 		},
 		{
 			"curly quotes without messages are literal",
@@ -308,5 +260,31 @@ func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta gamma", Project: "chosen", Limit: 2, Cursor: tc.cursor})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, wordHits(page), "cursor %d", tc.cursor)
+	}
+}
+
+func TestSearchContentWordPagesSkipFilteredMessages(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for i, m := range []Message{
+		{SessionID: "system", Role: "user", Content: "alpha beta gamma", IsSystem: true},
+		{SessionID: "two", Role: "assistant", Content: "alpha beta"},
+		{SessionID: "one", Role: "assistant", Content: "gamma"},
+	} {
+		ended := "2026-05-20T12:00:" + itoa(59-i) + "Z"
+		insertSession(t, d, m.SessionID, "proj", func(s *Session) {
+			s.UserMessageCount = 2
+			s.EndedAt = &ended
+		})
+		m.Timestamp = ended
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), m.SessionID, []Message{m}))
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "gamma beta alpha", Mode: mode, Sources: []string{"messages"},
+			ExcludeSystem: true, KeywordOnly: mode == "hybrid", Limit: 2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []wordHit{{"two", "message", 2}, {"one", "message", 1}}, wordHits(page), mode)
 	}
 }

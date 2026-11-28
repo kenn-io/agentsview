@@ -43,8 +43,9 @@ const finalRowsQueryMark = "/* final rows */ "
 // them. Inserts and the merges of recent inserts stay below it.
 const smallFinalPartRows = 8192
 
-// maxFinalKeys is the most keys an incremental check reads, which travel in
-// one query parameter; more reread the table.
+// maxFinalKeys is the most keys an incremental check of a tracker that keeps
+// no rows reads, which travel in one query parameter; more reread the table.
+// A tracker that keeps rows selects its keys on the server and has no limit.
 const maxFinalKeys = 2_000
 
 // partInfo is one active part of a table, as system.parts lists it.
@@ -162,8 +163,9 @@ type finalRows struct {
 	// exist; noPartitionAt is the table's parts digest at which none did.
 	partition, noPartitionAt string
 	// parts are the parts the state was derived from; nil before the first
-	// read.
+	// read. uuid names the table they belonged to.
 	parts map[string]partInfo
+	uuid  string
 	count uint64
 	sum   rowHash
 	// cached holds the rows of the small parts in parts, by part name, for
@@ -185,16 +187,16 @@ func (f *finalRows) identity() string {
 // finalRowsChange is a new state for a tracker, applied once the parts it
 // was read from proved stable.
 type finalRowsChange struct {
-	// full replaces cached and rows; otherwise cached adds parts and
-	// set and del update rows.
+	// full replaces cached and rows; otherwise cached adds parts and set
+	// updates rows.
 	full   bool
 	parts  map[string]partInfo
+	uuid   string
 	count  uint64
 	sum    rowHash
 	cached map[string][]finalRow
 	rows   map[string]finalFields
 	set    map[string]finalFields
-	del    []string
 	// rowParts names the parts that gave a full read of kept rows at
 	// least one returned row; see settle.
 	rowParts map[string]bool
@@ -238,7 +240,7 @@ func (c *finalRowsChange) settle(fresh tableParts) bool {
 }
 
 func (f *finalRows) apply(c *finalRowsChange) {
-	f.parts, f.count, f.sum = c.parts, c.count, c.sum
+	f.parts, f.uuid, f.count, f.sum = c.parts, c.uuid, c.count, c.sum
 	if c.full {
 		f.cached, f.rows = c.cached, c.rows
 		return
@@ -246,9 +248,6 @@ func (f *finalRows) apply(c *finalRowsChange) {
 	maps.DeleteFunc(f.cached, func(name string, _ []finalRow) bool { _, ok := c.parts[name]; return !ok })
 	maps.Copy(f.cached, c.cached)
 	if f.rows != nil {
-		for _, key := range c.del {
-			delete(f.rows, key)
-		}
 		maps.Copy(f.rows, c.set)
 	}
 }
@@ -285,15 +284,28 @@ func (s *Store) prepareFinalRows(ctx context.Context, f *finalRows, tp tablePart
 	if err != nil {
 		return nil, err
 	}
-	if f.parts != nil && maps.EqualFunc(f.parts, cur, func(a, b partInfo) bool { return a == b }) {
+	// Block numbers relate parts only within one table. A table swapped in
+	// under the same name, such as the rebuilt snapshot table, needs a full
+	// read. A table without parts lists no uuid, and a state without parts
+	// has nothing to relate, so it reads incrementally.
+	sameTable := f.parts != nil && (len(f.parts) == 0 || f.uuid == tp.uuid)
+	if sameTable && maps.EqualFunc(f.parts, cur, func(a, b partInfo) bool { return a == b }) {
 		return nil, nil
 	}
-	if f.parts != nil {
-		if plan, ok := f.plan(cur); ok {
-			return s.readFinalRowsPlan(ctx, f, cur, plan)
+	read := func() (*finalRowsChange, error) {
+		if sameTable {
+			if plan, ok := f.plan(cur); ok {
+				return s.readFinalRowsPlan(ctx, f, cur, plan)
+			}
 		}
+		return s.readFinalRows(ctx, f, cur, true)
 	}
-	return s.readFinalRows(ctx, f, cur, true)
+	change, err := read()
+	if err != nil {
+		return nil, err
+	}
+	change.uuid = tp.uuid
+	return change, nil
 }
 
 // finalRowsParts returns the parts that can hold the tracked rows.
@@ -502,47 +514,30 @@ func (s *Store) readKeptFinalRowsPlan(
 	for i, p := range plan.changed {
 		names[i] = p.name
 	}
-	rows, err := s.queryContext(f.queryContext(ctx, nil), finalRowsQueryMark+`SELECT DISTINCT `+f.spec.key+
-		` FROM `+f.spec.table+` WHERE `+f.filter()+` AND `+partsClause(names)+` SETTINGS final=0`)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s keys: %w", f.spec.table, err)
-	}
-	defer rows.Close()
-	var keys []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, fmt.Errorf("scanning %s key: %w", f.spec.table, err)
-		}
-		keys = append(keys, key)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating %s keys: %w", f.spec.table, err)
-	}
-	if len(keys) > maxFinalKeys {
-		return s.readFinalRows(ctx, f, cur, true)
-	}
-	if len(keys) == 0 {
-		return change, nil
-	}
-	slices.Sort(keys)
-	after, err := s.readFinalKeys(ctx, f, keys, slices.Collect(maps.Keys(cur)))
+	// The keys of the changed parts stay on the server: a subquery selects
+	// them, so the query text does not grow with their number. The _part
+	// lists drop a part before FINAL reads it, and settle discards the
+	// change if a part merged away during the read, so every key a changed
+	// part holds comes back with the row FINAL keeps for it. No tracked
+	// table has an is_deleted column, so FINAL drops no key.
+	keys := `SELECT ` + f.spec.key + ` FROM ` + f.spec.table + ` WHERE ` + f.filter() + ` AND ` +
+		partsClause(names) + ` SETTINGS final=0`
+	after, err := s.scanFinalKeys(f.queryContext(ctx, nil), finalRowsQueryMark+`SELECT `+f.finalColumns()+
+		` FROM `+f.spec.table+` WHERE `+f.filter()+` AND `+f.spec.key+` IN (`+keys+`) AND `+
+		partsClause(slices.Collect(maps.Keys(cur))), true, nil)
 	if err != nil {
 		return nil, err
 	}
-	for _, key := range keys {
-		if r, ok := f.rows[key]; ok {
-			change.count--
-			change.sum = change.sum.sub(r.hash)
-		}
-	}
 	change.set = make(map[string]finalFields, len(after))
 	for key, r := range after {
+		if old, ok := f.rows[key]; ok {
+			change.count--
+			change.sum = change.sum.sub(old.hash)
+		}
 		change.count++
 		change.sum = change.sum.add(r.hash)
 		change.set[key] = r.fields
 	}
-	change.del = keys
 	return change, nil
 }
 

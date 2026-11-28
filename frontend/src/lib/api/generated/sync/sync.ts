@@ -17,7 +17,7 @@ export const getPostApiV1ResyncUrl = () => {
 };
 
 /**
- * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
+ * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or archive_busy when another connection holds a read transaction on the archive. Other errors omit code.
  * @summary Trigger full resync
  */
 export const postApiV1Resync = async (
@@ -34,6 +34,7 @@ export const getPostApiV1SessionsSyncUrl = () => {
 };
 
 /**
+ * A usage refresh refused before acquiring the parent sync lock returns HTTP 409 with code session_refresh_not_started. Other conflicts do not carry this code.
  * @summary Sync a session
  */
 export const postApiV1SessionsSync = async (
@@ -82,7 +83,7 @@ export const getPostApiV1SyncUrl = (params?: PostApiV1SyncParams) => {
 };
 
 /**
- * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code.
+ * Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or archive_busy when another connection holds a read transaction on the archive. Other errors omit code.
  * @summary Trigger sync
  */
 export const postApiV1Sync = async (

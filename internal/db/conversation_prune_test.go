@@ -3,7 +3,9 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -219,4 +221,72 @@ func TestPruneConversationTombstonesKeepsNativeIdentity(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{ids[1]}, returned)
+}
+
+func TestPruneExpiredConversationTombstonesKeepsRetentionWindow(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const retention = 7 * 24 * time.Hour
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// A cold archive has no index to prune and starts no clock.
+	pruned, err := d.PruneExpiredConversationTombstones(ctx, start, retention)
+	require.NoError(t, err)
+	assert.Zero(t, pruned)
+
+	seedConversationTombstones(t, d)
+	_, old := conversationTombstoneCounts(t, d)
+	require.Positive(t, old)
+
+	// The first run starts the clock at the current head.
+	pruned, err = d.PruneExpiredConversationTombstones(ctx, start, retention)
+	require.NoError(t, err)
+	assert.Zero(t, pruned)
+
+	// Deletions after the clock started belong to the next window.
+	msgs := []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "user", Content: "Third question"},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Third answer"},
+	}
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", msgs))
+	_, removed := conversationTombstoneCounts(t, d)
+	require.Equal(t, old+2, removed)
+
+	pruned, err = d.PruneExpiredConversationTombstones(ctx, start.Add(retention-time.Hour), retention)
+	require.NoError(t, err)
+	assert.Zero(t, pruned, "nothing is pruned inside the retention window")
+
+	pruned, err = d.PruneExpiredConversationTombstones(ctx, start.Add(retention), retention)
+	require.NoError(t, err)
+	assert.EqualValues(t, old, pruned)
+	live, removed := conversationTombstoneCounts(t, d)
+	assert.Equal(t, 2, live)
+	assert.Equal(t, 2, removed, "deletions newer than the clock start stay")
+
+	// The clock restarted, so the newer deletions wait a full window.
+	pruned, err = d.PruneExpiredConversationTombstones(ctx, start.Add(2*retention-time.Hour), retention)
+	require.NoError(t, err)
+	assert.Zero(t, pruned)
+	pruned, err = d.PruneExpiredConversationTombstones(ctx, start.Add(2*retention), retention)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, pruned)
+}
+
+func TestPruneConversationTombstonesStopsOnReplacedArchive(t *testing.T) {
+	d := testDB(t)
+	seedConversationTombstones(t, d)
+	_, removed := conversationTombstoneCounts(t, d)
+	require.Positive(t, removed)
+
+	_, err := d.pruneConversationTombstonesThrough(t.Context(), math.MaxInt64, "an-earlier-generation")
+	require.ErrorIs(t, err, errConversationGenerationChanged)
+	_, after := conversationTombstoneCounts(t, d)
+	assert.Equal(t, removed, after)
+	var floor int64
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		var err error
+		floor, err = archiveJournalRevision(t.Context(), tx, conversationPrunedRevisionKey, "conversation pruned")
+		return err
+	}))
+	assert.Zero(t, floor)
 }

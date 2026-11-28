@@ -2,6 +2,7 @@ import { SessionsService } from "../api/generated/index";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import { ApiError, isAbortError, isTransient } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
+import { failureMessage } from "../utils/failure.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
 import { sessions } from "./sessions.svelte.js";
@@ -51,6 +52,11 @@ export class MessagesStore {
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   historyComplete: boolean = $state(false);
+  /** Why the last transcript or history read failed; null once a read lands. */
+  loadError: string | null = $state(null);
+  /** Which read failed, so retryLoad repeats it: the transcript, an older
+   * page, or the rest of the history (a forward tail or an ordinal jump). */
+  private loadErrorKind: "load" | "older" | "history" = "load";
   /**
    * The transcript revision every row in messages came from, taken from the
    * message responses that delivered them. Null until the first page lands.
@@ -72,8 +78,8 @@ export class MessagesStore {
   // this before reporting a missing session.
   private loadGeneration: number = 0;
   private watchGate: number | null = null;
-  private loadSessionPromise: Promise<void> | null = null;
-  private reloadPromise: Promise<void> | null = null;
+  private loadSessionPromise: Promise<boolean> | null = null;
+  private reloadPromise: Promise<boolean> | null = null;
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
   // Failed passes since the last outside reload request, bounded for busy or unavailable sessions.
@@ -105,7 +111,7 @@ export class MessagesStore {
       !resumesCancelledLoad &&
       (this.messages.length > 0 || this.loading)
     ) {
-      return;
+      return false;
     }
     const promise = this.doLoadSession(id, resumesCancelledLoad, ready).finally(() => {
       if (this.loadSessionPromise === promise) this.loadSessionPromise = null;
@@ -124,6 +130,7 @@ export class MessagesStore {
     this.sessionId = id;
     this.cancelledSessionId = null;
     this.loading = true;
+    this.loadError = null;
     const owner = ++this.loadingOwner;
 
     const generation = ++this.loadGeneration;
@@ -141,7 +148,7 @@ export class MessagesStore {
         countHint = sess.message_count ?? 0;
         pendingToken = buildReadProgressToken(sess);
       } catch (err) {
-        if (isAbortError(err)) return;
+        if (isAbortError(err)) return false;
         // This probe is the only detail fetch a plain click on an
         // already-hydrated sidebar row makes, so it is what detects
         // a session deleted behind a cached row.
@@ -169,15 +176,25 @@ export class MessagesStore {
           readMarker !== null && readMarker.token !== token,
         );
       }
+      return (
+        landed &&
+        countHint !== null &&
+        this.sessionId === id &&
+        this.loadGeneration === generation &&
+        !ac.signal.aborted
+      );
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err)) return false;
       if (this.sessionId === id) this.historyComplete = false;
       if (this.loadGeneration === generation) {
         sessions.markActiveSessionMissing(id, err);
       }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
-      console.warn("Failed to load session messages:", err);
+      if (this.sessionId === id && this.loadGeneration === generation) {
+        this.failLoad(err, "load");
+      }
+      return false;
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
@@ -186,9 +203,10 @@ export class MessagesStore {
     }
   }
 
-  reload(): Promise<void> {
-    if (this.watchGate === this.loadGeneration) return this.loadSessionPromise ?? Promise.resolve();
-    if (!this.sessionId) return Promise.resolve();
+  reload(): Promise<boolean> {
+    if (this.watchGate === this.loadGeneration)
+      return this.loadSessionPromise ?? Promise.resolve(false);
+    if (!this.sessionId) return Promise.resolve(false);
     this.reloadFailures = 0;
     if (this.loadSessionPromise) {
       const id = this.sessionId;
@@ -197,14 +215,15 @@ export class MessagesStore {
         if (this.sessionId === id && this.loadGeneration === generation) {
           return this.queueReload();
         }
+        return false;
       });
     }
     return this.queueReload();
   }
 
   /** Reload, or queue one more pass behind a reload already running for this session. */
-  private queueReload(): Promise<void> {
-    if (!this.sessionId) return Promise.resolve();
+  private queueReload(): Promise<boolean> {
+    if (!this.sessionId) return Promise.resolve(false);
 
     if (this.reloadPromise && this.reloadSessionId === this.sessionId) {
       this.pendingReload = true;
@@ -215,7 +234,8 @@ export class MessagesStore {
     this.reloadSessionId = id;
     this.reloading = true;
 
-    const promise = this.reloadNow(id).finally(async () => {
+    const generation = this.loadGeneration;
+    const promise = this.reloadNow(id).then(async (success) => {
       if (this.reloadPromise === promise) {
         this.reloadPromise = null;
         this.reloadSessionId = null;
@@ -223,13 +243,44 @@ export class MessagesStore {
       const shouldReload = this.pendingReload && this.sessionId === id;
       if (shouldReload) {
         this.pendingReload = false;
-        await this.queueReload();
+        return this.queueReload();
       } else if (this.sessionId === id) {
         this.reloading = false;
       }
+      return success && this.loadGeneration === generation && this.sessionId === id;
     });
     this.reloadPromise = promise;
     return promise;
+  }
+
+  private failLoad(err: unknown, kind: "load" | "older" | "history") {
+    // An unresolved transcript failure keeps its kind, so Retry still runs
+    // the load or reload that publishes the read-progress token.
+    if (this.loadError === null || this.loadErrorKind !== "load") this.loadErrorKind = kind;
+    this.loadError = failureMessage(err);
+  }
+
+  /** A history read landed, which settles an earlier history failure. A
+   * failed transcript load stays until a load or reload lands, because that
+   * read is the one that publishes the session's read-progress token. */
+  private historyRecovered() {
+    if (this.loadErrorKind !== "load") this.loadError = null;
+  }
+
+  /** Repeat the read behind loadError. */
+  retryLoad(): Promise<void | boolean> {
+    const id = this.sessionId;
+    if (!id || this.loadError === null) return Promise.resolve();
+    const kind = this.loadErrorKind;
+    this.loadError = null;
+    if (kind === "older") return this.loadOlder();
+    if (kind === "history") return this.ensureHistoryLoaded();
+    if (this.messages.length === 0) {
+      this.cancelInFlight();
+      this.cancelledSessionId = null;
+      return this.loadSession(id);
+    }
+    return this.reload();
   }
 
   clear() {
@@ -253,6 +304,7 @@ export class MessagesStore {
     this.pendingReload = false;
     this.reloadFailures = 0;
     this.loadOlderPromise = null;
+    this.loadError = null;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
     this.pendingSessionUnreadOrdinal = null;
@@ -548,6 +600,7 @@ export class MessagesStore {
       this.messages = [...chunk, ...this.messages];
       this.hasOlder = chunk[0]!.ordinal > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
@@ -555,8 +608,10 @@ export class MessagesStore {
         void this.queueReload();
         return;
       }
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Failed to load older messages:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "older");
+      }
     } finally {
       if (this.sessionId === id) {
         this.loadingOlder = false;
@@ -688,13 +743,14 @@ export class MessagesStore {
         }
         from = nextFrom;
       }
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (error) {
       if (isAbortError(error) || !current()) return "done";
       if (isRevisionChange(error)) return "reload";
       this.historyComplete = false;
-      console.warn("Failed to complete session history:", error);
+      this.failLoad(error, "history");
       return "done";
     } finally {
       if (current()) this.loadingOlder = false;
@@ -769,13 +825,16 @@ export class MessagesStore {
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder = oldestNow !== undefined && oldestNow > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (err) {
       if (isAbortError(err)) return "done";
       if (this.sessionId === id && isRevisionChange(err)) return "reload";
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Failed to load older messages for ordinal:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "history");
+      }
       return "done";
     } finally {
       if (this.sessionId === id) {
@@ -786,14 +845,14 @@ export class MessagesStore {
 
   private async reloadNow(id: string) {
     const signal = this.abortController?.signal;
-    if (!signal || signal.aborted) return;
+    if (!signal || signal.aborted) return false;
 
     const previousToken = this.activeSessionToken;
     const previousMessages = this.messages;
 
     try {
       const sess = await SessionsService.getApiV1SessionsById({ id }, { signal });
-      if (this.sessionId !== id) return;
+      if (this.sessionId !== id) return false;
 
       const pendingToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
@@ -801,7 +860,7 @@ export class MessagesStore {
       let landed = true;
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
-        if (this.sessionId !== id) return;
+        if (this.sessionId !== id) return false;
         if (refreshed === "superseded") {
           landed = false;
         } else if (refreshed === "empty") {
@@ -818,7 +877,7 @@ export class MessagesStore {
       } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
         const refreshed = await this.loadFrom(id, oldestOrdinal, signal);
-        if (this.sessionId !== id) return;
+        if (this.sessionId !== id) return false;
 
         const newest = this.messages[this.messages.length - 1];
         if (refreshed === "superseded") {
@@ -836,24 +895,29 @@ export class MessagesStore {
 
       // A reload a newer load overtook leaves that load's read-progress token in place.
       if (landed && this.sessionId === id) {
+        this.loadError = null;
         const token = this.acceptedToken(pendingToken);
         const unreadOrdinal =
           token !== previousToken ? earliestChangedOrdinal(previousMessages, this.messages) : null;
         this.publishOrDeferSessionToken(token, unreadOrdinal);
       }
+      return landed && this.sessionId === id && !signal.aborted;
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err)) return false;
       const transient = isTransient(err);
       if (this.sessionId === id && (isRevisionChange(err) || transient)) {
         if (++this.reloadFailures < MAX_LOAD_ATTEMPTS) {
           if (transient) await new Promise((resolve) => setTimeout(resolve, 300));
           if (this.sessionId === id && !signal.aborted) this.pendingReload = true;
-          return;
+          return false;
         }
-        if (isRevisionChange(err)) return;
+        if (isRevisionChange(err)) return false;
       }
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Reload failed:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "load");
+      }
+      return false;
     }
   }
 
@@ -916,15 +980,20 @@ export class MessagesStore {
     messageCountHint?: number,
   ): Promise<boolean> {
     clearContentCaches();
-    this.loading = true;
-    const owner = ++this.loadingOwner;
+    // Keep a visible failure alert (and its Retry button) mounted while a
+    // background transient reload runs instead of swapping it for a spinner.
+    const showLoading = this.loadError === null;
+    const owner = showLoading ? ++this.loadingOwner : 0;
+    if (showLoading) this.loading = true;
     try {
       return messageCountHint !== undefined && messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD
         ? await this.loadProgressively(id, signal)
         : await this.loadAllMessages(id, signal, messageCountHint);
     } finally {
-      if (this.sessionId === id && this.loadingOwner === owner) {
-        this.loading = false;
+      if (this.sessionId === id) {
+        if (showLoading && this.loadingOwner === owner) {
+          this.loading = false;
+        }
         this.updateStableMainModelInfo();
       }
     }

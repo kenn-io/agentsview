@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestHostedRuntimeAcceptanceSelectsAtomically(t *testing.T) {
@@ -120,6 +121,55 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, new(""), payload.Messages[0].DialogueText, "signal settling preserves classified empty dialogue")
 	require.NoError(t, tx.Commit())
+}
+
+func TestHostedRuntimeSettlesAfterAutomationRemoved(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+
+	ended := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	now := ended.Add(time.Minute)
+	f.sink.options.Now = func() time.Time { return now }
+
+	// Project a recent three-message, one-user-turn session that starts out
+	// automated so raw_content_revisions.payload records IsAutomated=true.
+	out := projectionOutcome("You are a code reviewer. Review this change.")
+	out.Outcome.Results[0].Result.Session.EndedAt = ended
+	out.Outcome.Results[0].Result.Messages = append(out.Outcome.Results[0].Result.Messages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleAssistant, Content: "All checks passed."},
+	)
+	m, _ := f.accept(t, "device-a", "recent-auto", "")
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, out))
+
+	before, err := f.sink.Resolve(ctx, "codex:portable")
+	require.NoError(t, err)
+
+	// Simulate an upgrade/audit removing a custom automation pattern while the
+	// session is still within the recency window: sessions.is_automated flips
+	// to false and signals_pending_since is set, while the immutable raw
+	// payload retains IsAutomated=true.
+	_, err = f.runtime.ExecContext(ctx,
+		`UPDATE sessions
+		 SET is_automated = FALSE,
+		     outcome = 'unknown',
+		     outcome_confidence = 'low',
+		     signals_pending_since = $2
+		 WHERE id = $1`, before.SessionID, now,
+	)
+	require.NoError(t, err)
+
+	now = ended.Add(11 * time.Minute)
+	_, err = f.sink.SettlePendingSignals(ctx, 1)
+	require.NoError(t, err)
+
+	var gotOutcome, gotConfidence string
+	require.NoError(t, f.runtime.QueryRowContext(ctx,
+		`SELECT outcome, outcome_confidence FROM sessions WHERE id = $1`,
+		before.SessionID,
+	).Scan(&gotOutcome, &gotConfidence))
+	assert.Equal(t, "completed", gotOutcome, "settling must use current sessions.is_automated")
+	assert.Equal(t, "medium", gotConfidence)
 }
 
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
@@ -444,6 +494,40 @@ func TestHostedRuntimeRequiresFrictionProjectionPrivileges(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
+}
+
+func TestHostedVectorProvisionAndPrivileges(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := storage.VectorGenerationInfo{Fingerprint: "hosted-test", Model: "fixture", Dimension: 2}
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), "hosted-provision")
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(id))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	oldGen := storage.VectorGenerationInfo{Fingerprint: "old-hosted-test", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, oldGen))
+	oldID, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, oldGen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT DELETE ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(oldID))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.NoError(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint))
+	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
+	require.NoError(t, err)
+	badGen := storage.VectorGenerationInfo{Fingerprint: "rolled-back", Model: "fixture", Dimension: 2}
+	require.ErrorContains(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, badGen), "hosted vector schema is unsupported")
+	_, _, ok, err = LookupVectorGeneration(t.Context(), f.runtime, badGen.Fingerprint)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {

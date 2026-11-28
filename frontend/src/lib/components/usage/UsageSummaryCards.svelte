@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import StatCard from "../analytics/StatCard.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -309,15 +309,11 @@
 </div>
 
 {#if usage.errors.summary}
-  <div class="error-bar" {@attach errorTelemetry("analytics")}>
-    <span>{usage.errors.summary}</span>
-    <button
-      class="retry-btn"
-      onclick={() => usage.fetchAll({ preserveTimeRange: true })}
-    >
-      {m.shared_retry()}
-    </button>
-  </div>
+  <LoadError
+    message={usage.errors.summary}
+    onRetry={() => void usage.fetchAll({ preserveTimeRange: true })}
+    telemetry="analytics"
+  />
 {/if}
 
 <style>
@@ -327,29 +323,6 @@
     flex-wrap: wrap;
   }
 
-  .error-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-    cursor: pointer;
-  }
 
-  .retry-btn:hover {
-    background: var(--accent-red);
-    color: var(--accent-red-foreground);
-  }
 </style>

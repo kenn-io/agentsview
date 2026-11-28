@@ -65,11 +65,56 @@ func (c *cancelAfterNextErrContext) Err() error {
 
 func newCurrentProtocolServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(currentProtocolHandler(t, handler))
+}
+
+// currentProtocolHandler answers as a current remote-sync daemon and asserts
+// that each remote-sync request carries the protocol header. Any process on
+// the host can connect to an httptest port. In CI, agentsview's startup probe
+// from another test package lost a port race and reached one of these
+// servers. The client under test calls only remote-sync endpoints, so other
+// paths get a 404 without failing the test.
+func currentProtocolHandler(t assert.TestingT, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/remote-sync/") {
+			http.NotFound(w, r)
+			return
+		}
 		assert.Equal(t, strconv.Itoa(ProtocolVersion), r.Header.Get(ProtocolHeader))
 		SetProtocolHeader(w.Header())
 		handler.ServeHTTP(w, r)
-	}))
+	})
+}
+
+// failureRecorder collects assertion failures so a test can check whether a
+// helper reports one.
+type failureRecorder struct {
+	failures []string
+}
+
+func (r *failureRecorder) Errorf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
+func TestCurrentProtocolHandlerChecksOnlyRemoteSyncRequests(t *testing.T) {
+	served := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	serve := func(path string) (*failureRecorder, *httptest.ResponseRecorder) {
+		failures := &failureRecorder{}
+		response := httptest.NewRecorder()
+		currentProtocolHandler(failures, served).ServeHTTP(response,
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		return failures, response
+	}
+
+	foreign, response := serve("/_agentsview/startup")
+	assert.Equal(t, http.StatusNotFound, response.Code)
+	assert.Empty(t, foreign.failures, "a probe from another process must not fail the test")
+
+	unversioned, response := serve("/api/v1/remote-sync/targets")
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.NotEmpty(t, unversioned.failures, "a remote-sync request without the protocol header must fail the test")
 }
 
 func TestHTTPSyncRejectsRemoteWithoutProtocolHandshake(t *testing.T) {
@@ -955,7 +1000,13 @@ type mirrorTestRemote struct {
 	onManifest        func() // called before serving a manifest response
 	onManifestRequest func(*http.Request)
 	rejectDelta       bool
-	ts                *httptest.Server
+	// serveManifest and serveArchive, when set, replace the default
+	// response for that endpoint. Set them before any request: the server
+	// is already accepting connections, so swapping ts.Config.Handler
+	// instead races with a request from another process.
+	serveManifest http.HandlerFunc
+	serveArchive  http.HandlerFunc
+	ts            *httptest.Server
 }
 
 func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
@@ -975,6 +1026,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/manifest":
+			if remote.serveManifest != nil {
+				remote.serveManifest(w, r)
+				return
+			}
 			if remote.onManifest != nil {
 				remote.onManifest()
 			}
@@ -1015,6 +1070,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/archive":
+			if remote.serveArchive != nil {
+				remote.serveArchive(w, r)
+				return
+			}
 			var req ArchiveRequest
 			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
 				return
@@ -1324,6 +1383,150 @@ func TestHTTPUnchangedMirrorBackfillsAntigravityTitles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHTTPUnchangedMirrorBackfillsAntigravityCLITitles(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	cliRoot := filepath.Join(remote.dir, "instance-a", "antigravity-acp")
+	conversations := filepath.Join(cliRoot, "conversations")
+	require.NoError(t, os.MkdirAll(conversations, 0o700))
+	dbPath := filepath.Join(conversations, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, cliRoot, "hello")
+	dbtest.SetAntigravityTitle(t, cliRoot, "Saved CLI title")
+	remote.targets.Dirs = map[parser.AgentType][]string{parser.AgentAntigravityCLI: {cliRoot}}
+
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	first, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SessionsSynced)
+	const sessionID = "devbox~antigravity-cli:" + dbtest.AntigravityTitleID
+	session, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, new("Saved CLI title"), session.SessionName)
+
+	// Simulate an existing mirror from before Antigravity CLI title import:
+	// the title store is already mirrored, the session is untitled, and the
+	// verification sidecar is missing.
+	sidecar := mirrorAntigravityTitlesPath(MirrorDir(hs.DataDir, hs.Host))
+	require.NoError(t, database.RefreshNativeSessionName(t.Context(), sessionID, nil))
+	require.NoError(t, os.Remove(sidecar))
+	requests := len(remote.archiveRequests)
+
+	backfill, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, backfill.SessionsSynced)
+	assert.Empty(t, backfill.FullReason)
+	assert.Zero(t, backfill.FilesDiscovered)
+	assert.Zero(t, backfill.FilesProcessed)
+	assert.Len(t, remote.archiveRequests, requests)
+	session, err = database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Saved CLI title"), session.SessionName)
+
+	idle, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, SyncStats{}, idle)
+
+	dbtest.SetAntigravityTitle(t, cliRoot, "Renamed CLI title")
+	updated, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated.SessionsSynced)
+	session, err = database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Renamed CLI title"), session.SessionName)
+}
+
+func TestHTTPAntigravityCLISummaryMetadataChangeRefreshesSession(t *testing.T) {
+	const parentID = "cccccccc-dddd-eeee-ffff-000000000000"
+	remote := newMirrorTestRemote(t)
+	cliRoot := filepath.Join(remote.dir, "instance-a", "antigravity-acp")
+	conversations := filepath.Join(cliRoot, "conversations")
+	require.NoError(t, os.MkdirAll(conversations, 0o700))
+	dbPath := filepath.Join(conversations, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, cliRoot, "hello")
+
+	writeSummary := func(title, workspaceURI, parent string) {
+		t.Helper()
+		storePath := filepath.Join(cliRoot, parser.AntigravitySummariesDBName)
+		sconn, openErr := sql.Open("sqlite3", storePath)
+		require.NoError(t, openErr)
+		defer func() { require.NoError(t, sconn.Close()) }()
+		_, execErr := sconn.ExecContext(t.Context(), `CREATE TABLE IF NOT EXISTS conversation_summaries (
+			conversation_id TEXT PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			workspace_uris TEXT NOT NULL DEFAULT '[]',
+			parent_conversation_id TEXT NOT NULL DEFAULT ''
+		)`)
+		require.NoError(t, execErr)
+		_, execErr = sconn.ExecContext(t.Context(),
+			`INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)
+			 ON CONFLICT(conversation_id) DO UPDATE SET
+			   title = excluded.title,
+			   workspace_uris = excluded.workspace_uris,
+			   parent_conversation_id = excluded.parent_conversation_id`,
+			dbtest.AntigravityTitleID, title, workspaceURI, parent,
+		)
+		require.NoError(t, execErr)
+	}
+	writeSummary("Initial title", `["file:///remote/old-proj"]`, "")
+	remote.targets.Dirs = map[parser.AgentType][]string{parser.AgentAntigravityCLI: {cliRoot}}
+
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	first, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SessionsSynced)
+	const sessionID = "devbox~antigravity-cli:" + dbtest.AntigravityTitleID
+	before, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, "old_proj", before.Project)
+	assert.Nil(t, before.ParentSessionID)
+	assert.Equal(t, new("Initial title"), before.SessionName)
+
+	// Changing only workspace and parent in conversation_summaries.db must
+	// refresh the archived session on the next delta sync.
+	writeSummary("Initial title", `["file:///remote/new-proj"]`, parentID)
+	metaDelta, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, metaDelta.FullReason)
+	assert.Equal(t, 1, metaDelta.FilesProcessed)
+	assert.Zero(t, metaDelta.FallbackProviders)
+	afterMeta, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, afterMeta)
+	assert.Equal(t, "new_proj", afterMeta.Project)
+	assert.Equal(t, new("devbox~antigravity-cli:"+parentID), afterMeta.ParentSessionID)
+	assert.Equal(t, "subagent", afterMeta.RelationshipType)
+	assert.Equal(t, new("Initial title"), afterMeta.SessionName)
+
+	// Subsequent title-only edit still avoids reparsing the transcript.
+	writeSummary("Renamed title", `["file:///remote/new-proj"]`, parentID)
+	titleDelta, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, titleDelta.FullReason)
+	assert.Zero(t, titleDelta.FilesProcessed)
+	assert.Zero(t, titleDelta.FallbackProviders)
+	afterTitle, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Renamed title"), afterTitle.SessionName)
+	assert.Equal(t, afterMeta.FileHash, afterTitle.FileHash)
+
+	idle, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, SyncStats{}, idle)
 }
 
 func TestHTTPAntigravityAppliedStatesCoverMultipleRoots(t *testing.T) {

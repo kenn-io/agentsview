@@ -122,6 +122,11 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 	return tx.Commit()
 }
 
+func markImageTextSessionsModifiedTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT DISTINCT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`)
+	return err
+}
+
 // ClearImageText removes the active index and published matches. Cached text
 // is removed when image text is disabled.
 func (db *DB) ClearImageText(ctx context.Context) error {
@@ -132,7 +137,7 @@ func (db *DB) ClearImageText(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT DISTINCT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`); err != nil {
+	if err = markImageTextSessionsModifiedTx(ctx, tx); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM image_text_occurrences`); err != nil {

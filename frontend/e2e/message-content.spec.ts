@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { serveTranscript, transcriptMessage } from "./helpers/mock-transcript";
 
 const LOC = {
   listScroll: ".message-list-scroll",
@@ -508,4 +509,27 @@ test.describe("retained tool images", () => {
     expect(retainedBytes).toBe(1_441_138);
     expect(retainedHash).toBe("0cd12cbc57b1b4ea2cadca8f96fb7b48bfeb5ac65db6d6f8cecee074a4687dac");
   });
+});
+
+test("opens only the linked system message in the transcript", async ({ page }) => {
+  const id = MIXED_CONTENT_SESSION_ID;
+  const row = (ordinal: number, content: string, isSystem = false) =>
+    transcriptMessage(id, ordinal, {
+      role: "user",
+      content,
+      content_length: content.length,
+      is_system: isSystem,
+    });
+  await serveTranscript(page, id, [
+    row(0, "prompt"),
+    row(1, "linked system message", true),
+    row(2, "other system message", true),
+    row(3, "answer"),
+  ]);
+  await page.goto(`/sessions/${id}?msg=1`);
+  const transcript = page.locator(".message-list-scroll");
+  await expect(transcript).toHaveAttribute("data-loaded", "true");
+  await expect(transcript.getByText("linked system message", { exact: true })).toBeVisible();
+  await expect(transcript.getByText("other system message", { exact: true })).toHaveCount(0);
+  await expect(transcript.locator(".virtual-row.selected")).toContainText("linked system message");
 });

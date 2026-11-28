@@ -351,6 +351,75 @@ func TestCompactSurvivesCallerCancelAfterInstall(t *testing.T) {
 	require.NoFileExists(t, compactManifestPath(database.Path()))
 }
 
+func TestCompactRollbackHoldsReadsUntilOriginalReopens(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "s1", "proj")
+
+	type readResult struct {
+		session *Session
+		err     error
+	}
+	readDone := make(chan readResult, 1)
+	pausedReadReturned := make(chan bool, 1)
+	compactTestHookAfterInstall = func() {
+		// An open read transaction keeps a reader connection leased, so the
+		// rollback's close blocks in its drain until it is released.
+		held, err := database.getReader().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			readDone <- readResult{err: fmt.Errorf("hold reader connection: %w", err)}
+			return
+		}
+		// A non-empty directory at the manifest's temporary path makes the
+		// commit record fail, forcing the rollback.
+		blocker := compactManifestPath(database.Path()) + ".tmp"
+		if err := os.MkdirAll(filepath.Join(blocker, "child"), 0o700); err != nil {
+			_ = held.Rollback()
+			readDone <- readResult{err: fmt.Errorf("block manifest write: %w", err)}
+			return
+		}
+		go func() {
+			defer func() { _ = held.Rollback() }()
+			closedPool := database.rawReader()
+			if !assert.Eventually(t, func() bool {
+				return closedPool.PingContext(t.Context()) != nil
+			}, 10*time.Second, time.Millisecond, "rollback never closed the reader pool") {
+				pausedReadReturned <- true
+				return
+			}
+			go func() {
+				s, err := database.GetSession(t.Context(), "s1")
+				readDone <- readResult{session: s, err: err}
+			}()
+			select {
+			case res := <-readDone:
+				readDone <- res
+				pausedReadReturned <- true
+			case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the read must stay paused while the rollback drain waits on the leased connection
+				pausedReadReturned <- false
+			}
+		}()
+	}
+	defer func() { compactTestHookAfterInstall = nil }()
+
+	_, err := database.Compact(t.Context(), CompactOptions{StagingDir: t.TempDir()})
+	require.ErrorContains(t, err, "record committed archive compaction")
+
+	select {
+	case returned := <-pausedReadReturned:
+		assert.False(t, returned, "a read during rollback must wait for the reopened archive")
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "rollback never closed the reader pool")
+	}
+	select {
+	case res := <-readDone:
+		require.NoError(t, res.err, "read during rollback")
+		require.NotNil(t, res.session)
+		assert.Equal(t, "s1", res.session.ID)
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "paused read did not wake after the rollback reopened the archive")
+	}
+}
+
 func TestCompactRestartsUsageCacheBackfill(t *testing.T) {
 	database := testDB(t)
 	started := make(chan struct{}, 4)

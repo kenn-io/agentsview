@@ -22,7 +22,6 @@ func BenchmarkPGAutomationPreparation(b *testing.B) {
 			url := testPGURL(b)
 			const schema = "agentsview_automation_bench"
 			cleanNamedPGSchema(b, url, schema)
-			b.Cleanup(func() { cleanNamedPGSchema(b, url, schema) })
 			pg, err := Open(b.Context(), url, schema, true)
 			require.NoError(b, err)
 			b.Cleanup(func() { require.NoError(b, pg.Close()) })

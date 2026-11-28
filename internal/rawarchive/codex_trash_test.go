@@ -84,6 +84,8 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, database.Close()) })
 				archive, err = Open(ctx, database, seedPath, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, archive.Close()) })
 				sessionID = func(id string) string { return "codex:" + id }
 			} else {
 				data := t.TempDir()
@@ -92,12 +94,11 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 				require.NoError(t, database.EnableArchiveOnly(ctx))
 				archive, err = Open(ctx, database, data, nil)
 				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, archive.Close()) })
 				report, importErr := archive.Import(ctx, spec)
 				require.NoError(t, importErr)
 				require.Empty(t, report.Gaps)
 			}
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, archive.Close()) })
 			if tt.restore {
 				count, err := database.RestoreSession(ctx, sessionID(trashed))
 				require.NoError(t, err)

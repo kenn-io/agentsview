@@ -8,6 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 const (
@@ -16,7 +17,7 @@ const (
 	pricingRefreshJitter   = 5 * time.Minute
 )
 
-func pricingRefreshJob(database *db.DB, runner remoteSyncExclusiveRunner) poller.Job {
+func pricingRefreshJob(database *db.DB, engine *agentsync.Engine) poller.Job {
 	return poller.Job{
 		Name:       pricingRefreshJobName,
 		Interval:   pricingRefreshInterval,
@@ -24,8 +25,10 @@ func pricingRefreshJob(database *db.DB, runner remoteSyncExclusiveRunner) poller
 		Cooldown:   pricingrefresh.RefreshCooldown,
 		RunAtStart: true,
 		Run: func(ctx context.Context) error {
-			return runPricingRefresh(ctx, runner, func(ctx context.Context) error {
-				return pricingrefresh.RefreshCurrent(ctx, database)
+			return runPricingRefresh(ctx, func(ctx context.Context) error {
+				return pricingrefresh.RefreshCurrent(ctx, database, func(ctx context.Context, work func() error) error {
+					return runPricingExclusive(ctx, engine, work)
+				})
 			}, database)
 		},
 	}
@@ -38,18 +41,11 @@ type usageCacheRewarmer interface {
 
 // runPricingRefresh re-warms usage rollups once the refresh has committed any pricing write, even a partial one.
 func runPricingRefresh(
-	ctx context.Context, runner remoteSyncExclusiveRunner,
+	ctx context.Context,
 	refresh func(context.Context) error, rewarmer usageCacheRewarmer,
 ) error {
 	before, beforeErr := rewarmer.UsagePricingDigest(ctx)
-	// RunExclusive cannot cancel its sync/resync lock wait, so shutdown
-	// waits for the lock before this job can observe cancellation.
-	refreshErr := runPricingExclusive(runner, func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return refresh(ctx)
-	})
+	refreshErr := refresh(ctx)
 	after, afterErr := rewarmer.UsagePricingDigest(ctx)
 	// An unreadable digest can't prove nothing committed, so re-warm anyway.
 	if ctx.Err() == nil && (beforeErr != nil || afterErr != nil || before != after) {
@@ -68,11 +64,12 @@ func runPricingRefresh(
 }
 
 func runPricingExclusive(
-	runner remoteSyncExclusiveRunner,
+	ctx context.Context,
+	engine *agentsync.Engine,
 	work func() error,
 ) error {
-	if runner == nil {
+	if engine == nil {
 		return work()
 	}
-	return runner.RunExclusive(work)
+	return engine.RunExclusiveCtx(ctx, work)
 }

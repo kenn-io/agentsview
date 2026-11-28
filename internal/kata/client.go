@@ -43,8 +43,9 @@ var (
 )
 
 // Config is the resolved connection configuration. Hub identifies the filing
-// hub. TokenRequired means a token variable was named; a missing value must be
-// rejected by its caller rather than silently making an anonymous request.
+// hub. TokenRequired means a token variable or file was named; a missing
+// value must be rejected by its caller rather than silently making an
+// anonymous request.
 type Config struct {
 	Enabled          bool
 	Hub              bool

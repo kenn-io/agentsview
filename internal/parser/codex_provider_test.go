@@ -2345,3 +2345,196 @@ func TestCodexProviderIncrementalUserBoundaryDoesNotBackfillCommittedUsage(t *te
 		assert.Empty(t, outcome.MessageTokenUsageUpdates)
 	})
 }
+
+// Codex's home directory holds the title index next to Codex's own databases,
+// logs, and lock files. Only the index, and the transcript roots inside the
+// home directory, may keep a watch event alive.
+func TestCodexChangedPathRelevance(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	archived := filepath.Join(home, "archived_sessions")
+	rollout := filepath.Join(sessions, "2026", "11", "15", "rollout-2026-11-15T10-00-00-019eb791-cf7d-75c1-8439-9ed74c1229e3.jsonl")
+	other := t.TempDir()
+	newProvider := func(agent AgentType) Provider {
+		def, ok := AgentByType(agent)
+		require.True(t, ok)
+		factory := newCodexProviderFactory(def)
+		if agent == AgentTraeX {
+			factory = newTraeXProviderFactory(def)
+		}
+		return factory.NewProvider(ProviderConfig{Roots: []string{sessions, archived}})
+	}
+	for _, tc := range []struct {
+		name      string
+		agent     AgentType
+		watchRoot string
+		path      string
+		want      ChangedPathRelevance
+	}{
+		{"own database", AgentCodex, home, filepath.Join(home, "logs_2.sqlite"), ChangedPathNonData},
+		{"own database log", AgentCodex, home, filepath.Join(home, "state_5.sqlite-wal"), ChangedPathNonData},
+		{"index lock", AgentCodex, home, filepath.Join(home, "session_index.jsonl.lock"), ChangedPathNonData},
+		{"installation id", AgentCodex, home, filepath.Join(home, "installation_id"), ChangedPathNonData},
+		{"polled activity hints", AgentCodex, home, filepath.Join(home, "history.jsonl"), ChangedPathNonData},
+		{"title index", AgentCodex, home, filepath.Join(home, CodexSessionIndexFilename), ChangedPathDataBearing},
+		{"transcript root", AgentCodex, home, sessions, ChangedPathUnclassified},
+		{"archive root", AgentCodex, home, archived, ChangedPathUnclassified},
+		{"rollout", AgentCodex, sessions, rollout, ChangedPathUnclassified},
+		{"nested under home", AgentCodex, home, filepath.Join(home, "log", "codex-tui.log"), ChangedPathUnclassified},
+		{"unrelated directory", AgentCodex, other, filepath.Join(other, "logs_2.sqlite"), ChangedPathUnclassified},
+		{"fork", AgentTraeX, home, filepath.Join(home, "logs_2.sqlite"), ChangedPathUnclassified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveChangedPathRelevance(t.Context(), newProvider(tc.agent),
+				ChangedPathRequest{Path: tc.path, WatchRoot: tc.watchRoot})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	for _, tc := range []struct {
+		name, homeDir, metadata, project, kind string
+		recorded                               bool
+		roots                                  []string
+	}{
+		{"nested", "experiment/case/.codex-run-v1-abc", `{"label":`, "experiment/case", SessionKindRoborev, false, []string{"."}},
+		{"root", ".codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"."}},
+		{"parent root missing", "team/case/.codex-run-v1-abc", "", "project", SessionKindRoborev, false, []string{"team/case"}},
+		{"sessions root missing", "team/case/.codex-run-v1-abc", "", "project", SessionKindRoborev, false, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"sessions root malformed", "team/case/.codex-run-v1-abc", `{"label":`, "project", SessionKindRoborev, false, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"outer root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{".", "team"}},
+		{"inner root first", "team/case/.codex-run-v1-abc", "", "team/case", SessionKindRoborev, false, []string{"team", "."}},
+		{"sessions root", "team/case/.codex-run-v1-abc", `{"label":"team/case"}`, "team/case", SessionKindRoborev, true, []string{"team/case/.codex-run-v1-abc/sessions"}},
+		{"wider root", "other/place/.codex-run-v1-abc", `{"label":"team/case"}`, "team/case", SessionKindRoborev, true, []string{"."}},
+		{"ordinary home", ".codex", `{"label":"team/case"}`, "project", SessionKindNonInteractive, false, []string{".codex/sessions"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, filepath.FromSlash(tc.homeDir))
+			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+			path := writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+			if tc.metadata != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(home, CodexRunMetadataFilename), []byte(tc.metadata), 0o600))
+			}
+			roots := make([]string, len(tc.roots))
+			for i, dir := range tc.roots {
+				roots[i] = filepath.Join(root, filepath.FromSlash(dir))
+			}
+			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, path, sources[0].DisplayPath)
+			if tc.name == "root" {
+				assert.NotZero(t, CodexSourceRank(sources[0]).Class)
+			}
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, tc.project, outcome.Results[0].Result.Session.Project)
+			assert.Equal(t, tc.kind, outcome.Results[0].Result.Session.SessionKind)
+			assert.Equal(t, tc.recorded, outcome.Results[0].Result.Session.RecordedProject)
+			index := filepath.Join(home, CodexSessionIndexFilename)
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, path, changed[0].DisplayPath)
+		})
+	}
+}
+
+func TestCodexDirectRunRootPreferredOverOrdinaryCopy(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly), testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
+	runRoot := filepath.Join(root, "z", ".codex-run-v1-abc", "sessions")
+	run := writeCodexProviderSessionContent(t, runRoot, id, content)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(runRoot), CodexRunMetadataFilename), []byte(`{"label":"team/case"}`), 0o600))
+	ordinary := writeCodexProviderSessionContent(t, filepath.Join(root, "ordinary"), id, content)
+	now := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(ordinary, now, now))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{filepath.Join(root, "ordinary"), runRoot}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, run, sources[0].DisplayPath)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, run, source.DisplayPath)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
+	assert.True(t, outcome.Results[0].Result.Session.RecordedProject)
+}
+
+func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
+	older := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
+	ordinary := writeCodexProviderSessionContent(t, root, id, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	newer := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "newer", ".codex-run-v1-abc", "sessions"), id, content)
+	now := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(ordinary, now.Add(time.Hour), now.Add(time.Hour)))
+	require.NoError(t, os.Chtimes(newer, now, now))
+	require.NoError(t, os.WriteFile(newer+".zst", zstdCompress(t, []byte(content)), 0o600))
+	check := func(want string) {
+		t.Helper()
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, want, found.DisplayPath)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, want, sources[0].DisplayPath)
+	}
+	require.NoError(t, os.Remove(newer))
+	require.NoError(t, os.Chtimes(newer+".zst", now, now))
+	check(newer + ".zst")
+	require.NoError(t, os.WriteFile(newer, []byte(content), 0o600))
+	old := now.Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(newer, old, old))
+	check(older)
+}
+
+func TestCodexRecordedLabelReadErrorRetries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file read permissions are not enforced on Windows")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "team", ".codex-run-v1-test")
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+	metadataPath := filepath.Join(home, CodexRunMetadataFilename)
+	require.NoError(t, os.WriteFile(metadataPath, []byte(`{"label":"team/case"}`), 0o600))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(metadataPath, 0o600)) })
+	require.NoError(t, os.Chmod(metadataPath, 0o000))
+	_, err := os.ReadFile(metadataPath)
+	if err == nil {
+		t.Skip("the current user bypasses file permissions")
+	}
+	require.ErrorIs(t, err, os.ErrPermission)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.ErrorIs(t, err, os.ErrPermission)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	assert.Equal(t, metadataPath, pathErr.Path)
+	assert.Empty(t, outcome.SourceErrors)
+	assert.Empty(t, outcome.Results)
+}

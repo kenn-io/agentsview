@@ -5,6 +5,10 @@ import type { GetApiV1SessionsByIdMessagesDirection } from "./getApiV1SessionsBy
 
 export type GetApiV1SessionsByIdMessagesParams = {
   /**
+   * Only compact boundary messages
+   */
+  compact_boundary?: boolean;
+  /**
    * Maximum number of messages
    * @minimum 0
    */

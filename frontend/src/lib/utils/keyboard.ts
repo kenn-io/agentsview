@@ -5,6 +5,7 @@ import { sync } from "../stores/sync.svelte.js";
 import { router } from "../stores/router.svelte.js";
 import { ignoreShortcut } from "../search/find-input.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
+import { openPromptPicker } from "../components/layout/prompt-picker.js";
 import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
 import { SessionsService, type ResumeRequest } from "../api/generated/index";
@@ -211,6 +212,9 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       "[": () => {
         sessions.navigateSession(-1, starredSessionFilter());
       },
+      t: () => {
+        if (sessions.activeSessionId) openPromptPicker();
+      },
       o: () => ui.toggleSort(),
       l: () => ui.cycleLayout(),
       r: () => sync.triggerSync(),
@@ -234,7 +238,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         }
       },
       c: () => {
-        const session = sessions.activeSession;
+        const session = sync.hostSessionActionsAvailable && sessions.activeSession;
         if (session && supportsResume(session.agent)) {
           // Copy a runnable resume command. Cursor needs the backend cwd
           // applied client-side so the copied command is self-contained.
