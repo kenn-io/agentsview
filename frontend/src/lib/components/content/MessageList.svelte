@@ -25,7 +25,7 @@
     isSystemMessage,
   } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
-  import { inSessionSearch, linkedOrdinal } from "../../stores/inSessionSearch.svelte.js";
+  import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
   import LoadError from "../shared/LoadError.svelte";
@@ -95,8 +95,6 @@
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
 
-  let revealOrdinal = $derived(linkedOrdinal(messages.sessionId));
-
   // Share transcript row visibility and searchable block filters with the index.
   let sessionScope = $derived(
     projectSessionScope({
@@ -108,7 +106,6 @@
         settings.sessionProviders,
         sessions.activeSession?.agent,
       ),
-      revealOrdinal,
     }),
   );
 
@@ -1105,7 +1102,6 @@
                 message={item.message}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
-                revealed={item.message.ordinal === sessionScope.revealedOrdinal}
               />
             {/if}
           </div>

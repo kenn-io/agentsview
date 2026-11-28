@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
@@ -8,8 +8,6 @@ import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
 import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
-import { inSessionSearch } from "./lib/stores/inSessionSearch.svelte.js";
-import MessageContent from "./lib/components/content/MessageContent.svelte";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
 import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
@@ -55,74 +53,6 @@ async function selectRelativeRange(days: number) {
   preset!.click();
   await flushEffects();
 }
-
-it("opens a copied message link with its target hidden by saved filters", async () => {
-  stubAppDependencies();
-  vi.spyOn(sessions, "load").mockResolvedValue();
-  vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
-    sessions.activeSessionId = id;
-  });
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  onTestFinished(() => {
-    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
-    else Reflect.deleteProperty(navigator, "clipboard");
-    ui.showAllBlocks();
-  });
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  const makeMessage = (ordinal: number, role: string): Message => ({
-    id: ordinal + 1,
-    session_id: "session-1",
-    ordinal,
-    role,
-    content: `msg ${ordinal}`,
-    content_length: 5,
-    timestamp: "2026-01-01T00:00:00Z",
-    has_thinking: false,
-    thinking_text: "",
-    has_tool_use: false,
-    model: "",
-    context_tokens: 0,
-    output_tokens: 0,
-    has_context_tokens: false,
-    has_output_tokens: false,
-    is_system: false,
-  });
-  const linked = makeMessage(1, "assistant");
-  const card = mount(MessageContent, { target: document.body, props: { message: linked } });
-  await tick();
-  document.querySelector<HTMLButtonElement>('[aria-label="Copy link to message"]')!.click();
-  await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-  const url = writeText.mock.calls[0]![0] as string;
-  expect(url).toBe(`${window.location.origin}/sessions/session-1?msg=1`);
-  await unmount(card);
-  ui.setBlockVisible("assistant", false);
-  sessions.activeSessionId = "session-1";
-  router.route = "sessions";
-  router.sessionId = "session-1";
-  component = mount(App, { target: document.body });
-  await flushEffects();
-  messages.loading = true;
-  window.history.replaceState(null, "", url);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  await flushEffects();
-  sessions.activeSessionId = "session-1";
-  messages.sessionId = "session-1";
-  messages.messages = [makeMessage(0, "user"), linked, makeMessage(2, "user")];
-  messages.loading = false;
-  await vi.waitFor(() =>
-    expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 1, 2]),
-  );
-  expect(ui.isBlockVisible("assistant")).toBe(false);
-  expect(ui.selectedOrdinal).toBe(1);
-  ui.selectOrdinal(1);
-  await tick();
-  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 1, 2]);
-  ui.selectOrdinal(2);
-  await tick();
-  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 2]);
-  expect(router.params.msg).toBeUndefined();
-});
 
 function stubAppDependencies() {
   vi.stubGlobal(

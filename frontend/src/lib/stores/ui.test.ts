@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { tick } from "svelte";
-import { router } from "./router.svelte.js";
 import {
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_KEY,
@@ -53,98 +52,6 @@ describe("UIStore", () => {
       ui.scrollToOrdinal(5, "sess-123");
       expect(ui.pendingScrollOrdinal).toBe(5);
       expect(ui.pendingScrollSession).toBe("sess-123");
-    });
-  });
-
-  describe("message link selection", () => {
-    const openLink = () =>
-      router.navigateToSession("session-a", {
-        msg: "7",
-        call: "2",
-        tool_use_id: "tool-1",
-        rev: "rev-1",
-        fp: "abcd",
-        project: "project-a",
-        agent: "claude",
-        desktop: "on",
-        label: "one\ntwo",
-      });
-    const expectFiltersOnly = () => {
-      expect(router.params).toEqual({
-        project: "project-a",
-        agent: "claude",
-        desktop: "on",
-        label: "one\ntwo",
-      });
-      const query = new URLSearchParams(window.location.search);
-      expect([...query.keys()].sort()).toEqual(["agent", "desktop", "label", "label", "project"]);
-      expect(query.getAll("label")).toEqual(["one", "two"]);
-    };
-    afterEach(() => {
-      window.history.replaceState(null, "", "/");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-      ui.showAllBlocks();
-      ui.setTranscriptMode("normal");
-    });
-
-    it("keeps the link when reselecting its target and clears it on another selection", () => {
-      openLink();
-      ui.selectOrdinal(7);
-      expect(router.params.msg).toBe("7");
-      ui.selectOrdinal(8);
-      expectFiltersOnly();
-      expect(window.location.pathname).toBe("/sessions/session-a");
-    });
-
-    it("keeps a last-message link as the pending target resolves", () => {
-      router.navigateToSession("session-a", { msg: "last", project: "project-a" });
-      ui.pendingScrollOrdinal = -1;
-      ui.pendingScrollSession = "session-a";
-      ui.scrollToOrdinal(7, "session-a");
-      expect(router.params.msg).toBe("last");
-    });
-
-    it("clears a pending last-message link when the reader selects another message", () => {
-      router.navigateToSession("session-a", { msg: "last", project: "project-a" });
-      ui.pendingScrollOrdinal = -1;
-      ui.pendingScrollSession = "session-a";
-      ui.selectedOrdinal = null;
-      ui.selectOrdinal(8);
-      expect(router.params).toEqual({ project: "project-a" });
-    });
-
-    it("keeps a last-message link while its resolved message stays selected", () => {
-      router.navigateToSession("session-a", { msg: "last", project: "project-a" });
-      ui.selectedOrdinal = 7;
-      ui.selectOrdinal(7);
-      expect(router.params.msg).toBe("last");
-      ui.selectOrdinal(8);
-      expect(router.params).toEqual({ project: "project-a" });
-    });
-
-    it("keeps the link when the current view and target do not change", () => {
-      ui.setBlockVisible("assistant", false);
-      openLink();
-      ui.setBlockVisible("assistant", false);
-      ui.setTranscriptMode(ui.transcriptMode);
-      ui.scrollToOrdinal(7, "session-a");
-      ui.setFollowLatest(false);
-      expect(router.params.msg).toBe("7");
-      expect(router.params.call).toBe("2");
-    });
-
-    it.each([
-      ["set block visibility", () => ui.setBlockVisible("assistant", true)],
-      ["toggle block", () => ui.toggleBlock("thinking")],
-      ["show all blocks", () => ui.showAllBlocks()],
-      ["transcript mode", () => ui.setTranscriptMode("focused")],
-      ["follow latest", () => ui.setFollowLatest(true)],
-      ["another message jump", () => ui.scrollToOrdinal(8, "session-a")],
-    ])("clears the link and keeps session filters on %s", (_name, change) => {
-      ui.setBlockVisible("assistant", false);
-      openLink();
-      change();
-      expectFiltersOnly();
     });
   });
 

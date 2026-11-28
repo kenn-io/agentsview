@@ -54,56 +54,6 @@ function filtered(visible: BlockType[]) {
 }
 
 describe("session search scope", () => {
-  it("reveals a hidden linked message without displacing a focused answer", () => {
-    const prompt = message(0, "prompt", { role: "user" });
-    const answer = message(1, "answer");
-    const tool = message(2, "", {
-      has_tool_use: true,
-      tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
-    });
-    const result = scope([prompt, answer, tool], {
-      ...filtered(["user", "assistant"]),
-      transcriptMode: "focused",
-      revealOrdinal: 2,
-    });
-    expect(result.messages).toEqual([prompt, answer, tool]);
-    expect(result.allowsBlock(tool, "tool-input")).toBe(true);
-  });
-
-  it("keeps filtered blocks hidden when focused mode alone hid the linked row", () => {
-    const prompt = message(0, "prompt", { role: "user" });
-    const linked = message(1, "[Thinking]\nprivate thought\n[/Thinking]\nanswer", {
-      has_thinking: true,
-    });
-    const final = message(2, "final answer");
-    const result = scope([prompt, linked, final], {
-      ...filtered(["user", "assistant"]),
-      transcriptMode: "focused",
-      revealOrdinal: 1,
-    });
-    expect(result.messages).toEqual([prompt, linked, final]);
-    expect(result.revealedOrdinal).toBeUndefined();
-    expect(result.allowsBlock(linked, "thinking")).toBe(false);
-  });
-
-  it("searches the text of a linked answer its role filter hides", () => {
-    const prompt = message(0, "prompt", { role: "user" });
-    const answer = message(1, "needle answer");
-    const result = scope([prompt, answer], { ...filtered(["user"]), revealOrdinal: 1 });
-    expect(result.messages).toEqual([prompt, answer]);
-    expect(result.allowsBlock(answer, "text")).toBe(true);
-  });
-
-  it("keeps a hidden block out of search when the linked row is already visible", () => {
-    const thought = { has_thinking: true, thinking_text: "needle" };
-    const linked = message(1, "[Thinking]\nneedle\n[/Thinking]\nanswer", thought);
-    const other = message(2, "[Thinking]\nneedle\n[/Thinking]\nanswer", thought);
-    const result = scope([linked, other], { ...filtered(["user", "assistant"]), revealOrdinal: 1 });
-    expect(result.messages).toEqual([linked, other]);
-    expect(result.allowsBlock(linked, "thinking")).toBe(false);
-    expect(result.allowsBlock(other, "thinking")).toBe(false);
-  });
-
   it("keeps visible prose in a mixed message and drops its hidden tool blocks", () => {
     const mixed = message(1, "needle prose\n\n[Bash]\necho needle", { has_tool_use: true });
     const result = scope([mixed], filtered(["user", "assistant"]));

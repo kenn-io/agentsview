@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
+
+const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
 
 function makeToolMessage(ordinal: number): Message {
   return {
@@ -35,6 +38,23 @@ afterEach(() => {
 });
 
 describe("ToolCallGroup", () => {
+  it("copies links for each member and still copies the group", async () => {
+    copyMock.mockClear();
+    const messages = [makeToolMessage(7), makeToolMessage(9)];
+    const component = mount(ToolCallGroup, { target: document.body, props: { messages, timestamp: messages[0]!.timestamp } });
+    await tick();
+    for (const ordinal of [7, 9]) {
+      document.querySelector<HTMLButtonElement>(`[data-message-ordinal="${ordinal}"] [aria-label="Copy link to message"]`)!.click();
+      await tick();
+      expect(copyMock).toHaveBeenLastCalledWith(`${window.location.origin}/sessions/s1?msg=${ordinal}`);
+    }
+    document.querySelector<HTMLButtonElement>('[aria-label="Copy tool calls"]')!.click();
+    await tick();
+    expect(copyMock).toHaveBeenCalledTimes(3);
+    expect(copyMock.mock.calls[2]![0]).not.toContain("?msg=");
+    unmount(component);
+  });
+
   it("omits duration for legacy calls without stored timing", async () => {
     const message = makeToolMessage(1);
     message.tool_calls = [];

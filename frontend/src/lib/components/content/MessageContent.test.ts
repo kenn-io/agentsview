@@ -174,9 +174,6 @@ describe("MessageContent", () => {
     router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
     try {
       await render(message({ session_id: "session-1", ordinal: 7 }));
-      const link = document.querySelector<HTMLButtonElement>('[aria-label="Copy link to message"]');
-      expect(link?.classList.contains("message-action-btn")).toBe(true);
-      expect(link?.classList.contains("pin-btn")).toBe(false);
       await click('[aria-label="Copy link to message"]');
       expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
       expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();

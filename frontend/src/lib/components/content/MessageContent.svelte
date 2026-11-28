@@ -12,9 +12,10 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
-  import { generatedErrorMessage, getServerUrl, isRemoteConnection } from "../../api/runtime.js";
+  import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
+  import MessageLinkButton from "./MessageLinkButton.svelte";
   import DocbankMatches from "./DocbankMatches.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
@@ -22,8 +23,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import MermaidBlock from "./MermaidBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
   import { Button, CopyButton } from "@kenn-io/kit-ui";
-  import { ui, type BlockType } from "../../stores/ui.svelte.js";
-  import { getBasePath, router } from "../../stores/router.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -33,7 +33,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, LinkIcon, PinIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, PinIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -45,10 +45,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     searchOrdinal?: number;
     compact?: boolean;
     allowMutations?: boolean;
-    /** Linked message: show every block whatever the saved filters hide. */
-    revealed?: boolean;
   }
-  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true, revealed = false }: Props = $props();
+  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   /** A skill row holds one opaque body, so read it from the outer envelope. */
   function skillSegments(msg: Message) {
     if (!isSkillInvocationMessage(msg)) return null;
@@ -56,7 +54,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return segment ? [segment] : null;
   }
   let copied = $state(false);
-  let linkCopied = $state(false);
   let segments = $derived(enrichSegments(
     skillSegments(message) ?? parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
@@ -131,10 +128,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       : m.message_content_code_collapsed();
   }
 
-  function blockVisible(type: BlockType): boolean {
-    return revealed || ui.isBlockVisible(type);
-  }
-  let showText = $derived(blockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
+  let showText = $derived(ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
   let accentColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let accentForeground = $derived(isSkillInvocation ? "var(--accent-teal-foreground)" : isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isSkillInvocation ? "var(--accent-teal-ink)" : isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
@@ -179,7 +173,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return null;
   });
   let copyTimer: ReturnType<typeof setTimeout>;
-  let linkCopyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
   let forkTimer: ReturnType<typeof setTimeout>;
   async function handleCopy() {
@@ -187,19 +180,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (ok) {
       clearTimeout(copyTimer); copied = true;
       copyTimer = setTimeout(() => { copied = false; }, 1500);
-    }
-  }
-  async function handleCopyLink() {
-    const server = getServerUrl();
-    const href = router.buildMessageHref(message.session_id, message.ordinal);
-    const url = server
-      ? server.replace(/\/+$/, "") + href.slice(getBasePath().length)
-      : sync.isDesktop
-        ? `agentsview://sessions/${encodeURIComponent(message.session_id)}?msg=${message.ordinal}`
-        : window.location.origin + href;
-    if (await copyToClipboard(url)) {
-      clearTimeout(linkCopyTimer); linkCopied = true;
-      linkCopyTimer = setTimeout(() => { linkCopied = false; }, 1500);
     }
   }
   async function handleTogglePin() {
@@ -255,19 +235,14 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
     {#if allowMutations}
-    <button type="button" class="message-action-btn pin-btn" class:pinned
+    <button type="button" class="pin-btn" class:pinned
       title={pinned ? m.message_content_unpin_message() : m.message_content_pin_message()} onclick={handleTogglePin}>
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
-    <button type="button" class="message-action-btn" onclick={handleCopyLink}
-      aria-label={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}
-      title={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}>
-      {#if linkCopied}<CheckIcon size="14" strokeWidth="2.4" aria-hidden="true" />
-      {:else}<LinkIcon size="14" strokeWidth="1.8" aria-hidden="true" />{/if}
-    </button>
+    <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
     {#if canForkFromMessage}
-      <button type="button" class="message-action-btn fork-btn" title={m.session_breadcrumb_resume_session()}
+      <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
         <CirclePlayIcon size="14" strokeWidth="1.8" aria-hidden="true" />
       </button>
@@ -282,7 +257,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     </div>
   </div>
   <div class="message-body">
-    {#if attachedSkill && blockVisible("system")}
+    {#if attachedSkill && ui.isBlockVisible("system")}
       <div class="markdown attached-skill">
         <SkillBlock content={attachedSkill.content} name={attachedSkill.label} />
       </div>
@@ -291,7 +266,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {@const searchKey = activeSearchOrdinal === undefined || segment.type === "tool"
         ? undefined : blockKey(activeSearchOrdinal, segment.type, segmentIndex)}
       {#if segment.type === "thinking"}
-        {#if blockVisible("thinking")}
+        {#if ui.isBlockVisible("thinking")}
           <ThinkingBlock content={segment.content} {searchKey} />
         {/if}
       {:else if segment.type === "tool"}
@@ -299,7 +274,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {:else if segment.type === "code"}
         {@const codeLabel = segment.label?.trim().toLowerCase()}
         {@const language = segment.label?.trim() ?? ""}
-        {#if blockVisible("code")}
+        {#if ui.isBlockVisible("code")}
           {#if codeLabel === "mermaid" && !hasSearchQuery}
             <MermaidBlock content={segment.content} />
           {:else}
@@ -356,7 +331,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {/if}
     {/each}
     <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
-    {#if blockVisible("tool")}
+    {#if ui.isBlockVisible("tool")}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
@@ -421,17 +396,17 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
   .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
   .message:hover :global(.kit-copy-btn) { opacity: 1; }
-  .message-action-btn {
+  .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: none; border-radius: var(--radius-sm, 4px); background: transparent;
     color: var(--text-muted); cursor: pointer; opacity: 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s; flex-shrink: 0;
   }
-  .message:hover .message-action-btn, .message-action-btn:focus-visible, .pin-btn.pinned { opacity: 1; }
-  @media (hover: none) { .message-action-btn { opacity: 1; } }
-  .message-action-btn:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
+  .message:hover .pin-btn, .pin-btn:focus-visible, .pin-btn.pinned { opacity: 1; }
+  @media (hover: none) { .pin-btn { opacity: 1; } }
+  .pin-btn:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
   .pin-btn.pinned { color: var(--accent-blue); }
-  .message-action-btn:active { transform: var(--press-transform); }
+  .pin-btn:active { transform: var(--press-transform); }
   .pin-feedback, .fork-feedback { font-size: 11px; color: var(--text-muted); animation: fade-in-out 1.5s ease-in-out; }
   .pin-feedback[role="alert"] { animation: none; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }

@@ -191,13 +191,6 @@ export class RouterStore {
     return this.#buildUrl(sessionPath(id), { msg: String(ordinal) }, false);
   }
 
-  clearMessageTarget(): void {
-    if (!("msg" in this.params)) return;
-    const params = { ...this.params };
-    for (const key of ["msg", "call", "tool_use_id", "rev", "fp"]) delete params[key];
-    this.replaceParams(params);
-  }
-
   navigate(route: Route, params: Record<string, string> = {}): boolean {
     const url = this.#buildUrl(`/${route}`, params);
     if (url === window.location.pathname + window.location.search) {
