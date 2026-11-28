@@ -45,6 +45,7 @@ vi.mock("../../stores/router.svelte.js", () => ({
   router: {
     route: "sessions",
     navigate: vi.fn(() => true),
+    clearMessageTarget: vi.fn(),
     buildSessionHref: vi.fn((id: string) => `#/sessions/${id}`),
   },
 }));
