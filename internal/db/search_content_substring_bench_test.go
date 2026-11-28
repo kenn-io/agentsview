@@ -157,3 +157,16 @@ func BenchmarkSearchContentToolOutputRecentMatches(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkSearchContentToolRareText(b *testing.B) {
+	d := seedToolOutputSearchBenchmark(b)
+	_, err := d.getWriter().ExecContext(b.Context(), `UPDATE tool_calls SET result_content='unusualraretoken' WHERE id=(SELECT min(id) FROM tool_calls)`)
+	require.NoError(b, err)
+	f := ContentSearchFilter{Pattern: "unusualraretoken", Limit: 20}
+	b.ReportAllocs()
+	for b.Loop() {
+		page, err := d.SearchContent(b.Context(), f)
+		require.NoError(b, err)
+		require.Len(b, page.Matches, 1)
+	}
+}

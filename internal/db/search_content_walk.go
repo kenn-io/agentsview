@@ -21,8 +21,8 @@ const substringWalkFirstBatch = 16384
 // the session, so the rows of one session are contiguous and every row of an
 // earlier batch sorts before every row of a later one. Reading the batches in
 // order therefore yields the rows in the same order as one statement over the
-// whole scope. The tool sources have no substring index, and a sort over the
-// whole scope reads every tool input and output in it; stopping after the
+// whole scope. A scan and sort over the whole scope reads every tool input
+// and output in it; stopping after the
 // batch that fills the page skips the older sessions.
 func walkContentSessions(
 	ctx context.Context, q messageRowsQuerier, f ContentSearchFilter,

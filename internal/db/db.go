@@ -1008,9 +1008,10 @@ type DB struct {
 	// archiveContent indexes archiveContentRanks; see SetArchiveContent.
 	archiveContent atomic.Int32
 	// Rebuilds reserve attached IDs before their session rows are restored.
-	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
-	messageFTSRepairPending  atomic.Bool
-	searchIndexRepairPending atomic.Bool
+	archiveRebuildProvenance   atomic.Pointer[map[string]ArchiveSessionProvenance]
+	messageFTSRepairPending    atomic.Bool
+	searchIndexRepairPending   atomic.Bool
+	toolSubstringRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -3647,6 +3648,27 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, def
 	if deferred {
 		db.searchIndexRepairPending.Store(true)
 	}
+	toolPending, err := prepareToolSubstringIndex(ctx, w)
+	if err != nil {
+		return err
+	}
+	if toolPending {
+		if deferMessageFTSRepair {
+			db.toolSubstringRepairPending.Store(true)
+		} else {
+			progress.report("Building tool search index")
+			log.Print("building SQLite tool search index; scanning tool text")
+			for {
+				done, err := buildToolSubstringBatch(ctx, w)
+				if err != nil {
+					return err
+				}
+				if done {
+					break
+				}
+			}
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -5628,6 +5650,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	}
 	stmts = append(stmts, messageFTSDrops...)
 	stmts = append(stmts, dropSubstringIndexSQL...)
+	stmts = append(stmts, dropToolSubstringSQL()...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -5641,30 +5664,48 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM stats WHERE key IN (?, ?)", cjkFTSFingerprintStatsKey, searchCorpusVersionStatsKey,
+		"DELETE FROM stats WHERE key IN (?, ?, ?)", cjkFTSFingerprintStatsKey, searchCorpusVersionStatsKey, toolSubstringStateKey,
 	); err != nil {
 		return fmt.Errorf("clearing FTS versions: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	db.toolSubstringRepairPending.Store(false)
+	return nil
 }
 
 // RebuildFTS recreates the FTS tables, triggers, and
 // repopulates the indexes from the messages table.
 func (db *DB) RebuildFTS(ctx context.Context) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	w := db.getWriter()
-	if err := rebuildMessageFTS(ctx, w, nil, false); err != nil {
+	pending, err := func() (bool, error) {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		w := db.getWriter()
+		if err := rebuildMessageFTS(ctx, w, nil, false); err != nil {
+			return false, err
+		}
+		db.messageFTSRepairPending.Store(false)
+		if err := rebuildSubstringIndex(ctx, w); err != nil {
+			return false, err
+		}
+		pending, err := prepareToolSubstringIndex(ctx, w)
+		if err != nil {
+			return false, err
+		}
+		db.toolSubstringRepairPending.Store(pending)
+		if _, err := ensureCJKFTS(ctx, w, true, false); err != nil {
+			return false, fmt.Errorf("rebuild CJK fts index: %w", err)
+		}
+		db.searchIndexRepairPending.Store(false)
+		return pending, nil
+	}()
+	if err != nil {
 		return err
 	}
-	db.messageFTSRepairPending.Store(false)
-	if err := rebuildSubstringIndex(ctx, w); err != nil {
-		return err
+	if pending {
+		return db.RepairMessageFTS(ctx)
 	}
-	if _, err := ensureCJKFTS(ctx, w, true, false); err != nil {
-		return fmt.Errorf("rebuild CJK fts index: %w", err)
-	}
-	db.searchIndexRepairPending.Store(false)
 	return nil
 }
 

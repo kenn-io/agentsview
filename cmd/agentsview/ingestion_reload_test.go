@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"net"
 	"net/http"
@@ -611,4 +612,71 @@ func TestDaemonSyncChangesOnlyAfterSettingsChange(t *testing.T) {
 	stats, err = runDaemonSync(t.Context(), tr, "", false, true, nil)
 	require.NoError(t, err)
 	assert.True(t, stats.ChangesOnly, "the full pass covered the new roots")
+}
+
+func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "gemini")
+	path := filepath.Join(dir, "archive.db")
+	cfg := config.Config{Host: "127.0.0.1", DBPath: path, DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	database, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "existing", "project", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	for _, table := range []string{"tool_input_trigram_fts", "tool_result_trigram_fts", "tool_event_trigram_fts"} {
+		for _, suffix := range []string{"_ai", "_ad", "_au"} {
+			_, err = raw.ExecContext(t.Context(), "DROP TRIGGER IF EXISTS "+table+suffix)
+			require.NoError(t, err)
+		}
+		_, err = raw.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+table)
+		require.NoError(t, err)
+	}
+	_, err = raw.ExecContext(t.Context(), "DELETE FROM stats WHERE key='tool_substring_index_ready'")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.True(t, database.SearchRepairPending())
+	require.False(t, database.BlockingSearchRepairPending())
+	writeReloadGeminiSession(t, root, "existing-file")
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	pauseAfterStartup(t, ingestion)
+	writeReloadGeminiSession(t, root, "changed")
+	collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "changed"))
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer func() {
+		releaseOnce()
+		select {
+		case <-finished:
+		case <-time.After(20 * time.Second):
+			assert.Fail(t, "exclusive engine work did not finish")
+		}
+	}()
+	go func() {
+		defer close(finished)
+		_ = engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "exclusive engine work did not start")
+	}
+	result := make(chan bool, 1)
+	go func() { result <- ingestion.EnsureFresh(t.Context()) }()
+	require.Eventually(t, func() bool { ingestion.mu.Lock(); defer ingestion.mu.Unlock(); return ingestion.catchup != nil }, 20*time.Second, 50*time.Millisecond)
+	releaseOnce()
+	select {
+	case fresh := <-result:
+		require.True(t, fresh)
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "freshness wait did not finish")
+	}
+	require.True(t, sessionImported(t, database, "gemini:changed"))
 }

@@ -1,7 +1,10 @@
 package db
 
 import (
+	"bytes"
+	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,9 +19,153 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
+func dropToolSubstringIndexForTest(t *testing.T, d *DB) {
+	t.Helper()
+	for _, stmt := range dropToolSubstringSQL() {
+		_, err := d.getWriter().ExecContext(t.Context(), stmt)
+		require.NoError(t, err)
+	}
+	_, err := d.getWriter().ExecContext(t.Context(), "DELETE FROM stats WHERE key=?", toolSubstringStateKey)
+	require.NoError(t, err)
+}
+
+func TestToolSubstringSynchronousBuildReportsProgress(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT id,session_id,'Read','Read','needle' FROM messages WHERE session_id='s'`)
+	require.NoError(t, err)
+	dropToolSubstringIndexForTest(t, d)
+	require.NoError(t, d.Close())
+
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+	var details []string
+	d, err = OpenWithProgress(ctx, path, config.ArchiveContentFull, func(progress OpenProgress) {
+		details = append(details, progress.Detail)
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assert.Contains(t, details, "Building tool search index")
+	assert.Contains(t, output.String(), "building SQLite tool search index")
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
+func TestToolSubstringReadOnlyScansWhenIndexModuleUnavailable(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	t.Cleanup(func() { _ = d.Close() })
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT id,session_id,'Read','Read','needle input','needle result' FROM messages WHERE session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,tool_use_id,source,status,content,content_length,event_index)
+ VALUES('s',0,'','stdout','success','needle event',12,0)`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	// Simulate an unavailable tool index module; the message FTS tables remain available.
+	raw, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	for _, stmt := range []string{
+		"PRAGMA writable_schema=ON",
+		`UPDATE sqlite_master SET sql=replace(sql, 'USING fts5(', 'USING fts5_absent(') WHERE name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')`,
+		"PRAGMA writable_schema=OFF",
+	} {
+		_, err = raw.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, raw.Close())
+	reader, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	hits := substringHits(t, reader, ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input", "tool_result"}, Limit: 10})
+	assert.Len(t, hits, 3)
+}
+
 type substringHit struct {
 	Location string
 	Ordinal  int
+}
+
+type countedRows struct {
+	steps *atomic.Int64
+	count int64
+}
+
+func (a *countedRows) Step()       { a.steps.Add(1); a.count++ }
+func (a *countedRows) Done() int64 { return a.count }
+
+func TestToolSubstringSelectivityBoundsSizing(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,CASE WHEN i=1 THEN 'needle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+ INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,tool_use_id,source,status,content,content_length,event_index)
+ SELECT 's',0,'','stdout','success',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,6,i FROM n`)
+	require.NoError(t, err)
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var steps atomic.Int64
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(*diagnosticReaderConn).RegisterAggregator("count", func() *countedRows { return &countedRows{steps: &steps} }, true)
+	}))
+	require.NoError(t, conn.Close())
+	for _, source := range []string{"tool_input", "tool_result"} {
+		steps.Store(0)
+		f := ContentSearchFilter{Pattern: "needle", Sources: []string{source}}
+		candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+		require.NoError(t, err)
+		if source == "tool_input" {
+			require.NotEmpty(t, candidates.toolInput.sql)
+			assert.LessOrEqual(t, steps.Load(), int64(5))
+		} else {
+			require.NotEmpty(t, candidates.toolResult.sql)
+			require.NotEmpty(t, candidates.toolEvent.sql)
+			assert.LessOrEqual(t, steps.Load(), int64(10))
+		}
+	}
+}
+
+func TestToolSubstringSelectivityThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rows       int
+		wantInput  bool
+		wantResult bool
+	}{
+		{"below quarter", 3, false, false},
+		{"at quarter", 4, true, false},
+		{"below quarter for two matches", 7, true, false},
+		{"at quarter for two matches", 8, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+			_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'needle' ELSE 'other' END,CASE WHEN i<=2 THEN 'needle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`, tc.rows)
+			require.NoError(t, err)
+			f := ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input", "tool_result"}}
+			candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInput, candidates.toolInput.sql != "")
+			assert.Equal(t, tc.wantResult, candidates.toolResult.sql != "")
+		})
+	}
 }
 
 func substringHits(t *testing.T, d *DB, f ContentSearchFilter) []substringHit {
@@ -203,6 +350,8 @@ func TestSubstringIndexBuiltForExistingArchiveAndBulkImport(t *testing.T) {
 		substringHits(t, d, ContentSearchFilter{Pattern: "while dropped", Limit: 50}))
 
 	require.NoError(t, d.RebuildFTS(ctx))
+	require.True(t, hasToolSubstringIndex(ctx, d.getReader()))
+	assert.False(t, d.SearchRepairPending())
 	require.True(t, d.hasSubstringIndex(ctx))
 	requireSubstringIndexIntact(t, d)
 	assert.Equal(t, []substringHit{{"message", 2}},
@@ -658,4 +807,350 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 		require.NoError(t, d.deriveLexicalUnits(ctx, scanPage.Matches))
 		assert.Equal(t, scanPage, pages[pattern], pattern)
 	}
+}
+
+func TestToolSubstringIndexMatchesScanAndTracksWrites(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "tools", "proj", [][2]string{{"assistant", "running"}})
+	countMessagesForSubstringIndex(t, d, "tools")
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id, session_id, tool_name, category, tool_use_id, input_json, result_content)
+ SELECT id, session_id, 'Read', 'Read', '', 'RareNeedle input', 'RareNeedle result' FROM messages WHERE session_id='tools'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_result_events(session_id, tool_call_message_ordinal, tool_use_id, source, status, content, content_length, event_index)
+ VALUES('tools', 0, '', 'stdout', 'success', 'RareNeedle event', 16, 0)`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3)) INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content) SELECT m.id,m.session_id,'Read','Read','other','other' FROM messages m,n WHERE m.session_id='tools'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3)) INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,tool_use_id,source,status,content,content_length,event_index) SELECT 'tools',0,'','stdout','success','other',5,i FROM n`)
+	require.NoError(t, err)
+	f := ContentSearchFilter{Pattern: "rareneedle", Limit: 50, Sources: []string{"tool_input", "tool_result"}}
+	candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.toolInput.sql)
+	require.NotEmpty(t, candidates.toolResult.sql)
+	require.NotEmpty(t, candidates.toolEvent.sql)
+	rows, err := d.getReader().Query(ctx, "EXPLAIN QUERY PLAN SELECT tc.id FROM tool_calls tc WHERE tc.session_id=?"+candidates.toolInput.sql, append([]any{"tools"}, candidates.toolInput.args...)...)
+	require.NoError(t, err)
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		plan.WriteString(detail)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Contains(t, plan.String(), "VIRTUAL TABLE INDEX 0:M")
+	indexed := substringHits(t, d, f)
+	require.Len(t, indexed, 3)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET input_json='changedtext', result_content='changedtext' WHERE session_id='tools' AND input_json='RareNeedle input'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_result_events SET content='changedtext' WHERE session_id='tools' AND content='RareNeedle event'`)
+	require.NoError(t, err)
+	changed := ContentSearchFilter{Pattern: "changedtext", Sources: []string{"tool_input", "tool_result"}, Limit: 50}
+	candidates, err = d.substringCandidates(ctx, changed, []string{changed.Pattern})
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.toolInput.sql)
+	require.NotEmpty(t, candidates.toolResult.sql)
+	require.NotEmpty(t, candidates.toolEvent.sql)
+	assert.Len(t, substringHits(t, d, changed), 3)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_result_events WHERE session_id='tools'`)
+	require.NoError(t, err)
+	updated := substringHits(t, d, changed)
+	require.Len(t, updated, 2)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, toolSubstringStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, updated, substringHits(t, d, changed))
+}
+
+func TestToolSubstringBuildScansUntilReady(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "proj", [][2]string{{"assistant", "running"}})
+	countMessagesForSubstringIndex(t, d, "s")
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id, session_id, tool_name, category, input_json)
+ SELECT id, session_id, 'Read', 'Read', 'unindexedneedle' FROM messages WHERE session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3)) INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json) SELECT m.id,m.session_id,'Read','Read','other' FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	f := ContentSearchFilter{Pattern: "unindexedneedle", Sources: []string{"tool_input"}, Limit: 10}
+	candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.toolInput.sql)
+	dropToolSubstringIndexForTest(t, d)
+	pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	snapshot, err := d.BeginMessageSnapshot(ctx)
+	require.NoError(t, err)
+	hits, _, err := exactContentRows(ctx, snapshot.tx, f, candidates, 0)
+	require.NoError(t, err)
+	require.NoError(t, snapshot.Close())
+	require.Len(t, hits, 1)
+	done, err := buildToolSubstringBatch(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.False(t, done)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET input_json='updatedneedle' WHERE session_id='s' AND input_json='unindexedneedle'`)
+	require.NoError(t, err)
+	for !done {
+		done, err = buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+	}
+	assert.Empty(t, substringHits(t, d, f))
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "updatedneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
+func TestToolSubstringCursorSurvivesAnotherHandleRebuild(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4))
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN ? ELSE 'later' END FROM messages m,n WHERE m.session_id='s'`, "earlyneedle"+strings.Repeat("x", 1<<20))
+	require.NoError(t, err)
+	other, err := OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	dropToolSubstringIndexForTest(t, d)
+	pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	done, err := buildToolSubstringBatch(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.False(t, done)
+	var progress string
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&progress))
+	firstProgress := progress
+	pending, err = prepareToolSubstringIndex(ctx, other.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	require.NoError(t, other.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&progress))
+	assert.Equal(t, firstProgress, progress)
+	dropToolSubstringIndexForTest(t, other)
+	pending, err = prepareToolSubstringIndex(ctx, other.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	for !done {
+		done, err = buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+	}
+	var matches int
+	require.NoError(t, d.getReader().QueryRow(ctx, `SELECT count(*) FROM tool_input_trigram_fts WHERE tool_input_trigram_fts MATCH '"ear" AND "arl"'`).Scan(&matches))
+	assert.Equal(t, 1, matches)
+	assert.True(t, hasToolSubstringIndex(ctx, d.getReader()))
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
+func TestToolSubstringConcurrentBuilds(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<20000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'earlyneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	other, err := OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	dropToolSubstringIndexForTest(t, d)
+	pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, store := range []*DB{d, other} {
+		go func() {
+			<-start
+			if _, err := prepareToolSubstringIndex(ctx, store.getWriter()); err != nil {
+				errs <- err
+				return
+			}
+			for {
+				done, err := buildToolSubstringBatch(ctx, store.getWriter())
+				if err != nil || done {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	first, second := <-errs, <-errs
+	require.NoError(t, first)
+	require.NoError(t, second)
+	assert.True(t, hasToolSubstringIndex(ctx, d.getReader()))
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
+func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4)) INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json) SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'futureword' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	for _, state := range []string{"1", "2:ready", "2:0:7"} {
+		t.Run(state, func(t *testing.T) {
+			_, err := d.getWriter().ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?,?)", toolSubstringStateKey, state)
+			require.NoError(t, err)
+			assert.False(t, hasToolSubstringIndex(ctx, d.getReader()))
+			f := ContentSearchFilter{Pattern: "futureword", Sources: []string{"tool_input"}, Limit: 10}
+			candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+			require.NoError(t, err)
+			assert.Empty(t, candidates.toolInput.sql)
+			assert.Len(t, substringHits(t, d, f), 1)
+			pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+			require.NoError(t, err)
+			assert.False(t, pending)
+		})
+	}
+}
+
+func TestToolSubstringSelectivity(t *testing.T) {
+	t.Run("scope and fields", func(t *testing.T) {
+		d := testDB(t)
+		ctx := t.Context()
+		seedSearchSession(t, d, "local", "local", [][2]string{{"assistant", "running"}})
+		seedSearchSession(t, d, "remote", "remote", [][2]string{{"assistant", "running"}})
+		countMessagesForSubstringIndex(t, d, "local")
+		countMessagesForSubstringIndex(t, d, "remote")
+		_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1025)
+	 INSERT INTO tool_calls(message_id, session_id, tool_name, category, input_json, result_content)
+	 SELECT m.id, m.session_id, 'Read', 'Read', 'scopeword', 'scopeword' FROM messages m, n WHERE m.session_id='remote'`)
+		require.NoError(t, err)
+		_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<30)
+	 INSERT INTO tool_calls(message_id, session_id, tool_name, category, input_json, result_content)
+	 SELECT m.id, m.session_id, 'Read', 'Read', CASE WHEN i=1 THEN 'scopeword' ELSE 'other' END, 'scopeword' FROM messages m, n WHERE m.session_id='local'`)
+		require.NoError(t, err)
+		f := ContentSearchFilter{Pattern: "scopeword", Project: "local", Sources: []string{"tool_input", "tool_result"}, Limit: 50}
+		candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+		require.NoError(t, err)
+		assert.Empty(t, candidates.toolInput.sql)
+		assert.Empty(t, candidates.toolResult.sql)
+		archive := f
+		archive.Project = ""
+		archiveCandidates, err := d.substringCandidates(ctx, archive, []string{f.Pattern})
+		require.NoError(t, err)
+		assert.Empty(t, archiveCandidates.toolInput.sql)
+		excluded := archive
+		excluded.ExcludeProject = "remote"
+		excludedCandidates, err := d.substringCandidates(ctx, excluded, []string{f.Pattern})
+		require.NoError(t, err)
+		assert.Empty(t, excludedCandidates.toolInput.sql)
+		indexed := substringHits(t, d, f)
+		assert.Equal(t, indexed, substringHits(t, d, excluded))
+		require.Len(t, indexed, 31)
+	})
+	t.Run("index within project", func(t *testing.T) {
+		d := testDB(t)
+		ctx := t.Context()
+		seedSearchSession(t, d, "local", "local", [][2]string{{"assistant", "running"}})
+		seedSearchSession(t, d, "remote", "remote", [][2]string{{"assistant", "running"}})
+		_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<12000)
+	 INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+	 SELECT m.id,m.session_id,'Read','Read',CASE WHEN n.i=1 THEN 'scopedneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='local'`)
+		require.NoError(t, err)
+		_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1025)
+	 INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+	 SELECT m.id,m.session_id,'Read','Read','scopedneedle' FROM messages m,n WHERE m.session_id='remote'`)
+		require.NoError(t, err)
+		f := ContentSearchFilter{Pattern: "scopedneedle", Project: "local", Sources: []string{"tool_input"}, Limit: 20}
+		candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+		require.NoError(t, err)
+		require.NotEmpty(t, candidates.toolInput.sql)
+		indexed := substringHits(t, d, f)
+		require.Len(t, indexed, 1)
+		_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey)
+		require.NoError(t, err)
+		assert.Equal(t, indexed, substringHits(t, d, f))
+	})
+	for _, tc := range []struct {
+		name       string
+		remoteRows int
+		allMatch   bool
+	}{
+		{"small scope scans global matches", 30000, true},
+		{"scoped share differs from global", 100, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			seedSearchSession(t, d, "local", "local", [][2]string{{"assistant", "running"}})
+			seedSearchSession(t, d, "remote", "remote", [][2]string{{"assistant", "running"}})
+			_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4))
+	 INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+	 SELECT m.id,m.session_id,'Read','Read',CASE WHEN n.i=1 THEN 'scopedneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='local'`)
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+	 INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+	 SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 OR ? THEN 'scopedneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='remote'`, tc.remoteRows, tc.allMatch)
+			require.NoError(t, err)
+			f := ContentSearchFilter{Pattern: "scopedneedle", Project: "local", Sources: []string{"tool_input"}, Limit: 20}
+			candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+			require.NoError(t, err)
+			assert.Empty(t, candidates.toolInput.sql)
+			page, err := d.SearchContent(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "tool_input", page.Matches[0].Location)
+		})
+	}
+}
+
+func TestToolSubstringBuildBatchBounds(t *testing.T) {
+	t.Run("large row", func(t *testing.T) {
+		d := testDB(t)
+		ctx := t.Context()
+		seedSearchSession(t, d, "s", "proj", [][2]string{{"assistant", "running"}})
+		_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id, session_id, tool_name, category, input_json)
+	 SELECT id, session_id, 'Read', 'Read', ? FROM messages WHERE session_id='s'`, "small")
+		require.NoError(t, err)
+		_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id, session_id, tool_name, category, input_json)
+	 SELECT id, session_id, 'Read', 'Read', ? FROM messages WHERE session_id='s'`, strings.Repeat("x", (1<<20)+1))
+		require.NoError(t, err)
+		dropToolSubstringIndexForTest(t, d)
+		pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.True(t, pending)
+		done, err := buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.False(t, done)
+		var cursor string
+		require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
+		assert.Equal(t, "1:0:1", cursor)
+		done, err = buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.False(t, done)
+		require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
+		assert.Equal(t, "1:0:2", cursor)
+	})
+	t.Run("empty rows", func(t *testing.T) {
+		d := testDB(t)
+		ctx := t.Context()
+		seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+		_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+	 INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+	 SELECT m.id,m.session_id,'Read','Read',CASE WHEN i%2=0 THEN NULL ELSE '' END FROM messages m,n WHERE m.session_id='s'`, toolSubstringBatchRows+1)
+		require.NoError(t, err)
+		dropToolSubstringIndexForTest(t, d)
+		pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.True(t, pending)
+		done, err := buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.False(t, done)
+		var cursor string
+		require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
+		assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows), cursor)
+		done, err = buildToolSubstringBatch(ctx, d.getWriter())
+		require.NoError(t, err)
+		require.False(t, done)
+		require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
+		assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows+1), cursor)
+	})
 }

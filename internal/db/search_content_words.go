@@ -412,6 +412,11 @@ func exactContentRows(
 	ctx context.Context, tx *sql.Tx, f ContentSearchFilter,
 	candidates substringCandidateFilters, words int,
 ) ([]ContentMatch, int, error) {
+	if !hasToolSubstringIndex(ctx, tx) {
+		candidates.toolInput = substringFilter{}
+		candidates.toolResult = substringFilter{}
+		candidates.toolEvent = substringFilter{}
+	}
 	var out []ContentMatch
 	total := 0
 	want := f.Cursor + f.Limit + 1
