@@ -291,6 +291,7 @@ func ShellInputCommands(input string) ([]string, bool) {
 	return []string{payload.Cmd}, true
 }
 
+// launchedBannerIDs returns every Codex startup banner's ID, so repeats can conflict.
 func launchedBannerIDs(text string) []string {
 	var ids []string
 	for _, match := range launchedOutputBanners.FindAllStringSubmatch(text, -1) {
