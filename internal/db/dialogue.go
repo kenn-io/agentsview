@@ -88,9 +88,15 @@ func prepareMessageFTSRepair(ctx context.Context, w *writerHandle) error {
 	return tx.Commit()
 }
 
+// BlockingSearchRepairPending reports whether search repair holds the writer
+// for a full index rebuild.
+func (db *DB) BlockingSearchRepairPending() bool {
+	return db.messageFTSRepairPending.Load() || db.searchIndexRepairPending.Load()
+}
+
 // SearchRepairPending reports whether deferred search index repair is owed.
 func (db *DB) SearchRepairPending() bool {
-	return db.messageFTSRepairPending.Load() || db.searchIndexRepairPending.Load() || db.toolSubstringRepairPending.Load()
+	return db.BlockingSearchRepairPending() || db.toolSubstringRepairPending.Load()
 }
 
 // RepairMessageFTS rebuilds deferred search indexes. Writers wait while it holds db.mu.

@@ -81,9 +81,9 @@ var dropSubstringIndexSQL = []string{
 }
 
 const (
-	toolSubstringReadyKey  = "tool_substring_index_ready"
-	toolSubstringCursorKey = "tool_substring_index_cursor"
+	toolSubstringStateKey  = "tool_substring_index_ready"
 	toolSubstringVersion   = "1"
+	toolSubstringReady     = toolSubstringVersion + ":ready"
 	toolSubstringBatchRows = 1024
 )
 
@@ -121,7 +121,7 @@ func hasToolSubstringIndex(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) bool {
 	var ready bool
-	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?) AND NOT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey, toolSubstringVersion, toolSubstringCursorKey).Scan(&ready) == nil && ready
+	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?)", toolSubstringStateKey, toolSubstringReady).Scan(&ready) == nil && ready
 }
 
 // prepareToolSubstringIndex creates missing tables and resumes incomplete builds.
@@ -139,30 +139,21 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 	}
 	defer func() { _ = tx.Rollback() }()
 	var count int
-	var ready sql.NullString
-	var cursor sql.NullString
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)`, toolSubstringReadyKey, toolSubstringCursorKey).Scan(&count, &ready, &cursor); err != nil {
+	var state sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)`, toolSubstringStateKey).Scan(&count, &state); err != nil {
 		return false, err
 	}
-	if ready.Valid && ready.String != toolSubstringVersion {
+	if state.Valid && !strings.HasPrefix(state.String, toolSubstringVersion+":") {
 		return false, tx.Commit()
 	}
-	if cursor.Valid && !strings.HasPrefix(cursor.String, toolSubstringVersion+":") {
-		return false, tx.Commit()
-	}
-	// Upgrade the read snapshot to a write transaction before changing the
-	// tables. A concurrent commit makes the upgrade fail rather than reuse a
-	// stale schema or cursor.
-	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
+	// Fail a stale snapshot upgrade if another process changes the state.
+	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
 		return false, err
 	}
-	if count == len(toolSubstringFields) && ready.Valid {
+	if count == len(toolSubstringFields) && state.Valid && state.String == toolSubstringReady {
 		return false, tx.Commit()
 	}
 	if count != len(toolSubstringFields) {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey); err != nil {
-			return false, err
-		}
 		for _, stmt := range dropToolSubstringSQL() {
 			if _, err = tx.ExecContext(ctx, stmt); err != nil {
 				return false, err
@@ -173,11 +164,11 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 				return false, err
 			}
 		}
-		if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringCursorKey); err != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey); err != nil {
 			return false, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO stats(key,value) VALUES(?, ?)", toolSubstringCursorKey, toolSubstringVersion+":0:0"); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO stats(key,value) VALUES(?, ?)", toolSubstringStateKey, toolSubstringVersion+":0:0"); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
@@ -195,28 +186,25 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var ready, cursor sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT (SELECT CAST(value AS TEXT) FROM stats WHERE key=?), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)", toolSubstringReadyKey, toolSubstringCursorKey).Scan(&ready, &cursor); err != nil {
+	var state sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)", toolSubstringStateKey).Scan(&state); err != nil {
 		return false, err
 	}
-	if ready.Valid && ready.String != toolSubstringVersion {
-		return false, fmt.Errorf("unknown tool substring index version %q", ready.String)
+	if !state.Valid {
+		return false, fmt.Errorf("missing tool substring state")
 	}
-	if cursor.Valid && !strings.HasPrefix(cursor.String, toolSubstringVersion+":") {
-		return false, fmt.Errorf("unknown tool substring cursor version %q", cursor.String)
+	if !strings.HasPrefix(state.String, toolSubstringVersion+":") {
+		return false, fmt.Errorf("unknown tool substring index version %q", state.String)
 	}
-	if ready.Valid {
+	if state.String == toolSubstringReady {
 		return true, tx.Commit()
-	}
-	if !cursor.Valid {
-		return false, fmt.Errorf("missing tool substring cursor")
 	}
 	// A concurrent rebuild invalidates this read snapshot, so the write
 	// upgrade fails rather than advancing a cursor from old tables.
-	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringStateKey); err != nil {
 		return false, err
 	}
-	value := cursor.String
+	value := state.String
 	var next toolSubstringCursor
 	var version string
 	if n, err := fmt.Sscanf(value, "%1s:%d:%d", &version, &next.field, &next.id); err != nil || n != 3 || version != toolSubstringVersion || next.field < 0 || next.field > len(toolSubstringFields) || next.id < 0 || value != fmt.Sprintf("%s:%d:%d", version, next.field, next.id) {
@@ -267,15 +255,12 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 			return false, err
 		}
 		next.id = last
-		if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", fmt.Sprintf("%s:%d:%d", toolSubstringVersion, next.field, next.id), toolSubstringCursorKey); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", fmt.Sprintf("%s:%d:%d", toolSubstringVersion, next.field, next.id), toolSubstringStateKey); err != nil {
 			return false, err
 		}
 		return false, tx.Commit()
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?, ?)", toolSubstringReadyKey, toolSubstringVersion); err != nil {
-		return false, err
-	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringCursorKey); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", toolSubstringReady, toolSubstringStateKey); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

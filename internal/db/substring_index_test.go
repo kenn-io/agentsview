@@ -697,7 +697,7 @@ func TestToolSubstringIndexMatchesScanAndTracksWrites(t *testing.T) {
 	assert.Contains(t, plan.String(), "VIRTUAL TABLE INDEX 0:M")
 	indexed := substringHits(t, d, f)
 	require.Len(t, indexed, 3)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, toolSubstringReadyKey)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, toolSubstringStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, indexed, substringHits(t, d, f))
 	require.NoError(t, d.RebuildFTS(ctx))
@@ -744,7 +744,7 @@ func TestToolSubstringIndexScopeAndFieldSelectivity(t *testing.T) {
 	indexed := substringHits(t, d, f)
 	assert.Equal(t, indexed, substringHits(t, d, excluded))
 	require.Len(t, indexed, 31)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, toolSubstringReadyKey)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, toolSubstringStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, indexed, substringHits(t, d, f))
 }
@@ -806,12 +806,12 @@ func TestToolSubstringBuildPutsLargeRowsInTheirOwnBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, done)
 	var cursor string
-	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
 	assert.Equal(t, "1:0:1", cursor)
 	done, err = buildToolSubstringBatch(ctx, d.getWriter())
 	require.NoError(t, err)
 	require.False(t, done)
-	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
 	assert.Equal(t, "1:0:2", cursor)
 }
 
@@ -829,7 +829,7 @@ func TestToolSubstringSelectivityCountsToolRows(t *testing.T) {
 	require.NotEmpty(t, candidates.toolInput.sql)
 	indexed := substringHits(t, d, f)
 	require.Len(t, indexed, 5)
-	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey)
+	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, indexed, substringHits(t, d, f))
 }
@@ -856,12 +856,12 @@ func TestToolSubstringCursorSurvivesAnotherHandleRebuild(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, done)
 	var progress string
-	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&progress))
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&progress))
 	assert.Equal(t, "1:0:1", progress)
 	pending, err = prepareToolSubstringIndex(ctx, other.getWriter())
 	require.NoError(t, err)
 	require.True(t, pending)
-	require.NoError(t, other.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&progress))
+	require.NoError(t, other.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&progress))
 	assert.Equal(t, "1:0:1", progress)
 	_, err = other.getWriter().ExecContext(ctx, "DROP TABLE tool_input_trigram_fts")
 	require.NoError(t, err)
@@ -898,7 +898,7 @@ func TestToolSubstringScopedSearchWithGlobalMatches(t *testing.T) {
 	require.NotEmpty(t, candidates.toolInput.sql)
 	indexed := substringHits(t, d, f)
 	require.Len(t, indexed, 1)
-	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey)
+	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, indexed, substringHits(t, d, f))
 }
@@ -920,13 +920,13 @@ func TestToolSubstringBuildYieldsForEmptyRows(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, done)
 	var cursor string
-	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
 	assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows), cursor)
 	require.NoError(t, d.UpdateSessionCwd(ctx, "s", "batch-writer"))
 	done, err = buildToolSubstringBatch(ctx, d.getWriter())
 	require.NoError(t, err)
 	require.False(t, done)
-	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&cursor))
 	assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows+1), cursor)
 }
 
@@ -936,19 +936,9 @@ func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
 	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
 	_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4)) INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json) SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'futureword' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
 	require.NoError(t, err)
-	for _, tc := range []struct{ name, ready, cursor string }{
-		{"ready", "2", "2:0:7"},
-		{"cursor", "", "2:0:7"},
-		{"ready with unknown cursor", "1", "2:0:7"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key IN (?, ?)", toolSubstringReadyKey, toolSubstringCursorKey)
-			require.NoError(t, err)
-			if tc.ready != "" {
-				_, err = d.getWriter().ExecContext(ctx, "INSERT INTO stats(key,value) VALUES(?,?)", toolSubstringReadyKey, tc.ready)
-				require.NoError(t, err)
-			}
-			_, err = d.getWriter().ExecContext(ctx, "INSERT INTO stats(key,value) VALUES(?,?)", toolSubstringCursorKey, tc.cursor)
+	for _, state := range []string{"1", "2:ready", "2:0:7"} {
+		t.Run(state, func(t *testing.T) {
+			_, err := d.getWriter().ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?,?)", toolSubstringStateKey, state)
 			require.NoError(t, err)
 			assert.False(t, hasToolSubstringIndex(ctx, d.getReader()))
 			f := ContentSearchFilter{Pattern: "futureword", Sources: []string{"tool_input"}, Limit: 10}
@@ -962,15 +952,11 @@ func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
 			require.NoError(t, d.DropFTS(ctx))
 			require.NoError(t, d.RebuildFTS(ctx))
 			var got string
-			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&got))
-			assert.Equal(t, tc.cursor, got)
+			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&got))
+			assert.Equal(t, state, got)
 			var exists bool
 			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='tool_input_trigram_fts')").Scan(&exists))
 			assert.True(t, exists)
-			if tc.ready != "" {
-				require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringReadyKey).Scan(&got))
-				assert.Equal(t, tc.ready, got)
-			}
 		})
 	}
 }
@@ -996,7 +982,7 @@ func TestToolSubstringSmallScopeScansGlobalMatches(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "tool_input", page.Matches[0].Location)
-	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey)
+	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey)
 	require.NoError(t, err)
 	scan, err := d.SearchContent(ctx, f)
 	require.NoError(t, err)

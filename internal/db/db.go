@@ -5656,7 +5656,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var known bool
-	if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)<>?) AND NOT EXISTS(SELECT 1 FROM stats WHERE key=? AND substr(CAST(value AS TEXT),1,2)<>?)`, toolSubstringReadyKey, toolSubstringVersion, toolSubstringCursorKey, toolSubstringVersion+":").Scan(&known); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM stats WHERE key=? AND substr(CAST(value AS TEXT),1,2)<>?)`, toolSubstringStateKey, toolSubstringVersion+":").Scan(&known); err != nil {
 		return fmt.Errorf("checking tool index version: %w", err)
 	}
 	if known {
@@ -5673,7 +5673,7 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		return fmt.Errorf("clearing FTS versions: %w", err)
 	}
 	if known {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM stats WHERE key IN (?, ?)", toolSubstringReadyKey, toolSubstringCursorKey); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringStateKey); err != nil {
 			return fmt.Errorf("clearing tool FTS version: %w", err)
 		}
 	}
