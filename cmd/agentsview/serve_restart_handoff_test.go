@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,7 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+	t.Setenv("AGENTSVIEW_TEST_FIXED_PRICING", "1")
 	// Without a token, every settings response runs the host's `gh auth
 	// token`, which can take longer than the tests' one-second client timeout
 	// on a busy Windows runner.
@@ -241,6 +243,23 @@ func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
 }
 
 func TestServeRestartHandoffAppliesImagePolicy(t *testing.T) {
+	// Hold any escaped catalog fetch open to reproduce the sync-lock
+	// contention without depending on a slow upstream service.
+	requests := make(chan struct{}, 1)
+	release := make(chan struct{})
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+		<-release
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+	t.Cleanup(func() { close(release) })
+	t.Cleanup(func() { assert.Empty(t, requests, "restart fixtures must use fixed pricing catalogs") })
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+
 	for _, mode := range []string{"foreground", "background"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, dataDir := isolateServeTestHome(t)

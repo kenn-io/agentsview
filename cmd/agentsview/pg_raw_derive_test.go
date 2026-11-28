@@ -100,6 +100,12 @@ func TestMain(m *testing.M) {
 	version = "test"
 	if os.Getenv("AGENTSVIEW_TEST_REAL_CLI") == "1" {
 		disableExternalNetworkForRealCLITest()
+		if os.Getenv("AGENTSVIEW_TEST_FIXED_PRICING") == "1" {
+			// Restart fixtures exercise real syncs, which share a lock with
+			// pricing refresh. Serve fixed catalogs so a slow external fetch
+			// cannot hold that lock past the fixture's HTTP deadline.
+			http.DefaultTransport = pricingCatalogTransport{fallback: http.DefaultTransport}
+		}
 		main()
 		return
 	}

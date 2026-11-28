@@ -30,12 +30,15 @@ type pricingCatalogTransport struct {
 	requests chan *http.Request
 	fail     func(*http.Request) bool
 	before   func(*http.Request)
+	fallback http.RoundTripper
 }
 
 func (t pricingCatalogTransport) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
-	t.requests <- req
+	if t.requests != nil {
+		t.requests <- req
+	}
 	if t.before != nil {
 		t.before(req)
 	}
@@ -68,6 +71,9 @@ func (t pricingCatalogTransport) RoundTrip(
 	case "https://openrouter.ai/api/v1/models":
 		body = `{"data": []}`
 	default:
+		if t.fallback != nil {
+			return t.fallback.RoundTrip(req)
+		}
 		return nil, fmt.Errorf("unexpected pricing URL: %s", req.URL)
 	}
 	return &http.Response{
