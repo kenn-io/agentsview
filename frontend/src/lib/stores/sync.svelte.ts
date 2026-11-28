@@ -112,10 +112,6 @@ class SyncStore {
     return this.serverVersion?.archive_only === true;
   }
 
-  get hostSessionActionsAvailable(): boolean {
-    return this.serverVersion?.host_paths_detached !== true;
-  }
-
   private watchEventSource: LiveSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollVisibilityHandler: (() => void) | null = null;

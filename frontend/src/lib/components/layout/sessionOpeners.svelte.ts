@@ -8,7 +8,6 @@ import {
 import { isAbortError } from "../../api/runtime.js";
 import { m } from "../../i18n/index.js";
 import { messages as messagesStore } from "../../stores/messages.svelte.js";
-import { sync } from "../../stores/sync.svelte.js";
 import { claudeCodeLink } from "../../utils/claude.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { codexDesktopLink } from "../../utils/codex.js";
@@ -87,13 +86,12 @@ export class SessionOpeners {
   readonly fileOpeners = $derived(this.openers.filter((o) => o.kind === "files"));
 
   readonly showDropdown = $derived(
-    sync.hostSessionActionsAvailable &&
-      (this.canCopyCommand ||
-        this.codexLink !== null ||
-        (this.isLocal &&
-          (this.editorOpeners.length > 0 ||
-            this.fileOpeners.length > 0 ||
-            (this.sessionDir !== null && !!this.session?.file_path)))),
+    this.canCopyCommand ||
+      this.codexLink !== null ||
+      (this.isLocal &&
+        (this.editorOpeners.length > 0 ||
+          this.fileOpeners.length > 0 ||
+          (this.sessionDir !== null && !!this.session?.file_path))),
   );
 
   private readOpeners() {
@@ -155,7 +153,6 @@ export class SessionOpeners {
   // could neither launch nor return one. The model comes from the session
   // the request was for, even if another session opened while it ran.
   private async copyLocalResumeCommand(session: Session) {
-    if (sync.serverVersion === null || !sync.hostSessionActionsAvailable) return;
     const cmd = buildResumeCommand(session.agent, session.id, {
       model: messagesStore.resumeModelFor(session.id),
     });

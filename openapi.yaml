@@ -9224,8 +9224,6 @@ components:
           type: boolean
         friction_readable:
           type: boolean
-        host_paths_detached:
-          type: boolean
         insight_generation_available:
           type: boolean
         kata_available:

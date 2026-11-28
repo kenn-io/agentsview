@@ -76,9 +76,6 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 			version, archiveOnly := DecodeUserVersion(raw)
 			assert.Equal(t, dataVersion, version)
 			assert.True(t, archiveOnly)
-			gotDetached, err := reopened.HostPathsDetached(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, detached, gotDetached)
 		})
 	}
 }

@@ -23,7 +23,8 @@ func CopiedProjectLabel(value string) string {
 	if name == "" || export.SafeProjectDisplayLabel(name) == "" {
 		name = "copied-project"
 	}
-	return fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(value)))
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%s-%x", name, digest[:4])
 }
 
 // ClearHostSources detaches a staged archive from its original host.
@@ -39,7 +40,7 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`UPDATE commit_links SET repository=''`,
 			`UPDATE commit_trailers SET repository=''`,
 			`UPDATE cursor_usage_events SET user_id='', user_email='', account_user_id='', account_polled_at='', conversation_id=''`,
-			`DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
+			`DELETE FROM diagnostic_events`, `DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
 			`DELETE FROM provider_freshness`, `DELETE FROM skipped_files`, `DELETE FROM source_failures`,
 			`DELETE FROM local_session_source_baselines`, `DELETE FROM claude_subagent_sources`,
 			`DELETE FROM remote_skipped_files`, `DELETE FROM parser_checkpoint_blobs`, `DELETE FROM parser_checkpoints`,
@@ -47,7 +48,7 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`DELETE FROM artifact_publication_revisions`, `DELETE FROM artifact_checkpoint_heads`, `DELETE FROM artifact_checkpoint_floors`,
 			`DELETE FROM artifact_import_queue`, `DELETE FROM artifact_import_attempt_generations`, `DELETE FROM artifact_peer_checkpoint_heads`,
 			`DELETE FROM artifact_checkpoint_landing_sessions`, `DELETE FROM artifact_checkpoint_landings`,
-			`DELETE FROM artifact_checkpoint_stage_sessions`, `DELETE FROM artifact_checkpoint_stages`, `DELETE FROM session_project_assignments`,
+			`DELETE FROM artifact_checkpoint_stage_sessions`, `DELETE FROM artifact_checkpoint_stages`,
 			`DELETE FROM worktree_project_mappings`, `DELETE FROM project_identity_observations`,
 			`DELETE FROM session_project_identity_snapshots`, `DELETE FROM repository_project_names`,
 			`DELETE FROM worktree_project_mapping_changes`, `DELETE FROM project_identity_observation_changes`,
@@ -71,7 +72,12 @@ func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
 	tables := []string{"sessions", "recall_entries", "insights", "session_deletion_changes", "commit_links", "commit_trailers"}
 	labels := map[string]bool{}
 	for _, table := range tables {
-		if err := collectCopiedProjectLabels(ctx, tx, table, labels); err != nil {
+		if err := collectCopiedProjectLabels(ctx, tx, table, "project", labels); err != nil {
+			return err
+		}
+	}
+	for _, column := range []string{"project", "original_project"} {
+		if err := collectCopiedProjectLabels(ctx, tx, "session_project_assignments", column, labels); err != nil {
 			return err
 		}
 	}
@@ -108,6 +114,12 @@ func stageProjectAliases(ctx context.Context, tx *sql.Tx, values []string, label
 
 // applyProjectAliases rewrites each table once, then drops the temp table.
 func applyProjectAliases(ctx context.Context, tx *sql.Tx, tables []string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE session_project_assignments SET
+ project=COALESCE((SELECT alias FROM copied_project_aliases WHERE old=project), project),
+ original_project=COALESCE((SELECT alias FROM copied_project_aliases WHERE old=original_project), original_project)
+ WHERE project IN (SELECT old FROM copied_project_aliases) OR original_project IN (SELECT old FROM copied_project_aliases)`); err != nil {
+		return err
+	}
 	for _, table := range tables {
 		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET project=(SELECT alias FROM copied_project_aliases WHERE old=project) WHERE project IN (SELECT old FROM copied_project_aliases)"); err != nil {
 			return err
@@ -146,8 +158,8 @@ func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) (retErr error) {
 	return nil
 }
 
-func collectCopiedProjectLabels(ctx context.Context, tx *sql.Tx, table string, labels map[string]bool) (retErr error) {
-	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT project FROM "+table+" WHERE project IS NOT NULL AND project <> ''")
+func collectCopiedProjectLabels(ctx context.Context, tx *sql.Tx, table, column string, labels map[string]bool) (retErr error) {
+	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT "+column+" FROM "+table+" WHERE "+column+" IS NOT NULL AND "+column+" <> ''")
 	if err != nil {
 		return err
 	}

@@ -55,7 +55,6 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
 	ArchiveOnly                bool   `json:"archive_only,omitempty"`
-	HostPathsDetached          bool   `json:"host_paths_detached,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	FrictionAvailable          bool   `json:"friction_available"`
@@ -77,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 34
+	APIVersion = 33
 	// SyncPendingAPIVersion reports catch-up in sync status.
 	SyncPendingAPIVersion = 15
 	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.

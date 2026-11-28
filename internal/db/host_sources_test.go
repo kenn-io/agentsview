@@ -21,7 +21,7 @@ func TestClearHostSources(t *testing.T) {
 	require.NoError(t, d.SetSyncState(ctx, "machine_origin:machine-a", "origin"))
 	require.NoError(t, d.SetSyncState(ctx, "replica-position", "123"))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id, project, cwd, file_path) VALUES('a', ?, ?, ?)`, path, path, path); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id, project, cwd, file_path, machine) VALUES('a', ?, ?, ?, 'host-a.example')`, path, path, path); err != nil {
 			return err
 		}
 		for _, query := range []string{
@@ -54,14 +54,12 @@ func TestClearHostSources(t *testing.T) {
 		assert.Zero(t, count, table)
 	}
 
-	var cwd string
+	var cwd, machine string
 	var filePath sql.NullString
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT cwd, file_path FROM sessions WHERE id='a'`).Scan(&cwd, &filePath))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT cwd, file_path, machine FROM sessions WHERE id='a'`).Scan(&cwd, &filePath, &machine))
+	assert.Equal(t, "host-a.example", machine)
 	assert.Empty(t, cwd)
 	assert.False(t, filePath.Valid)
-	detached, err := d.HostPathsDetached(ctx)
-	require.NoError(t, err)
-	assert.True(t, detached)
 	labels, err := d.GetMachineLabels(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"machine-a": "Laptop"}, labels)
@@ -131,7 +129,7 @@ func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {
 		assert.NotContains(t, project, "/")
 		assert.NotContains(t, project, `\`)
 	}
-	assert.Contains(t, projects[3], "solo")
+	assert.Regexp(t, `^solo-[0-9a-f]{8}$`, projects[3])
 	assert.Equal(t, "api", projects[4])
 }
 
@@ -167,4 +165,43 @@ func TestClearHostSourcesRelabelsManyProjectsPromptly(t *testing.T) {
 	var remaining int
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM sessions WHERE project LIKE '/work/%'`).Scan(&remaining))
 	assert.Zero(t, remaining)
+}
+
+func TestClearHostSourcesRemovesHostDiagnostics(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.AppendDiagnostic(ctx, DiagnosticEvent{ID: "00000000-0000-4000-8000-000000000001", Source: "test", Message: "failed reading /work/private/session.jsonl"})
+	require.NoError(t, err)
+	require.NoError(t, d.ClearHostSources(ctx))
+	events, err := d.DiagnosticEventsAfter(ctx, 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestClearHostSourcesPreservesSessionProjectAssignments(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"first", "second"} {
+		insertSession(t, d, id, "/work/original")
+		_, err := d.AssignSessionProject(ctx, id, "/work/assigned")
+		require.NoError(t, err)
+	}
+	require.NoError(t, d.ClearHostSources(ctx))
+	for _, id := range []string{"first", "second"} {
+		session, err := d.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.True(t, session.ProjectAssigned)
+		assert.Equal(t, CopiedProjectLabel("/work/assigned"), session.Project)
+		var assigned, original string
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT project, original_project FROM session_project_assignments WHERE session_id=?`, id).Scan(&assigned, &original))
+		assert.Equal(t, CopiedProjectLabel("/work/assigned"), assigned)
+		assert.Equal(t, CopiedProjectLabel("/work/original"), original)
+	}
+	cleared, err := d.ClearSessionProjectAssignment(ctx, "first")
+	require.NoError(t, err)
+	assert.Equal(t, CopiedProjectLabel("/work/original"), cleared.Project)
+	other, err := d.GetSession(ctx, "second")
+	require.NoError(t, err)
+	require.True(t, other.ProjectAssigned)
+	assert.Equal(t, CopiedProjectLabel("/work/assigned"), other.Project)
 }

@@ -13,7 +13,6 @@ export interface VersionInfo {
   friction_available: boolean;
   friction_build_allowed: boolean;
   friction_readable?: boolean;
-  host_paths_detached?: boolean;
   insight_generation_available: boolean;
   kata_available: boolean;
   read_only?: boolean;

@@ -293,13 +293,11 @@ AGENTSVIEW_DATA_DIR=/source/archive agentsview archive copy /new/archive
 
 The copy keeps sessions, messages, stars, pins, trash, assets, and
 supported usage caches. It clears source paths, folder and worktree identity,
-credentials, and replica connections. Ordinary project labels remain; labels
-that contain paths become stable aliases. Opening and resuming host sessions
-is disabled in the copy. Archive-only mode disables source discovery, sync,
-and publication.
-Raw archive and artifact vault data and external archive bindings are omitted.
-Transcript text and tool output remain intact,
-so the copy is not a redacted dataset.
+credentials, and replica connections. Machine names and labels remain. Project
+labels containing paths become stable aliases. Archive-only mode disables source
+discovery, sync, and publication. Raw archive and artifact vault data and
+external archive bindings are omitted. Transcript text and tool output remain
+intact, so the copy is not a redacted dataset.
 
 Passing `--writers-stopped` records your attestation that source writers were
 stopped; it does not stop them for you. A rolling capture is not a final

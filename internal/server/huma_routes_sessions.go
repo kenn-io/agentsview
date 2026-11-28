@@ -965,19 +965,6 @@ type emptyTrashResponse struct {
 	Deleted int `json:"deleted"`
 }
 
-func (s *Server) requireHostSessionActions(ctx context.Context) error {
-	if database, ok := s.db.(*db.DB); ok {
-		detached, err := database.HostPathsDetached(ctx)
-		if err != nil {
-			return serverError(err)
-		}
-		if detached {
-			return apiError(http.StatusConflict, "session actions are unavailable in a copied archive")
-		}
-	}
-	return nil
-}
-
 func (s *Server) humaGetSessionDir(
 	ctx context.Context,
 	in *idPathInput,
@@ -1010,9 +997,6 @@ func (s *Server) humaOpenSession(
 	}
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
-	}
-	if err := s.requireHostSessionActions(ctx); err != nil {
-		return nil, err
 	}
 	projectDir := resolveSessionDir(session)
 	if projectDir == "" {
@@ -1746,9 +1730,6 @@ func (s *Server) humaResumeSession(
 	}
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
-	}
-	if err := s.requireHostSessionActions(ctx); err != nil {
-		return nil, err
 	}
 	req := in.Body
 	host, rawID := parser.StripHostPrefix(in.ID)

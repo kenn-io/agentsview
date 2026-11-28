@@ -17,43 +17,43 @@ type CopyOptions struct {
 }
 
 // Copy creates a detached copy while the caller holds the source writer lock.
-func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error) {
+func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 	if err := options.Settings.validate(); err != nil {
-		return report, err
+		return err
 	}
 	source, err := canonicalRecoverySource(options.DataDir)
 	if err != nil {
-		return report, err
+		return err
 	}
 	destination, err := recoveryDestination(options.Destination)
 	if err != nil {
-		return report, err
+		return err
 	}
 	if err := rejectPathsOverlap(source, destination, "copy destination must be outside the archive data directory"); err != nil {
-		return report, err
+		return err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {
-			return report, err
+			return err
 		}
-		return report, errors.New("copy requires a new destination")
+		return errors.New("copy requires a new destination")
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(destination), ".archive-copy-")
 	if err != nil {
-		return report, err
+		return err
 	}
 	defer func() { retErr = errors.Join(retErr, os.RemoveAll(stage)) }()
 	path := filepath.Join(source, "sessions.db")
 	info, err := os.Lstat(path)
 	if err != nil {
-		return report, err
+		return err
 	}
 	if err := rawcapture.SnapshotSQLite(ctx, path, filepath.Join(stage, "sessions.db"), info); err != nil {
-		return report, err
+		return err
 	}
 	database, err := db.OpenIsolatedWithArchiveContent(ctx, filepath.Join(stage, "sessions.db"), options.Settings.ArchiveContent)
 	if err != nil {
-		return report, err
+		return err
 	}
 	err = database.ClearHostSources(ctx)
 	if err == nil {
@@ -64,22 +64,22 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 		databaseID, err = database.GetDatabaseID(ctx)
 	}
 	if err = errors.Join(err, database.Close()); err != nil {
-		return report, err
+		return err
 	}
 	assets := filepath.Join(source, "assets")
 	if info, err := os.Lstat(assets); err == nil {
 		if !info.IsDir() {
-			return report, errors.New("assets must be a directory")
+			return errors.New("assets must be a directory")
 		}
 		if err := os.CopyFS(filepath.Join(stage, "assets"), os.DirFS(assets)); err != nil {
-			return report, err
+			return err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return report, err
+		return err
 	}
 	for _, cache := range db.UsageCacheFiles(path, databaseID) {
 		if err := ctx.Err(); err != nil {
-			return report, err
+			return err
 		}
 		info, err := os.Lstat(cache)
 		if errors.Is(err, os.ErrNotExist) {
@@ -93,25 +93,25 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 			err = db.ClearCopiedUsageRollups(ctx, target)
 		}
 		if err != nil {
-			return report, err
+			return err
 		}
 	}
 	if err := writeRecoveryConfig(stage, options.Settings); err != nil {
-		return report, err
+		return err
 	}
 	database, err = db.OpenIsolatedWithArchiveContent(ctx, filepath.Join(stage, "sessions.db"), options.Settings.ArchiveContent)
 	if err != nil {
-		return report, err
+		return err
 	}
 	err = database.VerifyAssets(ctx, filepath.Join(stage, "assets"))
 	if err = errors.Join(err, database.Close()); err != nil {
-		return report, err
+		return err
 	}
 	if err := ctx.Err(); err != nil {
-		return report, err
+		return err
 	}
 	if err := atomicfile.RenameNoReplace(stage, destination); err != nil {
-		return report, err
+		return err
 	}
-	return report, nil
+	return nil
 }

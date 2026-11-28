@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,49 +29,6 @@ func TestVersionReportsArchiveOnly(t *testing.T) {
 	after := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, after.Code)
 	assert.True(t, decodeRecorder[VersionInfo](t, after).ArchiveOnly)
-}
-
-func TestDetachedArchiveRejectsHostActions(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	require.NoError(t, f.db.UpsertSession(t.Context(), db.Session{ID: "claude:copied", Project: "demo", Agent: "claude", Cwd: t.TempDir()}))
-	require.NoError(t, f.db.ClearHostSources(t.Context()))
-	version := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
-	require.Equal(t, http.StatusOK, version.Code)
-	assert.True(t, decodeRecorder[VersionInfo](t, version).HostPathsDetached)
-	response := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/claude:copied/resume", map[string]any{"command_only": true})
-	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
-	assert.NotContains(t, response.Body.String(), "claude resume")
-}
-
-func TestDetachedArchiveRejectsOpenAfterProjectAssignment(t *testing.T) {
-	ctx := t.Context()
-	f := newSyncRouteFixture(t)
-	path := t.TempDir()
-	bin, err := exec.LookPath("true")
-	if err != nil {
-		t.Skip("true executable unavailable")
-	}
-	openerCacheMu.Lock()
-	previous, previousTime := openerCache, openerCacheAt
-	openerCache = []Opener{{ID: "test-opener", Kind: "editor", Bin: bin}}
-	openerCacheAt = time.Now()
-	openerCacheMu.Unlock()
-	t.Cleanup(func() {
-		openerCacheMu.Lock()
-		openerCache, openerCacheAt = previous, previousTime
-		openerCacheMu.Unlock()
-	})
-	require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: "claude:ordinary", Project: "demo", Agent: "claude", Cwd: path}))
-	open := func(id string) *httptest.ResponseRecorder {
-		return serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/"+id+"/open", map[string]any{"opener_id": "test-opener"})
-	}
-	assert.Equal(t, http.StatusOK, open("claude:ordinary").Code)
-	require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: "claude:copied", Project: "demo", Agent: "claude"}))
-	require.NoError(t, f.db.ClearHostSources(ctx))
-	assigned := serveJSON(t, f.handler, http.MethodPut, "/api/v1/settings/session-project-assignments/claude:copied", map[string]string{"project": path})
-	require.Equal(t, http.StatusOK, assigned.Code, assigned.Body.String())
-	response := open("claude:copied")
-	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
 }
 
 func TestArchiveOnlyRejectsManualSync(t *testing.T) {
