@@ -120,7 +120,8 @@ func dropToolSubstringSQL() []string {
 
 func hasToolSubstringIndex(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}) bool {
+},
+) bool {
 	var ready bool
 	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?)", toolSubstringStateKey, toolSubstringReady).Scan(&ready); err != nil || !ready {
 		return false
@@ -217,6 +218,7 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 		if err != nil {
 			return false, err
 		}
+		defer rows.Close()
 		var last, size int64
 		count := 0
 		for rows.Next() {

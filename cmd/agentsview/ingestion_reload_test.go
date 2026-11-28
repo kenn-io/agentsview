@@ -656,7 +656,7 @@ func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
 		select {
 		case <-finished:
 		case <-time.After(20 * time.Second):
-			t.Error("exclusive engine work did not finish")
+			assert.Fail(t, "exclusive engine work did not finish")
 		}
 	}()
 	go func() {
@@ -666,7 +666,7 @@ func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(20 * time.Second):
-		t.Fatal("exclusive engine work did not start")
+		require.FailNow(t, "exclusive engine work did not start")
 	}
 	result := make(chan bool, 1)
 	go func() { result <- ingestion.EnsureFresh(t.Context()) }()
@@ -676,7 +676,7 @@ func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
 	case fresh := <-result:
 		require.True(t, fresh)
 	case <-time.After(20 * time.Second):
-		t.Fatal("freshness wait did not finish")
+		require.FailNow(t, "freshness wait did not finish")
 	}
 	require.True(t, sessionImported(t, database, "gemini:changed"))
 }

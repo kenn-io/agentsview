@@ -120,7 +120,7 @@ func TestToolSubstringSelectivityBoundsSizing(t *testing.T) {
 	require.NoError(t, err)
 	var steps atomic.Int64
 	require.NoError(t, conn.Raw(func(raw any) error {
-		return raw.(*diagnosticReaderConn).SQLiteConn.RegisterAggregator("count", func() *countedRows { return &countedRows{steps: &steps} }, true)
+		return raw.(*diagnosticReaderConn).RegisterAggregator("count", func() *countedRows { return &countedRows{steps: &steps} }, true)
 	}))
 	require.NoError(t, conn.Close())
 	for _, source := range []string{"tool_input", "tool_result"} {
@@ -832,6 +832,7 @@ func TestToolSubstringIndexMatchesScanAndTracksWrites(t *testing.T) {
 	require.NotEmpty(t, candidates.toolEvent.sql)
 	rows, err := d.getReader().Query(ctx, "EXPLAIN QUERY PLAN SELECT tc.id FROM tool_calls tc WHERE tc.session_id=?"+candidates.toolInput.sql, append([]any{"tools"}, candidates.toolInput.args...)...)
 	require.NoError(t, err)
+	defer rows.Close()
 	var plan strings.Builder
 	for rows.Next() {
 		var id, parent, unused int
@@ -980,9 +981,9 @@ func TestToolSubstringConcurrentBuilds(t *testing.T) {
 		}()
 	}
 	close(start)
-	for range 2 {
-		assert.NoError(t, <-errs)
-	}
+	first, second := <-errs, <-errs
+	require.NoError(t, first)
+	require.NoError(t, second)
 	assert.True(t, hasToolSubstringIndex(ctx, d.getReader()))
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
 }
