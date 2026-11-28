@@ -979,17 +979,72 @@ func (s *Server) humaGetSessionDir(
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
+	return s.sessionDirectoryOutput(ctx, session)
+}
+
+// sessionDirectoryOutput hides reassigned paths in copied archives.
+func (s *Server) sessionDirectoryOutput(
+	ctx context.Context, session *db.Session,
+) (*jsonOutput[sessionDirectoryResponse], error) {
+	detached, err := s.hostPathsDetached(ctx)
+	if err != nil || detached {
+		return &jsonOutput[sessionDirectoryResponse]{}, err
+	}
 	return &jsonOutput[sessionDirectoryResponse]{
 		Body: sessionDirectoryResponse{Path: resolveSessionPath(session, filepath.IsAbs)},
 	}, nil
+}
+
+// requireLocalHostActions rejects host actions in remote and copied archives.
+func (s *Server) requireLocalHostActions(ctx context.Context) error {
+	if s.db.ReadOnly() {
+		return apiError(http.StatusNotImplemented, "not available in remote mode")
+	}
+	return s.requireAttachedHostPaths(ctx)
+}
+
+// requireAttachedHostPaths rejects host actions in copied archives.
+func (s *Server) requireAttachedHostPaths(ctx context.Context) error {
+	detached, err := s.hostPathsDetached(ctx)
+	if err != nil {
+		return err
+	}
+	if detached {
+		return apiError(http.StatusConflict, "session actions are unavailable in a copied archive")
+	}
+	return nil
+}
+
+func (s *Server) hostPathsDetached(ctx context.Context) (bool, error) {
+	database, ok := s.db.(*db.DB)
+	if !ok {
+		return false, nil
+	}
+	detached, err := database.HostPathsDetached(ctx)
+	if err != nil {
+		return false, serverError(err)
+	}
+	return detached, nil
+}
+
+// resumeSession returns the live session after rejecting copied archives.
+func (s *Server) resumeSession(ctx context.Context, id string) (*db.Session, error) {
+	session, err := s.db.GetSessionFull(ctx, id)
+	if err != nil {
+		return nil, internalError("resume: session lookup failed", err)
+	}
+	if session == nil || session.DeletedAt != nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+	return session, s.requireAttachedHostPaths(ctx)
 }
 
 func (s *Server) humaOpenSession(
 	ctx context.Context,
 	in *openSessionInput,
 ) (*jsonOutput[openSessionResponse], error) {
-	if s.db.ReadOnly() {
-		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
+	if err := s.requireLocalHostActions(ctx); err != nil {
+		return nil, err
 	}
 	session, err := s.db.GetSessionFull(ctx, in.ID)
 	if err != nil {
@@ -1724,12 +1779,9 @@ func (s *Server) humaResumeSession(
 	ctx context.Context,
 	in *resumeSessionInput,
 ) (*jsonOutput[resumeResponse], error) {
-	session, err := s.db.GetSessionFull(ctx, in.ID)
+	session, err := s.resumeSession(ctx, in.ID)
 	if err != nil {
-		return nil, internalError("resume: session lookup failed", err)
-	}
-	if session == nil || session.DeletedAt != nil {
-		return nil, apiError(http.StatusNotFound, "session not found")
+		return nil, err
 	}
 	req := in.Body
 	host, rawID := parser.StripHostPrefix(in.ID)

@@ -319,3 +319,58 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 		})
 	}
 }
+
+func TestRelabelCopiedUsageRollupsSupportsOldFormats(t *testing.T) {
+	for _, format := range []int{21, 23} {
+		t.Run(strconv.Itoa(format), func(t *testing.T) {
+			archivePath, cachePath, id := copyUsageFixture(t, format)
+			raw := openRawUsageCacheTestDB(t, cachePath)
+			var installs int
+			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&installs))
+			require.Positive(t, installs)
+			require.NoError(t, raw.Close())
+			usable, err := UsableCopiedUsageCache(t.Context(), cachePath, id)
+			require.NoError(t, err)
+			require.True(t, usable)
+			require.NoError(t, RelabelCopiedUsageRollups(t.Context(), cachePath, archivePath))
+			raw = openRawUsageCacheTestDB(t, cachePath)
+			var kept int
+			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&kept))
+			assert.Equal(t, installs, kept)
+			require.NoError(t, raw.Close())
+		})
+	}
+}
+
+func TestUsableCopiedUsageCache(t *testing.T) {
+	for _, kind := range []string{"wrong archive", "missing schema", "unrelated"} {
+		t.Run(kind, func(t *testing.T) {
+			archivePath := filepath.Join(t.TempDir(), "sessions.db")
+			database, err := Open(t.Context(), archivePath)
+			require.NoError(t, err)
+			_, err = database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+			require.NoError(t, err)
+			id, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			cachePath := usageCacheGenerationPath(archivePath, usageCacheFormatVersion, id)
+			if kind == "unrelated" {
+				require.NoError(t, os.Remove(cachePath))
+			}
+			raw := openRawUsageCacheTestDB(t, cachePath)
+			switch kind {
+			case "wrong archive":
+				_, err = raw.ExecContext(t.Context(), `UPDATE usage_cache_metadata SET value='other-archive' WHERE key='source_database_id'`)
+			case "missing schema":
+				_, err = raw.ExecContext(t.Context(), `DROP TABLE usage_facts`)
+			case "unrelated":
+				_, err = raw.ExecContext(t.Context(), `CREATE TABLE unrelated(id INTEGER)`)
+			}
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+			usable, err := UsableCopiedUsageCache(t.Context(), cachePath, id)
+			require.NoError(t, err)
+			assert.False(t, usable)
+		})
+	}
+}

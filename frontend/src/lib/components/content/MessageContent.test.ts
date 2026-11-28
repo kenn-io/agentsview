@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   isDesktop: false,
   remote: false,
   searching: false,
+  hostSessionActionsAvailable: true,
 }));
 vi.mock("../../stores/messages.svelte.js", () => ({ messages: { sessionId: "", mainModel: "" } }));
 const uiState = vi.hoisted(() => {
@@ -166,6 +167,7 @@ afterEach(async () => {
   state.isDesktop = false;
   localStorage.removeItem("agentsview-server-url");
   state.searching = false;
+  state.hostSessionActionsAvailable = true;
   uiState.showAllBlocks();
   uiState.alwaysShowYear = false;
 });
@@ -511,6 +513,12 @@ describe("MessageContent", () => {
       expect(text(".fork-feedback")).not.toBe("");
     },
   );
+  it("hides message-point resume when host actions are unavailable", async () => {
+    state.hostSessionActionsAvailable = false;
+    state.sessions = [session()];
+    await render(message({ ordinal: 1 }));
+    expect(document.querySelector(".fork-btn")).toBeNull();
+  });
   it("hides forking in remote read-only mode", async () => {
     state.readOnly = true;
     state.remote = true;

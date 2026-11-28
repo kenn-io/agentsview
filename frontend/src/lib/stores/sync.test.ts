@@ -125,6 +125,21 @@ describe("remote API version", () => {
   );
 });
 
+describe("host session actions", () => {
+  afterEach(() => {
+    sync.serverVersion = null;
+  });
+
+  it.each([
+    { version: null, allowed: false },
+    { version: {}, allowed: true },
+    { version: { host_paths_detached: true }, allowed: false },
+  ])("allows actions for version $version: $allowed", ({ version, allowed }) => {
+    sync.serverVersion = version as typeof sync.serverVersion;
+    expect(sync.hostSessionActionsAvailable).toBe(allowed);
+  });
+});
+
 describe("hidden status polling", () => {
   it("leaves a hidden tab quiet and polls again when visible", async () => {
     vi.useFakeTimers();

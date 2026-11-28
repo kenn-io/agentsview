@@ -11,6 +11,10 @@ The latest release is
 
 **Improvements**
 
+- `agentsview archive copy` creates a self-contained copy of a stopped archive
+  for a throwaway preview instance, retaining history and usage caches while
+  clearing host paths and connections. Recovery vaults are omitted.
+
 - `replica pg push` loads new sessions into PostgreSQL much faster over slow or
   distant links. It used to wait for about 20 round trips per session; it now
   sends each group of up to 50 new sessions in a few round trips. With 100 ms

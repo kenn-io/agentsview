@@ -238,7 +238,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         }
       },
       c: () => {
-        const session = sessions.activeSession;
+        const session = sync.hostSessionActionsAvailable && sessions.activeSession;
         if (session && supportsResume(session.agent)) {
           // Copy a runnable resume command. Cursor needs the backend cwd
           // applied client-side so the copied command is self-contained.

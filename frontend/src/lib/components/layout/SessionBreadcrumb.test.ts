@@ -365,6 +365,7 @@ beforeEach(() => {
     .mockResolvedValue(makeToolSequences());
   messages.clear();
   sessionTiming.reset();
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
   getTiming.mockReset();
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
@@ -402,6 +403,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockRestore();
   for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
@@ -1026,6 +1028,25 @@ describe("SessionBreadcrumb", () => {
 
     unmount(component);
     messages.clear();
+  });
+
+  it("omits the open/resume menu for a copied archive", async () => {
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(false);
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "" });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("codex", {
+          id: "codex:copied-session",
+        }),
+        onBack: () => {},
+      },
+    });
+    await flushPromises();
+    await tick();
+
+    expect(document.querySelector(".resume-btn")).toBeNull();
+    await unmount(component);
   });
 
   it("offers a Codex Desktop deep link for a local terminal-created session", async () => {

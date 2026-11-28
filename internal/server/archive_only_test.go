@@ -24,11 +24,15 @@ func TestVersionReportsArchiveOnly(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	before := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, before.Code)
-	assert.False(t, decodeRecorder[VersionInfo](t, before).ArchiveOnly)
+	version := decodeRecorder[VersionInfo](t, before)
+	assert.False(t, version.ArchiveOnly)
+	assert.False(t, version.HostPathsDetached)
+	require.NoError(t, f.db.ClearHostSources(t.Context()))
 	require.NoError(t, f.db.EnableArchiveOnly(t.Context()))
 	after := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, after.Code)
 	assert.True(t, decodeRecorder[VersionInfo](t, after).ArchiveOnly)
+	assert.True(t, decodeRecorder[VersionInfo](t, after).HostPathsDetached)
 }
 
 func TestArchiveOnlyRejectsManualSync(t *testing.T) {

@@ -199,7 +199,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       pinFeedback = generatedErrorMessage(error);
     }
   }
-  let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
+  let canForkFromMessage = $derived(allowMutations && sync.hostSessionActionsAvailable &&
+    owningSession?.agent === "claude" &&
     !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
   async function handleForkFromHere() {
     if (!canForkFromMessage) return;
