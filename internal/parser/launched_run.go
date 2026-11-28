@@ -327,9 +327,8 @@ func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
-func launchedResultID(ctx context.Context, input, output string, failed bool) string {
-	id := launchedRunID(ctx, input, output)
-	if failed && !slices.Contains(launchedOutputIDs(launchedRunOutput(codeModeOutput(output))), id) {
+func launchedResultID(ctx context.Context, input, output string, failed bool) (id string) {
+	if id = launchedRunID(ctx, input, output); failed && !slices.Contains(launchedOutputIDs(launchedRunOutput(codeModeOutput(output))), id) {
 		return ""
 	}
 	return id
