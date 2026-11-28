@@ -60,7 +60,6 @@ func TestLaunchedRunLinksAfterIncrementalResult(t *testing.T) {
 	count, err := database.ToolCallCount(t.Context(), "launcher")
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
-
 }
 
 func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {
