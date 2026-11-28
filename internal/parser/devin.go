@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"github.com/tidwall/gjson"
 )
 
@@ -520,10 +520,53 @@ type devinMessageNodeRow struct {
 	CreatedAt    int64
 }
 
+// Keep the original cause for errors.Is/As, but never log a driver-supplied
+// path or the source value that database/sql quotes in conversion errors.
+type devinMessageNodesError struct {
+	op    string
+	cause error
+}
+
+func (e *devinMessageNodesError) Unwrap() error { return e.cause }
+
+func (e *devinMessageNodesError) Error() string {
+	msg := e.op + " devin message_nodes"
+	if dbErr, ok := errors.AsType[sqlite3.Error](e.cause); ok {
+		// Code uses SQLite's static result-code description.
+		return msg + ": " + dbErr.Code.Error()
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, os.ErrPermission, os.ErrNotExist} {
+		if errors.Is(e.cause, cause) {
+			return msg + ": " + cause.Error()
+		}
+	}
+	return msg
+}
+
+// SQLITE_ERROR covers both missing schema and unrelated SQL failures.
+// Inspect the schema only on this error path, without quoting driver text.
+func devinMessageNodesQueryError(ctx context.Context, db *sql.DB, cause error) error {
+	if dbErr, ok := errors.AsType[sqlite3.Error](cause); ok && dbErr.Code == sqlite3.ErrError {
+		var total, required int
+		err := db.QueryRowContext(ctx, `
+			SELECT count(*), count(*) FILTER (WHERE name COLLATE NOCASE IN
+			       ('row_id', 'node_id', 'parent_node_id', 'chat_message', 'created_at', 'session_id'))
+			  FROM pragma_table_xinfo('message_nodes')
+		`).Scan(&total, &required)
+		if err == nil && total == 0 {
+			return errors.New("no such table: message_nodes")
+		}
+		if err == nil && required < 6 {
+			return errors.New("no such column in devin message_nodes")
+		}
+	}
+	return &devinMessageNodesError{"querying", cause}
+}
+
 func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]devinMessageNodeRow, error) {
 	db, err := openDevinDB(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, &devinMessageNodesError{"opening", err}
 	}
 	defer db.Close()
 
@@ -538,7 +581,7 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 		 ORDER BY created_at ASC, row_id ASC
 	`, rawSessionID)
 	if err != nil {
-		return nil, err
+		return nil, devinMessageNodesQueryError(ctx, db, err)
 	}
 	defer rows.Close()
 
@@ -546,12 +589,12 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 	for rows.Next() {
 		var row devinMessageNodeRow
 		if err := rows.Scan(&row.RowID, &row.NodeID, &row.ParentNodeID, &row.ChatMessage, &row.CreatedAt); err != nil {
-			return nil, err
+			return nil, &devinMessageNodesError{"scanning", err}
 		}
 		nodes = append(nodes, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, &devinMessageNodesError{"iterating", err}
 	}
 	return nodes, nil
 }

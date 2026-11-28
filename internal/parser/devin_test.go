@@ -909,6 +909,14 @@ func TestParseDevinSessionSourceErrors(t *testing.T) {
 			},
 			wantError: "no such table: message_nodes",
 		},
+		{
+			name: "message node column missing",
+			prepare: func(t *testing.T, fixture *devinTestFixture) {
+				t.Helper()
+				execDevinTestSQL(t, fixture.DBPath, `ALTER TABLE message_nodes DROP COLUMN created_at`)
+			},
+			wantError: "no such column in devin message_nodes",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

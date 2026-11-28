@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -271,6 +272,48 @@ func TestDevinProviderSkipsEmptyMessageNodeFallback(t *testing.T) {
 			assert.Empty(t, outcome.SourceErrors)
 		})
 	}
+}
+
+func TestDevinProviderMessageNodeScanErrors(t *testing.T) {
+	const sessionID = "private-session-id"
+	const sentinel = "/private/SYNTHETIC-SECRET-SENTINEL"
+	fixture := newDevinTestFixture(t, devinSessionRow{ID: sessionID})
+	execDevinTestSQL(t, fixture.DBPath, `
+		INSERT INTO message_nodes(session_id, node_id, chat_message, created_at)
+		VALUES ('private-session-id', 1, '{}', '`+sentinel+`')`)
+	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{fixture.Root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: sessionID})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	for _, tc := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"fingerprint", func(ctx context.Context) error {
+			_, err := provider.Fingerprint(ctx, source)
+			return err
+		}},
+		{"parse", func(ctx context.Context) error {
+			_, err := provider.Parse(ctx, ParseRequest{Source: source})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(t.Context())
+			assertDevinErrorRedacted(t, err, sentinel, fixture.DBPath, sessionID)
+			require.ErrorContains(t, err, "scanning devin message_nodes")
+		})
+	}
+}
+
+func TestDevinMessageNodeQueryCancellation(t *testing.T) {
+	fixture := newDevinTestFixture(t, devinSessionRow{ID: "session"})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := listDevinMessageNodes(ctx, fixture.DBPath, "session")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestDevinProviderCompositeFingerprintStableAndRedacted(t *testing.T) {
