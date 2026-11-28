@@ -60,23 +60,21 @@ func NormalizePath(value string) string {
 	if value == "" {
 		return ""
 	}
-	if strings.HasPrefix(value, "//") && !strings.HasPrefix(value, "///") {
-		rest := path.Clean(strings.TrimPrefix(value, "//"))
-		parts := strings.Split(rest, "/")
-		if len(parts) >= 2 && parts[0] != "" && parts[0] != "." &&
-			parts[0] != ".." && parts[1] != "" && parts[1] != "." &&
-			parts[1] != ".." {
-			normalized := "//" + rest
-			if len(parts) == 2 {
-				return normalized + "/"
-			}
-			return normalized
+	// Keep the volume outside path.Clean: only its rooted suffix can
+	// consume "..", so a parent reference can never leave that volume.
+	if len(value) >= 3 && value[1] == ':' && value[2] == '/' {
+		return value[:2] + path.Clean(value[2:])
+	}
+	if unc, ok := strings.CutPrefix(value, "//"); ok {
+		host, rest, _ := strings.Cut(unc, "/")
+		share, subpath, _ := strings.Cut(strings.TrimLeft(rest, "/"), "/")
+		if validUNCComponent(host) && validUNCComponent(share) {
+			return "//" + host + "/" + share + path.Clean("/"+subpath)
 		}
 	}
-	driveAbsolute := len(value) >= 3 && value[1] == ':' && value[2] == '/'
-	normalized := path.Clean(value)
-	if driveAbsolute && normalized == value[:2] {
-		return normalized + "/"
-	}
-	return normalized
+	return path.Clean(value)
+}
+
+func validUNCComponent(value string) bool {
+	return value != "" && value != "." && value != ".."
 }

@@ -856,6 +856,9 @@ func (db *DB) applyWorktreeProjectMappings(
 			"loading active worktree mappings: %w", err,
 		)
 	}
+	if len(mappings) == 0 {
+		return ApplyWorktreeProjectMappingsResult{}, nil
+	}
 
 	evaluation, err := evaluateWorktreeMappingsTx(
 		ctx, tx, machine, mappings, nil, "",

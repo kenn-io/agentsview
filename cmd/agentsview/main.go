@@ -1920,18 +1920,22 @@ func openDBWithProgress(ctx context.Context, cfg config.Config, progress db.Open
 	return openDBWithOpener(ctx, cfg, db.OpenWithProgress, progress)
 }
 
-func openDBWithOpener(ctx context.Context, cfg config.Config, open func(context.Context, string, config.ArchiveContent, db.OpenProgressFunc) (*db.DB, error), progress db.OpenProgressFunc) (*db.DB, error) {
+func openDBWithOpener(
+	ctx context.Context, cfg config.Config,
+	open func(context.Context, string, config.ArchiveContent, db.OpenProgressFunc, ...db.OpenOption) (*db.DB, error),
+	progress db.OpenProgressFunc,
+) (*db.DB, error) {
 	if err := clearUsageOnlyVectors(ctx, cfg); err != nil {
 		return nil, err
 	}
 	applyClassifierConfig(cfg)
-	database, err := open(ctx, cfg.DBPath, cfg.ArchiveContent, progress)
+	database, err := open(ctx, cfg.DBPath, cfg.ArchiveContent, progress,
+		db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings))
 	if err != nil {
 		return nil, err
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
 	database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
-	database.SetConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings)
 	if cfg.InstallationID != "" {
 		unowned, err := database.EnsureInstallationIdentity(ctx, cfg.InstallationID)
 		if err != nil {

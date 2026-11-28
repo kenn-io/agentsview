@@ -52,7 +52,8 @@ func newDBAdoptMachineCommand() *cobra.Command {
 			}
 			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 				applyClassifierConfig(cfg)
-				database, err := db.Open(ctx, cfg.DBPath)
+				database, err := db.OpenWithProgress(ctx, cfg.DBPath, config.ArchiveContentFull, nil,
+					db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings))
 				if err != nil {
 					return nil, err
 				}

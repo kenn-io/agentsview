@@ -23,12 +23,15 @@ import (
 // contain an EARLIER call to applyClassifierConfig in the
 // same enclosing body.
 var triggerCalls = map[string]struct{}{
-	"db.Open":               {},
-	"db.OpenReadOnly":       {},
-	"postgres.Open":         {},
-	"postgres.NewStore":     {},
-	"postgres.New":          {},
-	"postgres.EnsureSchema": {},
+	"db.Open":                           {},
+	"db.OpenWithProgress":               {},
+	"db.OpenDaemonWithProgress":         {},
+	"db.OpenForRepositoryProjectRepair": {},
+	"db.OpenReadOnly":                   {},
+	"postgres.Open":                     {},
+	"postgres.NewStore":                 {},
+	"postgres.New":                      {},
+	"postgres.EnsureSchema":             {},
 	// Replica backends open their stores through the storage.Replica
 	// contract. The CLI always holds the backend in a variable named
 	// backend, which is what this selector match keys on.

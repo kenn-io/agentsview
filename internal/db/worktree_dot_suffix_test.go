@@ -23,7 +23,12 @@ func TestResolveRepoDotSuffix(t *testing.T) {
 		{"clean path", "/code/./", "/code/other/../sample-app.dev/", "sample_app"},
 		{"windows", `C:\code\`, `C:\code\sample-app.dev\packages`, "sample_app"},
 		{"drive root", `C:\`, "C:/sample-app.dev", "sample_app"},
+		{"drive cwd stays on volume", "C:/code", "C:/../code/sample-app.dev", "sample_app"},
+		{"drive prefix stays on volume", "C:/../code", "C:/code/sample-app.dev", "sample_app"},
 		{"UNC share root", `\\host\share`, `\\host\share\sample-app.dev`, "sample_app"},
+		{"UNC cwd stays on share", "//host/share/other.dev", "//host/share/../other.dev/sample-app.dev", "sample_app"},
+		{"UNC prefix stays on share", "//host/share/../other.dev", "//host/share/other.dev/sample-app.dev", "sample_app"},
+		{"UNC cwd cannot match sibling share", "//host/other.dev", "//host/share/../other.dev/sample-app.dev", ""},
 		{"POSIX root", "/", "/sample-app.dev", "sample_app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

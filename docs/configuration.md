@@ -2064,10 +2064,12 @@ project's observed session folders:
     they replaced as the rule's **original label**. That value is informational
     and set once; to revert a reclassification manually, edit the rule's target
     back to that original label and apply again.
-- Disabling or deleting a rule does not rewrite sessions on its own. Sessions
-    whose source files still exist return to parser-derived names on a later
-    reparse or full resync, while orphaned sessions keep their stored
-    classification.
+- Disabling or deleting a rule does not rewrite sessions on its own. If no
+    other rule or session assignment applies, a later reparse or full resync can
+    restore automatic project names. A full resync can recover a name from a
+    reliable project identity snapshot or repository evidence in the archive
+    even when the source file is missing. Without usable evidence, a session
+    with a missing source keeps its stored project.
 - Excluded, trashed, and skipped session files are left alone.
 
 Mappings change the session's project without rewriting its transcript.
@@ -2105,10 +2107,10 @@ layout = "repo_dot_suffix"
 
 Restart a running daemon or push watcher after editing the file. Incremental
 sync applies the rules to sessions it writes. To apply current rules to
-already-imported sessions without reparsing, click **Apply** on the Data page.
-To also remove labels from rules that no longer match, run
-`agentsview sync --full`. Sessions whose transcripts are unavailable retain
-their archived classifications unless a current rule matches.
+already-imported sessions without reparsing, select the machine and click
+**Apply** on the Data page, even if there are no stored rules. After removing or
+narrowing a rule, run `agentsview sync --full` to recover automatic project
+names as described above.
 
 ## Automated Session Detection
 

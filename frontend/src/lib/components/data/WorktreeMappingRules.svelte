@@ -68,6 +68,7 @@
   let machines: string[] = $state([]);
   let mappings: DbProjectRule[] = $state([]);
   let loading = $state(true);
+  let mappingsLoaded = $state(false);
   let saving = $state(false);
   let applying = $state(false);
   let error = $state("");
@@ -113,6 +114,7 @@
     })),
   );
   const isDynamicLayout = $derived(layout !== explicitLayout);
+  const canApply = $derived(!readOnly && mappingsLoaded && machine !== "" && !applying);
   const canSave = $derived(
     pathPrefix.trim() !== "" && (isDynamicLayout || project.trim() !== ""),
   );
@@ -136,6 +138,7 @@
     if (disposed) return;
     const signal = mappingsRead.begin();
     loading = true;
+    mappingsLoaded = false;
     error = "";
     try {
       const res = await DataService.getApiV1DataProjectRules({
@@ -147,6 +150,7 @@
       machines = Array.from(new Set([res.machine, ...(res.machines ?? [])]))
         .filter(Boolean);
       mappings = res.rules ?? [];
+      mappingsLoaded = true;
     } catch (err) {
       if (isAbortError(err) || !mappingsRead.isCurrent(signal)) return;
       error = err instanceof Error ? err.message : m.worktree_failed_load();
@@ -296,6 +300,7 @@
   }
 
   async function applyMappings() {
+    if (!canApply) return;
     const initiatingMachine = machine;
     const generation = machineGeneration;
     applying = true;
@@ -367,8 +372,8 @@
   {:else if error && machine === ""}
     <div class="error-text">{error}</div>
   {:else}
-    <!-- Applying acts on every rule listed for the machine, so it sits with
-         the machine picker above the list rather than with the form. -->
+    <!-- Apply uses the selected machine's effective rules, including config
+         rules that are not shown in the archive list. -->
     <div class="list-toolbar">
       <div class="machine-field">
         <span class="label">{m.worktree_machine()}</span>
@@ -385,7 +390,7 @@
       {#if !readOnly}
         <Button
           label={applying ? m.worktree_applying() : m.worktree_apply_mappings()}
-          disabled={applying || loading || mappings.length === 0}
+          disabled={!canApply}
           onclick={applyMappings}
         />
       {/if}

@@ -6,20 +6,30 @@ import (
 	"go.kenn.io/agentsview/internal/worktree"
 )
 
-// configuredWorktreeMappings is immutable and lives only on a local archive
-// handle. It never participates in CRUD, archive copies, or publication.
+// configuredWorktreeMappings is an immutable, in-memory view. It is not
+// stored in SQLite or exposed through rule CRUD or publication.
 type configuredWorktreeMappings struct {
 	machine string
 	rules   []WorktreeProjectMapping
 }
 
+// WithConfiguredWorktreeMappings binds validated config rules to the local
+// installation before a writable open can repair repository project names.
+func WithConfiguredWorktreeMappings(machine string, rules []worktree.Rule) OpenOption {
+	mappings := newConfiguredWorktreeMappings(machine, rules)
+	return func(opts *openOptions) { opts.configuredWorktrees = mappings }
+}
+
 // SetConfiguredWorktreeMappings binds validated config rules to this
 // installation, not to any remote machine ingested by the same archive.
 func (db *DB) SetConfiguredWorktreeMappings(machine string, rules []worktree.Rule) {
+	db.configuredWorktrees.Store(newConfiguredWorktreeMappings(machine, rules))
+}
+
+func newConfiguredWorktreeMappings(machine string, rules []worktree.Rule) *configuredWorktreeMappings {
 	machine = strings.TrimSpace(machine)
 	if machine == "" || len(rules) == 0 {
-		db.configuredWorktrees.Store(nil)
-		return
+		return nil
 	}
 	mappings := make([]WorktreeProjectMapping, 0, len(rules))
 	for _, rule := range rules {
@@ -28,7 +38,7 @@ func (db *DB) SetConfiguredWorktreeMappings(machine string, rules []worktree.Rul
 			Layout: rule.Layout, Project: rule.Project, Enabled: true,
 		})
 	}
-	db.configuredWorktrees.Store(&configuredWorktreeMappings{machine: machine, rules: mappings})
+	return &configuredWorktreeMappings{machine: machine, rules: mappings}
 }
 
 // UseConfiguredWorktreeMappingsFrom gives a scratch rebuild the same in-memory

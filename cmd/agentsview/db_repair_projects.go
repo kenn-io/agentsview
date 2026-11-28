@@ -27,7 +27,8 @@ func newDBRepairProjectsCommand() *cobra.Command {
 			if apply {
 				database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 					applyClassifierConfig(cfg)
-					return db.OpenForRepositoryProjectRepair(ctx, cfg.DBPath, cfg.ArchiveContent)
+					return db.OpenForRepositoryProjectRepair(ctx, cfg.DBPath, cfg.ArchiveContent,
+						db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings))
 				})
 				if err != nil {
 					return err

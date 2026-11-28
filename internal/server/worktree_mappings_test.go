@@ -207,6 +207,46 @@ func TestWorktreeMappingsAPIApply(t *testing.T) {
 	}
 }
 
+func TestWorktreeMappingsAPIApplyWithoutStoredRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, project string
+		rules         []worktree.Rule
+		count         int
+	}{
+		{"no_rules", "branch", nil, 0},
+		{"config_only", "app", []worktree.Rule{
+			{PathPrefix: "/workspace", Layout: worktree.LayoutRepoDotSuffix},
+		}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			te := setup(t)
+			te.db.SetConfiguredWorktreeMappings("test", tc.rules)
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+				ID: "session", Machine: "test", Agent: "claude",
+				Project: "branch", Cwd: "/workspace/app.dev",
+			}))
+
+			w := te.get(t, "/api/v1/data/project-rules?machine=test")
+			assertStatus(t, w, http.StatusOK)
+			assert.Empty(t, decode[db.ProjectRules](t, w).Rules)
+
+			w = te.post(t, "/api/v1/settings/worktree-mappings/apply", `{"machine":"test"}`)
+			assertStatus(t, w, http.StatusOK)
+			assert.Equal(t, db.ApplyWorktreeProjectMappingsResult{
+				MatchedSessions: tc.count, UpdatedSessions: tc.count,
+			}, decode[db.ApplyWorktreeProjectMappingsResult](t, w))
+			session, err := te.db.GetSession(t.Context(), "session")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, tc.project, session.Project)
+
+			stored, err := te.db.ListAllWorktreeProjectMappings(t.Context())
+			require.NoError(t, err)
+			assert.Empty(t, stored)
+		})
+	}
+}
+
 func TestWorktreeMappingsAPIRejectsRemoteMode(t *testing.T) {
 	te := setupPGMode(t)
 	w := te.get(t, "/api/v1/settings/worktree-mappings")
