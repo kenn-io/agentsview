@@ -5648,7 +5648,6 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	}
 	stmts = append(stmts, messageFTSDrops...)
 	stmts = append(stmts, dropSubstringIndexSQL...)
-	stmts = append(stmts, dropToolSubstringSQL()...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -5656,15 +5655,27 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		return fmt.Errorf("drop fts: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var known bool
+	if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)<>?) AND NOT EXISTS(SELECT 1 FROM stats WHERE key=? AND substr(CAST(value AS TEXT),1,2)<>?)`, toolSubstringReadyKey, toolSubstringVersion, toolSubstringCursorKey, toolSubstringVersion+":").Scan(&known); err != nil {
+		return fmt.Errorf("checking tool index version: %w", err)
+	}
+	if known {
+		stmts = append(stmts, dropToolSubstringSQL()...)
+	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
 			return fmt.Errorf("drop fts (%s): %w", s, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM stats WHERE key IN (?, ?, ?, ?)", cjkFTSFingerprintStatsKey, searchCorpusVersionStatsKey, toolSubstringReadyKey, toolSubstringCursorKey,
+		"DELETE FROM stats WHERE key IN (?, ?)", cjkFTSFingerprintStatsKey, searchCorpusVersionStatsKey,
 	); err != nil {
 		return fmt.Errorf("clearing FTS versions: %w", err)
+	}
+	if known {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM stats WHERE key IN (?, ?)", toolSubstringReadyKey, toolSubstringCursorKey); err != nil {
+			return fmt.Errorf("clearing tool FTS version: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

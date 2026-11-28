@@ -83,6 +83,8 @@ var dropSubstringIndexSQL = []string{
 const (
 	toolSubstringReadyKey  = "tool_substring_index_ready"
 	toolSubstringCursorKey = "tool_substring_index_cursor"
+	toolSubstringVersion   = "1"
+	toolSubstringBatchRows = 1024
 )
 
 type toolSubstringField struct{ index, source, column string }
@@ -119,7 +121,7 @@ func hasToolSubstringIndex(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) bool {
 	var ready bool
-	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey).Scan(&ready) == nil && ready
+	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?) AND NOT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey, toolSubstringVersion, toolSubstringCursorKey).Scan(&ready) == nil && ready
 }
 
 // prepareToolSubstringIndex creates missing tables and resumes incomplete builds.
@@ -136,17 +138,25 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Take the write lock before checking the schema, so another process cannot
-	// recreate the tables between the check and cursor initialization.
+	var count int
+	var ready sql.NullString
+	var cursor sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)`, toolSubstringReadyKey, toolSubstringCursorKey).Scan(&count, &ready, &cursor); err != nil {
+		return false, err
+	}
+	if ready.Valid && ready.String != toolSubstringVersion {
+		return false, tx.Commit()
+	}
+	if cursor.Valid && !strings.HasPrefix(cursor.String, toolSubstringVersion+":") {
+		return false, tx.Commit()
+	}
+	// Upgrade the read snapshot to a write transaction before changing the
+	// tables. A concurrent commit makes the upgrade fail rather than reuse a
+	// stale schema or cursor.
 	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
 		return false, err
 	}
-	var count int
-	var ready bool
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), EXISTS(SELECT 1 FROM stats WHERE key=?)`, toolSubstringReadyKey).Scan(&count, &ready); err != nil {
-		return false, err
-	}
-	if count == len(toolSubstringFields) && ready {
+	if count == len(toolSubstringFields) && ready.Valid {
 		return false, tx.Commit()
 	}
 	if count != len(toolSubstringFields) {
@@ -167,7 +177,7 @@ func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, erro
 			return false, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO stats(key,value) VALUES(?, '0:0')", toolSubstringCursorKey); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO stats(key,value) VALUES(?, ?)", toolSubstringCursorKey, toolSubstringVersion+":0:0"); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
@@ -178,30 +188,38 @@ type toolSubstringCursor struct {
 	id    int64
 }
 
-// buildToolSubstringBatch bounds each transaction by approximately one MiB of source text.
+// buildToolSubstringBatch bounds each transaction by bytes and source rows.
 func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error) {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Serialize the cursor read with table recreation and other builders.
+	var ready, cursor sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT (SELECT CAST(value AS TEXT) FROM stats WHERE key=?), (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)", toolSubstringReadyKey, toolSubstringCursorKey).Scan(&ready, &cursor); err != nil {
+		return false, err
+	}
+	if ready.Valid && ready.String != toolSubstringVersion {
+		return false, fmt.Errorf("unknown tool substring index version %q", ready.String)
+	}
+	if cursor.Valid && !strings.HasPrefix(cursor.String, toolSubstringVersion+":") {
+		return false, fmt.Errorf("unknown tool substring cursor version %q", cursor.String)
+	}
+	if ready.Valid {
+		return true, tx.Commit()
+	}
+	if !cursor.Valid {
+		return false, fmt.Errorf("missing tool substring cursor")
+	}
+	// A concurrent rebuild invalidates this read snapshot, so the write
+	// upgrade fails rather than advancing a cursor from old tables.
 	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
 		return false, err
 	}
-	var ready bool
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey).Scan(&ready); err != nil {
-		return false, err
-	}
-	if ready {
-		return true, tx.Commit()
-	}
-	var value string
-	if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&value); err != nil {
-		return false, err
-	}
+	value := cursor.String
 	var next toolSubstringCursor
-	if n, err := fmt.Sscanf(value, "%d:%d", &next.field, &next.id); err != nil || n != 2 || next.field < 0 || next.field > len(toolSubstringFields) || next.id < 0 {
+	var version string
+	if n, err := fmt.Sscanf(value, "%1s:%d:%d", &version, &next.field, &next.id); err != nil || n != 3 || version != toolSubstringVersion || next.field < 0 || next.field > len(toolSubstringFields) || next.id < 0 || value != fmt.Sprintf("%s:%d:%d", version, next.field, next.id) {
 		return false, fmt.Errorf("invalid tool substring cursor %q", value)
 	}
 	for next.field < len(toolSubstringFields) {
@@ -211,6 +229,7 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 			return false, err
 		}
 		var last, size int64
+		count := 0
 		for rows.Next() {
 			var id int64
 			var n sql.NullInt64
@@ -222,7 +241,8 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 			}
 			last = id
 			size += n.Int64
-			if size >= 1<<20 {
+			count++
+			if count >= toolSubstringBatchRows || size >= 1<<20 {
 				break
 			}
 		}
@@ -247,12 +267,12 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 			return false, err
 		}
 		next.id = last
-		if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", fmt.Sprintf("%d:%d", next.field, next.id), toolSubstringCursorKey); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", fmt.Sprintf("%s:%d:%d", toolSubstringVersion, next.field, next.id), toolSubstringCursorKey); err != nil {
 			return false, err
 		}
 		return false, tx.Commit()
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?, '1')", toolSubstringReadyKey); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?, ?)", toolSubstringReadyKey, toolSubstringVersion); err != nil {
 		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringCursorKey); err != nil {
@@ -421,7 +441,7 @@ const substringIndexMaxShare = 4
 // substringCandidates returns conditions for rows that may contain the
 // literals, ignoring case. A branch scans when its index is unavailable, the
 // literal is too short, or candidates exceed a quarter of its scoped rows.
-// Message counts use the whole index; tool counts use the session scope.
+// Candidate counts use the whole index; tool thresholds use the session scope.
 func (db *DB) substringCandidates(
 	ctx context.Context, f ContentSearchFilter, literals []string,
 ) (substringCandidateFilters, error) {
@@ -454,7 +474,7 @@ func (db *DB) substringCandidates(
 		if !messageIndex || !hasSource(f, branch.source) {
 			continue
 		}
-		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages, "", "", nil)
+		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages)
 		if err != nil {
 			return out, err
 		}
@@ -487,11 +507,9 @@ func (db *DB) substringCandidates(
 				}
 				scopeRows[branch.field.source] = rowCount
 			}
-			// Start with FTS matches. An IN subquery makes SQLite repeat MATCH
-			// for every scoped row, even when the match list is empty.
-			join := " CROSS JOIN " + branch.field.source + " scoped ON scoped.id = " + branch.field.index + ".rowid"
-			condition := " AND scoped." + scope
-			selective, err := db.substringIndexSelective(ctx, branch.field.index, query, rowCount, join, condition, scopeArgs)
+			// Cap the global list at the scoped share. A larger list scans
+			// the scope without visiting unrelated matches beyond that limit.
+			selective, err := db.substringIndexSelective(ctx, branch.field.index, query, rowCount)
 			if err != nil {
 				return out, err
 			}
@@ -520,13 +538,13 @@ func (db *DB) substringScopeMessages(ctx context.Context, from string, args []an
 // substringIndexMaxShare share of scopeRows for query. The capped count stops
 // as soon as it passes that share.
 func (db *DB) substringIndexSelective(
-	ctx context.Context, table, query string, scopeRows int64, join, condition string, args []any,
+	ctx context.Context, table, query string, scopeRows int64,
 ) (bool, error) {
 	limit := scopeRows / substringIndexMaxShare
 	var listed int64
 	if err := db.getReader().QueryRow(ctx,
-		`SELECT count(*) FROM (SELECT 1 FROM `+table+join+` WHERE `+table+` MATCH ?`+condition+` LIMIT ?)`,
-		append(append([]any{query}, args...), limit+1)...,
+		`SELECT count(*) FROM (SELECT 1 FROM `+table+` WHERE `+table+` MATCH ? LIMIT ?)`,
+		query, limit+1,
 	).Scan(&listed); err != nil {
 		return false, fmt.Errorf("counting substring candidates: %w", err)
 	}
@@ -554,7 +572,7 @@ func (db *DB) termsIndexQueries(
 		if !ok {
 			continue
 		}
-		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages, "", "", nil)
+		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages)
 		if err != nil {
 			return nil, err
 		}

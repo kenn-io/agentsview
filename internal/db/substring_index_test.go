@@ -729,7 +729,7 @@ func TestToolSubstringIndexScopeAndFieldSelectivity(t *testing.T) {
 	f := ContentSearchFilter{Pattern: "scopeword", Project: "local", Sources: []string{"tool_input", "tool_result"}, Limit: 50}
 	candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
 	require.NoError(t, err)
-	assert.NotEmpty(t, candidates.toolInput.sql)
+	assert.Empty(t, candidates.toolInput.sql)
 	assert.Empty(t, candidates.toolResult.sql)
 	archive := f
 	archive.Project = ""
@@ -740,7 +740,7 @@ func TestToolSubstringIndexScopeAndFieldSelectivity(t *testing.T) {
 	excluded.ExcludeProject = "remote"
 	excludedCandidates, err := d.substringCandidates(ctx, excluded, []string{f.Pattern})
 	require.NoError(t, err)
-	assert.NotEmpty(t, excludedCandidates.toolInput.sql)
+	assert.Empty(t, excludedCandidates.toolInput.sql)
 	indexed := substringHits(t, d, f)
 	assert.Equal(t, indexed, substringHits(t, d, excluded))
 	require.Len(t, indexed, 31)
@@ -807,12 +807,12 @@ func TestToolSubstringBuildPutsLargeRowsInTheirOwnBatch(t *testing.T) {
 	require.False(t, done)
 	var cursor string
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
-	assert.Equal(t, "0:1", cursor)
+	assert.Equal(t, "1:0:1", cursor)
 	done, err = buildToolSubstringBatch(ctx, d.getWriter())
 	require.NoError(t, err)
 	require.False(t, done)
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
-	assert.Equal(t, "0:2", cursor)
+	assert.Equal(t, "1:0:2", cursor)
 }
 
 func TestToolSubstringSelectivityCountsToolRows(t *testing.T) {
@@ -857,12 +857,12 @@ func TestToolSubstringCursorSurvivesAnotherHandleRebuild(t *testing.T) {
 	require.False(t, done)
 	var progress string
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&progress))
-	assert.Equal(t, "0:1", progress)
+	assert.Equal(t, "1:0:1", progress)
 	pending, err = prepareToolSubstringIndex(ctx, other.getWriter())
 	require.NoError(t, err)
 	require.True(t, pending)
 	require.NoError(t, other.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&progress))
-	assert.Equal(t, "0:1", progress)
+	assert.Equal(t, "1:0:1", progress)
 	_, err = other.getWriter().ExecContext(ctx, "DROP TABLE tool_input_trigram_fts")
 	require.NoError(t, err)
 	pending, err = prepareToolSubstringIndex(ctx, other.getWriter())
@@ -877,4 +877,100 @@ func TestToolSubstringCursorSurvivesAnotherHandleRebuild(t *testing.T) {
 	assert.Equal(t, 1, matches)
 	assert.True(t, hasToolSubstringIndex(ctx, d.getReader()))
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "earlyneedle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
+
+func TestToolSubstringScopedSearchWithGlobalMatches(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "local", "local", [][2]string{{"assistant", "running"}})
+	seedSearchSession(t, d, "remote", "remote", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<12000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN n.i=1 THEN 'scopedneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='local'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1025)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read','scopedneedle' FROM messages m,n WHERE m.session_id='remote'`)
+	require.NoError(t, err)
+	f := ContentSearchFilter{Pattern: "scopedneedle", Project: "local", Sources: []string{"tool_input"}, Limit: 20}
+	candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.toolInput.sql)
+	indexed := substringHits(t, d, f)
+	require.Len(t, indexed, 1)
+	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey)
+	require.NoError(t, err)
+	assert.Equal(t, indexed, substringHits(t, d, f))
+}
+
+func TestToolSubstringBuildYieldsForEmptyRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN i%2=0 THEN NULL ELSE '' END FROM messages m,n WHERE m.session_id='s'`, toolSubstringBatchRows+1)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, "DROP TABLE tool_input_trigram_fts")
+	require.NoError(t, err)
+	pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.True(t, pending)
+	done, err := buildToolSubstringBatch(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.False(t, done)
+	var cursor string
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows), cursor)
+	require.NoError(t, d.UpdateSessionCwd(ctx, "s", "batch-writer"))
+	done, err = buildToolSubstringBatch(ctx, d.getWriter())
+	require.NoError(t, err)
+	require.False(t, done)
+	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&cursor))
+	assert.Equal(t, fmt.Sprintf("1:0:%d", toolSubstringBatchRows+1), cursor)
+}
+
+func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4)) INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json) SELECT m.id,m.session_id,'Read','Read',CASE WHEN i=1 THEN 'futureword' ELSE 'other' END FROM messages m,n WHERE m.session_id='s'`)
+	require.NoError(t, err)
+	for _, tc := range []struct{ name, ready, cursor string }{
+		{"ready", "2", "2:0:7"},
+		{"cursor", "", "2:0:7"},
+		{"ready with unknown cursor", "1", "2:0:7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key IN (?, ?)", toolSubstringReadyKey, toolSubstringCursorKey)
+			require.NoError(t, err)
+			if tc.ready != "" {
+				_, err = d.getWriter().ExecContext(ctx, "INSERT INTO stats(key,value) VALUES(?,?)", toolSubstringReadyKey, tc.ready)
+				require.NoError(t, err)
+			}
+			_, err = d.getWriter().ExecContext(ctx, "INSERT INTO stats(key,value) VALUES(?,?)", toolSubstringCursorKey, tc.cursor)
+			require.NoError(t, err)
+			assert.False(t, hasToolSubstringIndex(ctx, d.getReader()))
+			f := ContentSearchFilter{Pattern: "futureword", Sources: []string{"tool_input"}, Limit: 10}
+			candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+			require.NoError(t, err)
+			assert.Empty(t, candidates.toolInput.sql)
+			assert.Len(t, substringHits(t, d, f), 1)
+			pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
+			require.NoError(t, err)
+			assert.False(t, pending)
+			require.NoError(t, d.DropFTS(ctx))
+			require.NoError(t, d.RebuildFTS(ctx))
+			var got string
+			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&got))
+			assert.Equal(t, tc.cursor, got)
+			var exists bool
+			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='tool_input_trigram_fts')").Scan(&exists))
+			assert.True(t, exists)
+			if tc.ready != "" {
+				require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringReadyKey).Scan(&got))
+				assert.Equal(t, tc.ready, got)
+			}
+		})
+	}
 }

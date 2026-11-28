@@ -1441,10 +1441,10 @@ scan. Message and thinking branches also scan when their index lists more than
 a quarter of the messages in the scope's sessions. A capped count of the listed
 IDs makes that choice; it stops as soon as the share is passed. Single-word
 substring search also indexes tool input, call result, and result-event text in
-separate contentless-delete trigram tables. It compares each table's candidates
-with the number of source rows in the session scope, so a common field does not
-prevent a selective field from using its index. Regex search continues to scan
-tool text.
+separate contentless-delete trigram tables. It caps each table's global
+candidate count at a quarter of the source rows in scope, then scans if the
+count exceeds that share. Each field is judged separately. Regex search
+continues to scan tool text.
 
 Substring, word, and regex search read the scope's sessions in batches, newest
 first in the result order, and stop after the batch that fills the page and
@@ -1479,13 +1479,14 @@ it reruns once and scans.
 
 The first writable open builds missing message indexes for an existing archive.
 Daemon startup defers the tool index build and scans tool text until its
-separate ready marker is written. The build yields the writer between batches of about
-one MiB; writes maintain each table through triggers. A restart resumes an
-incomplete tool index from its last committed batch. Tokenizing costs about 2.7
-times the porter FTS index, near 30 MB of message text per second. Read-only
-opens use the index when present and scan otherwise. Hand-built legacy schemas in tests must drop
-`message_trigram_source` and the index before rebuilding or narrowing
-`messages`, because the view and triggers name its columns.
+separate ready marker is written. The build yields the writer between batches
+of at most 1,024 rows and about one MiB; writes maintain each table through
+triggers. A restart resumes an incomplete tool index from its last committed
+batch. Tokenizing costs about 2.7 times the porter FTS index, near 30 MB of
+message text per second. Read-only opens use the index when present and scan
+otherwise. Hand-built legacy schemas in tests must drop `message_trigram_source`
+and the index before rebuilding or narrowing `messages`, because the view and
+triggers name its columns.
 
 ### Transcript usage identity
 
