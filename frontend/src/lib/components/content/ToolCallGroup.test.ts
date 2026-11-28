@@ -8,6 +8,7 @@ import ToolCallGroup from "./ToolCallGroup.svelte";
 
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
+vi.mock("@kenn-io/kit-ui/utils/clipboard", () => ({ copyToClipboard: copyMock }));
 
 function makeToolMessage(ordinal: number): Message {
   return {

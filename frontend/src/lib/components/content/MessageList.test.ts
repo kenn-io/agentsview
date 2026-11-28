@@ -209,6 +209,7 @@ describe("MessageList follow cancellation", () => {
     messages.clear();
     sessions.activeSessionId = null;
     ui.followLatest = false;
+    ui.linkedMessage = null;
     readProgress.reset();
     document.body.innerHTML = "";
   });
@@ -328,6 +329,21 @@ describe("MessageList follow cancellation", () => {
     await vi.waitFor(() => {
       expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
     });
+  });
+
+  it("lands on a later tool-group member", async () => {
+    const tool = (ordinal: number) => ({ ...makeMessage(ordinal), role: "assistant", content: "", content_length: 0, has_tool_use: true, tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }] });
+    messages.messages = [makeMessage(10), tool(11), tool(12)];
+    setVirtualRows(2);
+    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const top = this.matches('[data-message-ordinal="12"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
+      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    component.scrollToOrdinal(12);
+    await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
   });
 
   it("refreshes Docbank when the same transcript is remounted", async () => {
@@ -1297,6 +1313,7 @@ describe("MessageList follow cancellation", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     ui.followLatest = false;
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
     const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
     messages.messages = [makeMessage(0), linked, makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;
@@ -1316,6 +1333,21 @@ describe("MessageList follow cancellation", () => {
     expect(JSON.parse(localStorage.getItem("agentsview-block-filters")!).hidden).toEqual([
       "assistant",
     ]);
+  });
+
+  it("selects the neighboring message when leaving a revealed target", async () => {
+    ui.setBlockVisible("assistant", false);
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    messages.messageCount = 3;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("msg 1");
+    document.querySelector<HTMLElement>('.virtual-row[data-index="2"] .role-label')!.click();
+    await flushScrollUpdates();
+    expect(ui.selectedOrdinal).toBe(2);
+    expect(document.body.textContent).not.toContain("msg 1");
   });
 
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {

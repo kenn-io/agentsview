@@ -608,9 +608,9 @@
 
   // Distance from the top of a display row to the card of `ordinal` inside an
   // open empty row, so a jump lands on that card instead of the row's top.
-  function emptyMemberOffset(index: number, ordinal: number): number {
+  function getMemberOffset(index: number, ordinal: number): number {
     const item = itemAt(index);
-    if (!containerRef || item?.kind !== "empty-group") return 0;
+    if (!containerRef || (item?.kind !== "empty-group" && item?.kind !== "tool-group")) return 0;
     const row = containerRef.querySelector<HTMLElement>(`.virtual-row[data-index="${index}"]`);
     const card = row?.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`);
     if (!row || !card) return 0;
@@ -678,7 +678,7 @@
     instance.getTotalSize();
     const rowOffset = instance.getOffsetForIndex(index, "start")?.[0];
     if (rowOffset === undefined) return;
-    const memberOffset = emptyMemberOffset(index, jump.ordinal);
+    const memberOffset = getMemberOffset(index, jump.ordinal);
     const offset = rowOffset + memberOffset;
     const previousOffset = untrack(() => jump.offset);
     jump.offset = offset;

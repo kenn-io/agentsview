@@ -65,6 +65,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => ({
   SessionsService: { postApiV1SessionsByIdResume: forkMock },
 }));
 vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
+vi.mock("@kenn-io/kit-ui/utils/clipboard", () => ({ copyToClipboard: copyMock }));
 vi.mock("@kenn-io/kit-ui/utils/markdown-mermaid", () => ({
   mermaidCodeFence: (code: string, lang: string) => {
     if (lang !== "mermaid") return undefined;
@@ -203,6 +204,15 @@ describe("MessageContent", () => {
     await render(message({ session_id: "codex:session-1", ordinal: 7 }));
     await click('[aria-label="Copy link to message"]');
     expect(copyMock).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
+  });
+
+  it("uses the server selected after the message renders", async () => {
+    await render(message({ session_id: "session-1", ordinal: 7 }));
+    localStorage.setItem("agentsview-server-url", "https://example.org/archive");
+    window.dispatchEvent(new Event("agentsview:server-url-change"));
+    await tick();
+    await click('[aria-label="Copy link to message"]');
+    expect(copyMock).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
   });
 
   it("copies a link to the selected remote server", async () => {

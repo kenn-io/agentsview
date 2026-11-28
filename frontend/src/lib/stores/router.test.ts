@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
-import { parsePath, RouterStore } from "./router.svelte.js";
+import { parseMessageOrdinal, parsePath, RouterStore } from "./router.svelte.js";
 
 function setURL(path: string) {
   window.history.replaceState(null, "", path);
 }
+
+describe("parseMessageOrdinal", () => {
+  it.each([["0", 0], ["3", 3], ["3abc", undefined], ["last", undefined], ["-1", undefined], ["9007199254740992", undefined]])("parses %s", (value, expected) => {
+    expect(parseMessageOrdinal(value as string)).toBe(expected);
+  });
+});
 
 describe("parsePath", () => {
   afterEach(() => {

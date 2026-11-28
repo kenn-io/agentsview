@@ -86,7 +86,7 @@
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
   import { parseScrollCall, ui, type ScrollCall } from "./lib/stores/ui.svelte.js";
-  import { router } from "./lib/stores/router.svelte.js";
+  import { router, parseMessageOrdinal } from "./lib/stores/router.svelte.js";
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
@@ -263,7 +263,7 @@
             normalItems,
           )
         ) {
-          ui.setTranscriptMode("normal");
+          ui.setTranscriptMode("normal", false);
           return; // effect re-runs with normal transcript mode
         }
 
@@ -289,7 +289,7 @@
             (s) => s.type === "thinking",
           );
           if (hasThinkingSegment) {
-            ui.setBlockVisible("thinking", true);
+            ui.setBlockVisible("thinking", true, false);
             return; // effect re-runs with thinking visible
           }
         }
@@ -705,13 +705,15 @@
       router.params["fp"],
     );
     untrack(() => {
+      ui.linkedMessage = null;
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
       } else {
-        const ordinal = parseInt(msgParam, 10);
-        if (Number.isFinite(ordinal)) {
+        const ordinal = parseMessageOrdinal(msgParam);
+        if (ordinal !== undefined) {
+          ui.linkedMessage = { sessionId: sid, ordinal };
           ui.scrollToOrdinal(ordinal, sid, call);
         }
       }

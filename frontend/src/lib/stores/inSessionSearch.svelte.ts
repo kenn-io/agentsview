@@ -20,7 +20,6 @@ import { messages } from "./messages.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 import { settings } from "./settings.svelte.js";
 import { ui } from "./ui.svelte.js";
-import { router } from "./router.svelte.js";
 
 export type { SearchCursor } from "../search/navigation.js";
 
@@ -47,11 +46,8 @@ export interface SearchView {
   renderUnknownXmlBlocksAsPreformatted?: boolean;
 }
 
-/** The `?msg` ordinal a link opened in this session, kept visible under filters. */
 export function linkedOrdinal(sessionId: string | null): number | undefined {
-  if (!sessionId || router.sessionId !== sessionId) return undefined;
-  const ordinal = Number.parseInt(router.params["msg"] ?? "", 10);
-  return Number.isFinite(ordinal) ? ordinal : undefined;
+  return sessionId && ui.linkedMessage?.sessionId === sessionId ? ui.linkedMessage.ordinal : undefined;
 }
 
 const EMPTY_MATCHES: Match[] = [];

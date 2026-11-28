@@ -35,6 +35,12 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
 
 const DEFAULT_ROUTE: Route = "sessions";
 
+export function parseMessageOrdinal(value: string | undefined): number | undefined {
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const ordinal = Number(value);
+  return Number.isSafeInteger(ordinal) ? ordinal : undefined;
+}
+
 export function getBasePath(): string {
   const base = document.querySelector("base");
   if (!base) return "";

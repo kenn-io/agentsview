@@ -54,6 +54,13 @@ function filtered(visible: BlockType[]) {
 }
 
 describe("session search scope", () => {
+  it("reveals a linked answer when thinking keeps its row visible", () => {
+    const answer = message(1, "[Thinking]\nplan\n[/Thinking]\nlinked answer", { has_thinking: true });
+    const result = scope([answer], { ...filtered(["thinking"]), revealOrdinal: 1 });
+    expect(result.revealedOrdinal).toBe(1);
+    expect(result.allowsBlock(answer, "text")).toBe(true);
+  });
+
   it("reveals a hidden linked message without displacing a focused answer", () => {
     const prompt = message(0, "prompt", { role: "user" });
     const answer = message(1, "answer");
