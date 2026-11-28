@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,30 @@ import (
 // VerifyAssets checks content-addressed image references in retained messages and tool results.
 // The caller holds the offline writer lock so the references cannot change.
 func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
+	return d.verifyAssets(ctx, directory, nil)
+}
+
+// MissingAssets verifies retained references like VerifyAssets but returns
+// absent assets as gaps; corrupt assets and read failures still fail.
+func (d *DB) MissingAssets(ctx context.Context, directory string) ([]string, error) {
+	var gaps []string
+	err := d.verifyAssets(ctx, directory, &gaps)
+	return gaps, err
+}
+
+// checkAsset rejects an unusable asset. With gaps set, an absent one is recorded there instead.
+func checkAsset(root *os.Root, name, want string, gaps *[]string) error {
+	if assets.IsCompleteObject(root, name, -1, want) {
+		return nil
+	}
+	if _, err := root.Lstat(name); gaps != nil && errors.Is(err, os.ErrNotExist) {
+		*gaps = append(*gaps, fmt.Sprintf("asset %s: referenced but missing from the source archive", name))
+		return nil
+	}
+	return fmt.Errorf("required asset %s is missing, corrupt, or has an unsupported file type", name)
+}
+
+func (d *DB) verifyAssets(ctx context.Context, directory string, gaps *[]string) error {
 	rows, err := d.getReader().QueryContext(ctx, `
 		SELECT content, 0 FROM messages WHERE instr(content, 'asset://') > 0
 		UNION ALL
@@ -52,11 +77,16 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		if root == nil {
 			root, err = os.OpenRoot(directory)
 			if err != nil {
+				if gaps != nil && errors.Is(err, os.ErrNotExist) {
+					*gaps = append(*gaps, fmt.Sprintf("asset %s: referenced but missing from the source archive", name))
+					seen[ref] = true
+					return nil
+				}
 				return fmt.Errorf("opening required assets: %w", err)
 			}
 		}
-		if !assets.IsCompleteObject(root, name, -1, want) {
-			return fmt.Errorf("required asset %s is missing, corrupt, or has an unsupported file type", name)
+		if err := checkAsset(root, name, want, gaps); err != nil {
+			return err
 		}
 		seen[ref] = true
 		return nil

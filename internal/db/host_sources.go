@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // CopiedProjectLabel replaces labels that expose a host path with stable aliases.
@@ -28,7 +29,7 @@ func CopiedProjectLabel(value string) string {
 // ClearHostSources detaches a staged archive from its original host.
 func (db *DB) ClearHostSources(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		version, _, err := readUserVersion(ctx, tx)
+		version, err := beginHostDetach(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -39,8 +40,7 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`UPDATE commit_links SET repository=''`,
 			`UPDATE commit_trailers SET repository=''`,
 			`UPDATE cursor_usage_events SET user_id='', user_email='', account_user_id='', account_polled_at='', conversation_id=''`,
-			`DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`,
-			`DELETE FROM codex_cloud_accounts`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
+			`DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
 			`DELETE FROM provider_freshness`, `DELETE FROM skipped_files`, `DELETE FROM source_failures`,
 			`DELETE FROM local_session_source_baselines`, `DELETE FROM claude_subagent_sources`,
 			`DELETE FROM remote_skipped_files`, `DELETE FROM parser_checkpoint_blobs`, `DELETE FROM parser_checkpoints`,
@@ -86,16 +86,75 @@ func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	sort.Strings(values)
+	if err := stageProjectAliases(ctx, tx, values, labels); err != nil {
+		return err
+	}
+	return applyProjectAliases(ctx, tx, tables)
+}
+
+// stageProjectAliases records one collision-free alias per project label in a temp table.
+func stageProjectAliases(ctx context.Context, tx *sql.Tx, values []string, labels map[string]bool) error {
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE copied_project_aliases(old TEXT PRIMARY KEY, alias TEXT NOT NULL) WITHOUT ROWID`); err != nil {
+		return err
+	}
 	for _, value := range values {
 		alias := CopiedProjectLabel(value)
 		for labels[alias] {
 			alias += "-"
 		}
 		labels[alias] = true
-		for _, table := range tables {
-			if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET project=? WHERE project=?", alias, value); err != nil {
-				return err
-			}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO copied_project_aliases VALUES(?, ?)`, value, alias); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyProjectAliases rewrites each table once, then drops the temp table.
+func applyProjectAliases(ctx context.Context, tx *sql.Tx, tables []string) error {
+	for _, table := range tables {
+		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET project=(SELECT alias FROM copied_project_aliases WHERE old=project) WHERE project IN (SELECT old FROM copied_project_aliases)"); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, `DROP TABLE copied_project_aliases`)
+	return err
+}
+
+// beginHostDetach returns the archive's user version after retaining the
+// identities that clearing host paths would otherwise lose.
+func beginHostDetach(ctx context.Context, tx *sql.Tx) (int, error) {
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return version, retainCodexCloudAccounts(ctx, tx)
+}
+
+// retainCodexCloudAccounts keeps each Codex cloud session's account grouping key,
+// which reporting needs to deduplicate copies, before file paths are cleared.
+func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) (retErr error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, file_path FROM sessions WHERE agent = ? AND file_path IS NOT NULL`, string(parser.AgentCodexCloud))
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
+	accounts := map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return err
+		}
+		if key := parser.CodexCloudAccountFromPath(path); key != "" {
+			accounts[id] = key
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id, key := range accounts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_cloud_accounts(session_id, account_key) VALUES(?, ?) ON CONFLICT(session_id) DO UPDATE SET account_key = excluded.account_key`, id, key); err != nil {
+			return err
 		}
 	}
 	return nil

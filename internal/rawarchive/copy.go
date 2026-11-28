@@ -113,7 +113,7 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 	if err != nil {
 		return report, err
 	}
-	err = database.VerifyAssets(ctx, filepath.Join(stage, "assets"))
+	report.Gaps, err = database.MissingAssets(ctx, filepath.Join(stage, "assets"))
 	if err = errors.Join(err, database.Close()); err != nil {
 		return report, err
 	}

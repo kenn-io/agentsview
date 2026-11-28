@@ -16,7 +16,7 @@ import (
 )
 
 func TestCopyPreservesAssetReferences(t *testing.T) {
-	for _, state := range []string{"valid", "missing"} {
+	for _, state := range []string{"valid", "missing", "missing directory"} {
 		t.Run(state, func(t *testing.T) {
 			ctx := t.Context()
 			source := t.TempDir()
@@ -42,13 +42,22 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 			if state == "missing" {
 				require.NoError(t, os.Remove(path))
 			}
+			if state == "missing directory" {
+				for name := range files {
+					require.NoError(t, os.Remove(filepath.Join(assetDir, name)))
+				}
+				require.NoError(t, os.Remove(assetDir))
+			}
 			parent := t.TempDir()
 			dest := filepath.Join(parent, "copy")
 			report, err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
 			require.NoError(t, err)
-			if state == "missing" {
+			if state == "missing" || state == "missing directory" {
 				assert.Contains(t, strings.Join(append(report.Gaps, report.Excluded...), "\n"), strings.TrimPrefix(ref, "asset://"))
 				delete(files, strings.TrimPrefix(ref, "asset://"))
+			}
+			if state == "missing directory" {
+				clear(files)
 			}
 			for name, want := range files {
 				for _, dir := range []string{assetDir, filepath.Join(dest, "assets")} {
