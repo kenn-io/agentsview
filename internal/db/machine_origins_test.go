@@ -332,38 +332,3 @@ func TestCodexCloudCopiesMatchBetweenDayAndDigest(t *testing.T) {
 		assert.Equal(t, reportingDigestDayFromDay(day), digest)
 	}
 }
-
-func TestDetachedCodexCloudCopiesKeepReportingDeduplication(t *testing.T) {
-	const account = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
-	const local = "codex-cloud:thread-1"
-	const imported = testRemoteInstallation + "~codex-cloud:thread-1"
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
-	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,message_count,started_at,ended_at,file_path) VALUES
-		(?, 'project', 'local', 'codex-cloud', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:02:00Z', ?),
-		(?, 'project', ?, 'codex-cloud', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:02:00Z', NULL)`, local, "/data/"+account+"/thread.jsonl.zstd", imported, testRemoteInstallation)
-	require.NoError(t, err)
-	_, err = d.rawWriter().ExecContext(ctx, `INSERT INTO codex_cloud_accounts(session_id,account_key) VALUES (?, ?)`, imported, account)
-	require.NoError(t, err)
-	for _, id := range []string{local, imported} {
-		insertMessages(t, d,
-			Message{SessionID: id, Ordinal: 0, Role: "user", Content: "start", Timestamp: "2026-07-28T10:00:00Z"},
-			Message{SessionID: id, Ordinal: 1, Role: "assistant", Content: "end", Timestamp: "2026-07-28T10:02:00Z", Model: "model-a"},
-		)
-		require.NoError(t, d.ReplaceSessionUsageEvents(ctx, id, []UsageEvent{{SessionID: id, Source: "codex-cloud", Model: "model-a", OutputTokens: 7, OccurredAt: "2026-07-28T10:02:00Z", DedupKey: "event"}}))
-	}
-	options := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC), Now: time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC), SchemaVersion: 7, ByMachine: true}
-	before, err := d.ExportReportingDay(ctx, options)
-	require.NoError(t, err)
-	origin := "codex-cloud-account:" + account
-	require.Contains(t, before.Hours[10].Machines, origin)
-	require.EqualValues(t, 7, before.Hours[10].Machines[origin].Usage.Totals.OutputTokens)
-	require.NoError(t, d.ClearHostSources(ctx))
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
-	after, err := d.ExportReportingDay(ctx, options)
-	require.NoError(t, err)
-	require.Contains(t, after.Hours[10].Machines, origin)
-	assert.Equal(t, before.Hours[10].Machines[origin].Usage.Totals, after.Hours[10].Machines[origin].Usage.Totals)
-	assert.Zero(t, after.Hours[10].Machines[testLocalInstallation].Usage.Totals.OutputTokens)
-}

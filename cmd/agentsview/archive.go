@@ -36,7 +36,7 @@ func newArchiveCommand() *cobra.Command {
 			return err
 		}
 		err = rawarchive.Copy(cmd.Context(), rawarchive.CopyOptions{
-			DataDir: cfg.DataDir, Destination: args[0], CustomModelPricing: cfg.CustomModelPricing,
+			DataDir: cfg.DataDir, Destination: args[0],
 			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories},
 		})
 		if err != nil {
@@ -45,9 +45,9 @@ func newArchiveCommand() *cobra.Command {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), args[0])
 		return err
 	}}
-	copyCmd.Long = `Create a detached preview of a stopped archive.
+	copyCmd.Long = `Create a throwaway preview copy of a stopped archive.
 
-The copy omits raw sources, artifact vault data, and original source links. It stays in archive-only mode, with source sync and publication disabled. Use archive backup to retain raw sources.`
+The copy stays archive-only, with sync and publication permanently disabled, and omits the raw archive vault and external bindings. To keep raw sources, use archive backup.`
 	var captureRoots []string
 	var identityFrom string
 	var writersStopped bool

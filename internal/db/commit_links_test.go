@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
 	"strconv"
@@ -14,21 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
-
-func TestDetachedArchiveCommitRepositories(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s1", "project-a", func(s *Session) { s.Cwd = "/work" })
-	insertMessages(t, d, commitMessages("s1", `{"command":"git -C /work/repo commit -m fix"}`, "[main abc1234] Fix parser")...)
-	var repository string
-	require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT repository FROM commit_links WHERE session_id='s1'`).Scan(&repository))
-	assert.Equal(t, "/work/repo", repository)
-	require.NoError(t, d.ClearHostSources(t.Context()))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionCommitLinksTx(tx, "s1") }))
-	var count, paths int
-	require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT count(*), count(NULLIF(repository,'')) FROM commit_links`).Scan(&count, &paths))
-	assert.Positive(t, count)
-	assert.Zero(t, paths)
-}
 
 func commitMessages(id, input, result string) []Message {
 	var events []ToolResultEvent
@@ -87,9 +71,6 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 	require.NoError(t, conn.Raw(func(raw any) error {
 		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
 			if op == sqlite3.SQLITE_READ && ((table == "tool_calls" && column == "result_content") || (table == "tool_result_events" && column == "content")) {
-				return sqlite3.SQLITE_DENY
-			}
-			if op == sqlite3.SQLITE_READ && table == "archive_metadata" {
 				return sqlite3.SQLITE_DENY
 			}
 			if op == sqlite3.SQLITE_DELETE && table == "commit_links" {

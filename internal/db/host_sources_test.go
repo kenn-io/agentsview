@@ -37,7 +37,6 @@ func TestClearHostSources(t *testing.T) {
 			`INSERT INTO git_cache VALUES('cache', 'log', '{"repo":"/host/repo"}', '2026-01-01')`,
 			`INSERT INTO friction_issue_links VALUES('fp', 'instance', 'project', 'issue', 'id', 'https://example.com', 'local', '2026-01-01')`,
 			`INSERT INTO friction_filing_state(fingerprint,state,last_error,updated_at) VALUES('other', 'failed', '/host/repo', '2026-01-01')`,
-			`INSERT INTO cursor_account_polls VALUES('account-id', 1, '2026-01-01')`,
 			`INSERT INTO artifact_imported_sessions(origin,gid,manifest_hash,imported_session_id) VALUES('peer', 'gid', 'hash', 'a')`,
 		} {
 			if _, err := tx.ExecContext(ctx, query); err != nil {
@@ -49,7 +48,7 @@ func TestClearHostSources(t *testing.T) {
 	_, err := d.AppendDiagnostic(ctx, DiagnosticEvent{ID: "00000000-0000-4000-8000-000000000001", Source: "test", Message: "failed reading /work/private/session.jsonl"})
 	require.NoError(t, err)
 	require.NoError(t, d.ClearHostSources(ctx))
-	for _, table := range []string{"diagnostic_events", "git_cache", "friction_issue_links", "friction_filing_state", "cursor_account_polls", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
+	for _, table := range []string{"diagnostic_events", "git_cache", "friction_issue_links", "friction_filing_state", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int
 		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
 		assert.Zero(t, count, table)
@@ -79,34 +78,6 @@ func TestClearHostSources(t *testing.T) {
 	position, err := d.GetSyncState(ctx, "replica-position")
 	require.NoError(t, err)
 	assert.Empty(t, position)
-}
-
-func TestClearHostSourcesPreservesCursorUsage(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_events(occurred_at,model,input_tokens,output_tokens,charged_microdollars,user_id,user_email,account_user_id,account_polled_at,conversation_id,dedup_key) VALUES('2026-08-10T09:00:00Z','model',330,100,42,'user','user@example.com','account','2026-08-10T09:01:00Z','conversation','event-1')`)
-		return err
-	}))
-	filter := UsageFilter{Timezone: "UTC"}
-	require.NoError(t, d.ClearHostSources(ctx))
-	var user, email, account, polled, conversation string
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT user_id,user_email,account_user_id,account_polled_at,conversation_id FROM cursor_usage_events`).Scan(&user, &email, &account, &polled, &conversation))
-	assert.Empty(t, user)
-	assert.Empty(t, email)
-	assert.Empty(t, account)
-	assert.Empty(t, polled)
-	assert.Empty(t, conversation)
-	path := d.Path()
-	require.NoError(t, d.Close())
-	reopened, err := OpenIsolatedContext(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-	after, err := reopened.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 330, after.Totals.InputTokens)
-	assert.Equal(t, 100, after.Totals.OutputTokens)
-	assert.EqualValues(t, 42, after.Totals.TotalCost.Microdollars)
 }
 
 func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {

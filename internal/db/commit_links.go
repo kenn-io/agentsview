@@ -590,17 +590,7 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}
-	links := commitLinks(calls, cwd)
-	var detached bool
-	if len(links) > 0 {
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
-			return err
-		}
-	}
-	for _, l := range links {
-		if detached {
-			l.Repository = ""
-		}
+	for _, l := range commitLinks(calls, cwd) {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project) SELECT ?,?,?,?,?,?,?,?,?,project FROM sessions WHERE id=?`, sessionID, l.SHA, l.Branch, l.Subject, l.Repository, l.MessageOrdinal, l.CallIndex, l.ToolUseID, l.CommittedAt, sessionID); err != nil {
 			return err
 		}

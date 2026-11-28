@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 // CopiedProjectLabel replaces labels that expose a host path with stable aliases.
@@ -30,17 +29,13 @@ func CopiedProjectLabel(value string) string {
 // ClearHostSources detaches a staged archive from its original host.
 func (db *DB) ClearHostSources(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		if err := retainCodexCloudAccounts(ctx, tx); err != nil {
-			return err
-		}
 		for _, statement := range []string{
 			`UPDATE sessions SET file_path=NULL, file_size=NULL, file_mtime=NULL, file_inode=NULL, file_device=NULL, file_hash=NULL, cwd=''`,
 			`UPDATE recall_entries SET cwd=''`,
 			`UPDATE excluded_sessions SET file_path=NULL`,
 			`UPDATE commit_links SET repository=''`,
 			`UPDATE commit_trailers SET repository=''`,
-			`UPDATE cursor_usage_events SET user_id='', user_email='', account_user_id='', account_polled_at='', conversation_id=''`,
-			`DELETE FROM diagnostic_events`, `DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
+			`DELETE FROM diagnostic_events`, `DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`, `DELETE FROM artifact_imported_sessions`,
 			`DELETE FROM provider_freshness`, `DELETE FROM skipped_files`, `DELETE FROM source_failures`,
 			`DELETE FROM local_session_source_baselines`, `DELETE FROM claude_subagent_sources`,
 			`DELETE FROM remote_skipped_files`, `DELETE FROM parser_checkpoint_blobs`, `DELETE FROM parser_checkpoints`,
@@ -58,7 +53,6 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`DELETE FROM raw_archive_sessions`, `DELETE FROM raw_archive_root_aliases`,
 			`DELETE FROM raw_archive_sources`, `DELETE FROM raw_archive_files`,
 			`DELETE FROM raw_archive_roots`, `DELETE FROM raw_archive_devices`,
-			`INSERT INTO archive_metadata(key,value) VALUES('host_paths_detached','1') ON CONFLICT(key) DO UPDATE SET value='1'`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return err
@@ -127,35 +121,6 @@ func applyProjectAliases(ctx context.Context, tx *sql.Tx, tables []string) error
 	}
 	_, err := tx.ExecContext(ctx, `DROP TABLE copied_project_aliases`)
 	return err
-}
-
-// retainCodexCloudAccounts keeps each Codex cloud session's account grouping key,
-// which reporting needs to deduplicate copies, before file paths are cleared.
-func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) (retErr error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, file_path FROM sessions WHERE agent = ? AND file_path IS NOT NULL`, string(parser.AgentCodexCloud))
-	if err != nil {
-		return err
-	}
-	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
-	accounts := map[string]string{}
-	for rows.Next() {
-		var id, path string
-		if err := rows.Scan(&id, &path); err != nil {
-			return err
-		}
-		if key := parser.CodexCloudAccountFromPath(path); key != "" {
-			accounts[id] = key
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for id, key := range accounts {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_cloud_accounts(session_id, account_key) VALUES(?, ?) ON CONFLICT(session_id) DO UPDATE SET account_key = excluded.account_key`, id, key); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func collectCopiedProjectLabels(ctx context.Context, tx *sql.Tx, table, column string, labels map[string]bool) (retErr error) {
