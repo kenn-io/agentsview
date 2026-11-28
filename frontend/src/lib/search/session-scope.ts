@@ -162,12 +162,12 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
       at < 0 ? [...items, revealedItem] : [...items.slice(0, at), revealedItem, ...items.slice(at)];
   }
   // The linked message's own row renders every block; a tool group renders its calls.
+  const linkedItem = revealed && items.find((item) => item.ordinals.includes(revealed.ordinal));
   const revealedVisible = (message: Message, type: BlockType): boolean =>
     revealBlocks &&
     message === revealed &&
-    (revealedItem?.kind === "message" ||
-      !revealedItem ||
-      (type === "tool" && revealedItem?.kind === "tool-group"));
+    ((linkedItem?.kind === "message" && linkedItem.message === revealed) ||
+      (type === "tool" && linkedItem?.kind === "tool-group"));
 
   const messages: Message[] = [];
   const included = new Set<Message>();
