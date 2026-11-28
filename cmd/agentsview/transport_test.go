@@ -666,9 +666,9 @@ func TestManagedDaemonWaitWithLockedConfig(t *testing.T) {
 				select {
 				case <-results:
 				case <-time.After(5 * time.Second):
-					t.Fatal("transport did not stop after releasing the config lock")
+					require.FailNow(t, "transport did not stop after releasing the config lock")
 				}
-				t.Fatal("transport waited on the config lock")
+				require.FailNow(t, "transport waited on the config lock")
 			}
 			if tc.ready {
 				require.NoError(t, got.err)
