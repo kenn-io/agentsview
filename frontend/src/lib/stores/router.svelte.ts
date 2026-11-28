@@ -35,12 +35,6 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
 
 const DEFAULT_ROUTE: Route = "sessions";
 
-export function parseMessageOrdinal(value: string | undefined): number | undefined {
-  if (!value || !/^\d+$/.test(value)) return undefined;
-  const ordinal = Number(value);
-  return Number.isSafeInteger(ordinal) ? ordinal : undefined;
-}
-
 export function getBasePath(): string {
   const base = document.querySelector("base");
   if (!base) return "";
@@ -150,9 +144,9 @@ export class RouterStore {
     }
   }
 
-  #buildUrl(path: string, params: Record<string, string> = {}, includeSticky = true): string {
+  #buildUrl(path: string, params: Record<string, string> = {}): string {
     const basePath = getBasePath();
-    const merged = includeSticky ? { ...this.#stickyParams, ...params } : params;
+    const merged = { ...this.#stickyParams, ...params };
     const qs = searchFromRouteParams(merged).toString();
     const full = basePath + path;
     return qs ? `${full}?${qs}` : full;
@@ -194,7 +188,7 @@ export class RouterStore {
   }
 
   buildMessageHref(id: string, ordinal: number): string {
-    return this.#buildUrl(sessionPath(id), { msg: String(ordinal) }, false);
+    return `${getBasePath()}${sessionPath(id)}?msg=${ordinal}`;
   }
 
   navigate(route: Route, params: Record<string, string> = {}): boolean {

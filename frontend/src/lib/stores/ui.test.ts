@@ -28,6 +28,11 @@ describe("UIStore", () => {
     ui.followLatestRequest = 0;
   });
 
+  afterEach(() => {
+    ui.showAllBlocks();
+    ui.setTranscriptMode("normal");
+  });
+
   it.each(["selection", "filter", "mode", "follow"])(
     "dismisses a linked reveal on %s",
     (change) => {
@@ -39,20 +44,8 @@ describe("UIStore", () => {
       if (change === "mode") ui.setTranscriptMode("focused");
       if (change === "follow") ui.setFollowLatest(true);
       expect(ui.linkedMessage).toBeNull();
-      ui.showAllBlocks();
-      ui.setTranscriptMode("normal");
     },
   );
-
-  it("keeps a reveal during automatic link corrections", () => {
-    ui.showAllBlocks();
-    ui.setBlockVisible("thinking", false);
-    ui.setTranscriptMode("focused");
-    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
-    ui.setTranscriptMode("normal", false);
-    ui.setBlockVisible("thinking", true, false);
-    expect(ui.linkedMessage).toEqual({ sessionId: "s1", ordinal: 1 });
-  });
 
   describe("publishTarget", () => {
     it("clears the publish target when publish modal closes", async () => {

@@ -548,8 +548,8 @@ class UIStore {
     return this.visibleBlocks.has(type);
   }
 
-  setBlockVisible(type: BlockType, visible: boolean, userChange = true) {
-    if (userChange && this.visibleBlocks.has(type) !== visible) this.linkedMessage = null;
+  setBlockVisible(type: BlockType, visible: boolean) {
+    if (this.visibleBlocks.has(type) !== visible) this.linkedMessage = null;
     const next = new Set(this.visibleBlocks);
     if (visible) {
       next.add(type);
@@ -611,8 +611,8 @@ class UIStore {
     this.readingWidth = width;
   }
 
-  setTranscriptMode(mode: TranscriptMode, userChange = true) {
-    if (userChange && this.transcriptMode !== mode) this.linkedMessage = null;
+  setTranscriptMode(mode: TranscriptMode) {
+    if (this.transcriptMode !== mode) this.linkedMessage = null;
     this.transcriptMode = mode;
   }
 

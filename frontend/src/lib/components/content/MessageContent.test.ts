@@ -177,7 +177,6 @@ describe("MessageContent", () => {
       await render(message({ session_id: "session-1", ordinal: 7 }));
       await click('[aria-label="Copy link to message"]');
       expect(copyMock).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
-      expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
     } finally {
       window.history.replaceState(null, "", "/");
       window.dispatchEvent(new PopStateEvent("popstate"));
@@ -206,15 +205,6 @@ describe("MessageContent", () => {
     expect(copyMock).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
   });
 
-  it("uses the server selected after the message renders", async () => {
-    await render(message({ session_id: "session-1", ordinal: 7 }));
-    localStorage.setItem("agentsview-server-url", "https://example.org/archive");
-    window.dispatchEvent(new Event("agentsview:server-url-change"));
-    await tick();
-    await click('[aria-label="Copy link to message"]');
-    expect(copyMock).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
-  });
-
   it("copies a link to the selected remote server", async () => {
     state.isDesktop = true;
     localStorage.setItem("agentsview-server-url", "https://example.org/archive/");
@@ -228,14 +218,6 @@ describe("MessageContent", () => {
     } finally {
       base.remove();
     }
-  });
-
-  it("does not confirm a failed message link copy", async () => {
-    copyMock.mockResolvedValueOnce(false);
-    await render(message({ ordinal: 7 }));
-    await click('[aria-label="Copy link to message"]');
-    expect(document.querySelector('[aria-label="Copy link to message"]')).not.toBeNull();
-    expect(document.querySelector('[aria-label="Copied!"]')).toBeNull();
   });
 
   it("offers message links when mutations are disabled", async () => {

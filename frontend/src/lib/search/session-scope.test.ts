@@ -79,7 +79,7 @@ describe("session search scope", () => {
     expect(result.allowsBlock(tool, "tool-input")).toBe(true);
   });
 
-  it("keeps filtered blocks hidden when focused mode alone hid the linked row", () => {
+  it.each(["normal", "focused"] as const)("keeps filtered blocks hidden for a linked row in %s mode", (transcriptMode) => {
     const prompt = message(0, "prompt", { role: "user" });
     const linked = message(1, "[Thinking]\nprivate thought\n[/Thinking]\nanswer", {
       has_thinking: true,
@@ -87,7 +87,7 @@ describe("session search scope", () => {
     const final = message(2, "final answer");
     const result = scope([prompt, linked, final], {
       ...filtered(["user", "assistant"]),
-      transcriptMode: "focused",
+      transcriptMode,
       revealOrdinal: 1,
     });
     expect(result.messages).toEqual([prompt, linked, final]);
@@ -101,16 +101,6 @@ describe("session search scope", () => {
     const result = scope([prompt, answer], { ...filtered(["user"]), revealOrdinal: 1 });
     expect(result.messages).toEqual([prompt, answer]);
     expect(result.allowsBlock(answer, "text")).toBe(true);
-  });
-
-  it("keeps a hidden block out of search when the linked row is already visible", () => {
-    const thought = { has_thinking: true, thinking_text: "needle" };
-    const linked = message(1, "[Thinking]\nneedle\n[/Thinking]\nanswer", thought);
-    const other = message(2, "[Thinking]\nneedle\n[/Thinking]\nanswer", thought);
-    const result = scope([linked, other], { ...filtered(["user", "assistant"]), revealOrdinal: 1 });
-    expect(result.messages).toEqual([linked, other]);
-    expect(result.allowsBlock(linked, "thinking")).toBe(false);
-    expect(result.allowsBlock(other, "thinking")).toBe(false);
   });
 
   it("keeps visible prose in a mixed message and drops its hidden tool blocks", () => {

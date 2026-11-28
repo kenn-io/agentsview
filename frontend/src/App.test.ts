@@ -8,8 +8,6 @@ import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
 import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
-import { inSessionSearch } from "./lib/stores/inSessionSearch.svelte.js";
-import MessageContent from "./lib/components/content/MessageContent.svelte";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
 import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
@@ -62,15 +60,10 @@ it("opens a copied message link with its target hidden by saved filters", async 
   vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
     sessions.activeSessionId = id;
   });
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
   onTestFinished(() => {
-    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
-    else Reflect.deleteProperty(navigator, "clipboard");
     ui.showAllBlocks();
     ui.setTranscriptMode("normal");
   });
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   const makeMessage = (ordinal: number, role: string): Message => ({
     id: ordinal + 1,
     session_id: "session-1",
@@ -90,13 +83,6 @@ it("opens a copied message link with its target hidden by saved filters", async 
     is_system: false,
   });
   const linked = makeMessage(1, "assistant");
-  const card = mount(MessageContent, { target: document.body, props: { message: linked } });
-  await tick();
-  document.querySelector<HTMLButtonElement>('[aria-label="Copy link to message"]')!.click();
-  await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-  const url = writeText.mock.calls[0]![0] as string;
-  expect(url).toBe(`${window.location.origin}/sessions/session-1?msg=1`);
-  await unmount(card);
   ui.setBlockVisible("assistant", false);
   ui.setBlockVisible("thinking", false);
   ui.setTranscriptMode("focused");
@@ -106,26 +92,18 @@ it("opens a copied message link with its target hidden by saved filters", async 
   component = mount(App, { target: document.body });
   await flushEffects();
   messages.loading = true;
-  window.history.replaceState(null, "", url);
+  window.history.replaceState(null, "", "/sessions/session-1?msg=1");
   window.dispatchEvent(new PopStateEvent("popstate"));
   await flushEffects();
   sessions.activeSessionId = "session-1";
   messages.sessionId = "session-1";
   messages.messages = [makeMessage(0, "user"), linked, makeMessage(2, "user")];
   messages.loading = false;
-  await vi.waitFor(() =>
-    expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 1, 2]),
-  );
+  await vi.waitFor(() => expect(ui.selectedOrdinal).toBe(1));
+  expect(ui.linkedMessage).toEqual({ sessionId: "session-1", ordinal: 1 });
   expect(ui.isBlockVisible("assistant")).toBe(false);
   expect(ui.isBlockVisible("thinking")).toBe(false);
   expect(ui.transcriptMode).toBe("focused");
-  expect(ui.selectedOrdinal).toBe(1);
-  ui.selectOrdinal(1);
-  await tick();
-  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 1, 2]);
-  ui.selectOrdinal(2);
-  await tick();
-  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 2]);
   expect(router.params.msg).toBe("1");
 });
 

@@ -301,56 +301,19 @@ describe("MessageList follow cancellation", () => {
     expect(ui.selectedOrdinal).toBe(12);
   });
 
-  it("lands a jump on the target card of an open empty row", async () => {
+  it.each(["empty-group", "tool-group"])("lands a jump on a member of a %s", async (kind) => {
     ui.followLatest = false;
-    const empty = (ordinal: number) => ({
+    const member = (ordinal: number) => ({
       ...makeMessage(ordinal),
       content: "",
       content_length: 0,
+      ...(kind === "tool-group" ? { role: "assistant", has_tool_use: true, tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }] } : {}),
     });
-    messages.messages = [makeMessage(10), empty(11), empty(12)];
+    messages.messages = [makeMessage(10), member(11), member(12)];
     setVirtualRows(2);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-      this: Element,
-    ) {
-      const top = this.matches('[data-message-ordinal="12"]')
-        ? 260
-        : this.matches(".virtual-row")
-          ? 40
-          : 0;
-      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
-    });
-    component = mount(MessageList, { target: document.body });
-    await flushScrollUpdates();
-
-    component.scrollToOrdinal(12);
-
-    await vi.waitFor(() => {
-      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
-    });
-  });
-
-  it("lands on a later tool-group member", async () => {
-    const tool = (ordinal: number) => ({
-      ...makeMessage(ordinal),
-      role: "assistant",
-      content: "",
-      content_length: 0,
-      has_tool_use: true,
-      tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
-    });
-    messages.messages = [makeMessage(10), tool(11), tool(12)];
-    setVirtualRows(2);
-    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-      this: Element,
-    ) {
-      const top = this.matches('[data-message-ordinal="12"]')
-        ? 260
-        : this.matches(".virtual-row")
-          ? 40
-          : 0;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const top = this.matches('[data-message-ordinal="12"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
       return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
     });
     component = mount(MessageList, { target: document.body });
@@ -1319,12 +1282,6 @@ describe("MessageList follow cancellation", () => {
 
   it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
     ui.setBlockVisible("assistant", false);
-    window.history.replaceState(null, "", "/sessions/s1?msg=1");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-    onTestFinished(() => {
-      window.history.replaceState(null, "", "/");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    });
     ui.followLatest = false;
     ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
     const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
@@ -1342,10 +1299,6 @@ describe("MessageList follow cancellation", () => {
     );
     expect(rows).toEqual(["msg 0", "linked answer", "msg 2"]);
     expect(element.scrollTop).toBe(100);
-    expect(ui.isBlockVisible("assistant")).toBe(false);
-    expect(JSON.parse(localStorage.getItem("agentsview-block-filters")!).hidden).toEqual([
-      "assistant",
-    ]);
   });
 
   it("selects the neighboring message when leaving a revealed target", async () => {

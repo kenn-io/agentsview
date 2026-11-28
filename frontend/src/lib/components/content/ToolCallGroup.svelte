@@ -165,7 +165,6 @@
   }
   .group-member { position: relative; }
   .member-link { position: absolute; right: 100%; top: 0; }
-  .group-member:hover .member-link :global(button) { opacity: 1; }
   .read-progress-divider {
     display: flex;
     align-items: center;
