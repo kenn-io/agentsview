@@ -235,11 +235,10 @@ func reconcileClaudePersistedToolResults(
 	}
 	// Re-derive Claude launch links from the complete restored result events.
 	if candidate.Parsed.Session.Agent == parser.AgentClaude || candidate.Parsed.Session.Agent == "" && candidate.Session.Agent == string(parser.AgentClaude) {
+		host, _ := parser.StripHostPrefix(candidate.Session.ID)
 		prefix := ""
-		if candidate.Parsed.Session.ID != "" {
-			if p, ok := strings.CutSuffix(candidate.Session.ID, candidate.Parsed.Session.ID); ok {
-				prefix = p
-			}
+		if host != "" {
+			prefix = host + "~"
 		}
 		for _, pos := range touched {
 			call := &candidate.Messages[pos.mi].ToolCalls[pos.ci]
