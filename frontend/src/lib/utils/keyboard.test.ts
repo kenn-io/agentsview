@@ -58,6 +58,7 @@ describe("registerShortcuts", () => {
       starred.unstar(id);
     }
     sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
     navigateMessage = vi.fn();
     navigateUserPrompt = vi.fn();
     cleanup = registerShortcuts({ navigateMessage, navigateUserPrompt });
@@ -88,28 +89,21 @@ describe("registerShortcuts", () => {
     }
   });
 
-  it.each([{ host_paths_detached: true }, null])(
-    "does not copy a Claude resume command for version %j",
-    async (version) => {
-      sync.serverVersion = version as typeof sync.serverVersion;
-      sessions.sessions = [
-        { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
-      ];
-      sessions.activeSessionId = "claude:copied";
-      const resume = vi
-        .spyOn(SessionsService, "postApiV1SessionsByIdResume")
-        .mockRejectedValue(new Error("detached"));
-      try {
-        fireKey("c");
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(resume).not.toHaveBeenCalled();
-        expect(copyToClipboard).not.toHaveBeenCalled();
-      } finally {
-        sync.serverVersion = null;
-      }
-    },
-  );
+  it("does not copy a Claude resume command when host actions are unavailable", async () => {
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(false);
+    sessions.sessions = [
+      { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+    ];
+    sessions.activeSessionId = "claude:copied";
+    const resume = vi
+      .spyOn(SessionsService, "postApiV1SessionsByIdResume")
+      .mockRejectedValue(new Error("detached"));
+    fireKey("c");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resume).not.toHaveBeenCalled();
+    expect(copyToClipboard).not.toHaveBeenCalled();
+  });
 
   describe("remote c copy", () => {
     it.each([
