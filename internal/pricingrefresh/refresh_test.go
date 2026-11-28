@@ -557,6 +557,110 @@ func TestRefreshCurrentReleasesWriteLockDuringFetch(t *testing.T) {
 	assert.NotEqual(t, previous, now.Format(time.RFC3339))
 }
 
+func TestRefreshCurrentCancelRestoreTimesOutBehindHeldLock(t *testing.T) {
+	tests := []struct {
+		name      string
+		cancelIn  string
+		fetchBody func(context.Context, context.CancelFunc, func()) (pricing.Catalog, error)
+	}{
+		{
+			name:     "during fetch",
+			cancelIn: "fetch",
+			fetchBody: func(ctx context.Context, cancel context.CancelFunc, holdLock func()) (pricing.Catalog, error) {
+				holdLock()
+				cancel()
+				return pricing.Catalog{}, ctx.Err()
+			},
+		},
+		{
+			name:     "during post-fetch lock wait",
+			cancelIn: "post-fetch",
+			fetchBody: func(_ context.Context, _ context.CancelFunc, holdLock func()) (pricing.Catalog, error) {
+				holdLock()
+				return pricing.Catalog{LiteLLM: []pricing.ModelPricing{{
+					ModelPattern: "post-fetch-cancel-model",
+				}}}, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				database := testDB(t)
+				now := pricingTestNow()
+				seedPricingAttempt(t, database, now, 2*time.Hour)
+
+				lockCh := make(chan struct{}, 1)
+				lockCh <- struct{}{}
+				var lockHeld atomic.Bool
+				holdLock := func() {
+					<-lockCh
+					lockHeld.Store(true)
+				}
+				releaseLock := func() {
+					if lockHeld.CompareAndSwap(true, false) {
+						lockCh <- struct{}{}
+					}
+				}
+				defer releaseLock()
+
+				postFetchWaiting := make(chan struct{}, 1)
+				var calls atomic.Int32
+				withWriteLock := func(ctx context.Context, work func() error) error {
+					call := calls.Add(1)
+					if tt.cancelIn == "post-fetch" && call == 2 {
+						postFetchWaiting <- struct{}{}
+					}
+					select {
+					case <-lockCh:
+						defer func() { lockCh <- struct{}{} }()
+						return work()
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					done <- refreshCurrent(ctx, database, func(fetchCtx context.Context) (pricing.Catalog, error) {
+						return tt.fetchBody(fetchCtx, cancel, holdLock)
+					}, now, withWriteLock)
+				}()
+
+				if tt.cancelIn == "post-fetch" {
+					synctest.Wait()
+					select {
+					case <-postFetchWaiting:
+					default:
+						require.FailNow(t, "refresh did not reach post-fetch lock wait")
+					}
+					cancel()
+				}
+
+				synctest.Wait()
+				select {
+				case err := <-done:
+					require.FailNowf(t, "cleanup exited before timeout", "err=%v", err)
+				default:
+				}
+
+				time.Sleep(cancelRestoreTimeout)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					require.ErrorIs(t, err, context.Canceled)
+					require.NotErrorIs(t, err, context.DeadlineExceeded)
+				default:
+					require.FailNow(t, "canceled refresh did not bound its cleanup wait")
+				}
+			})
+		})
+	}
+}
+
 func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		database := testDB(t)

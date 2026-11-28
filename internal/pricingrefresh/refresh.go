@@ -3,6 +3,7 @@ package pricingrefresh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -58,6 +59,11 @@ func releaseRefreshGateReference(database *db.DB, gate *refreshGate) {
 // RefreshCooldown is the minimum interval between upstream fetch attempts.
 // Attempts are recorded before fetching, so failures observe the same cooldown.
 const RefreshCooldown = time.Hour
+
+// cancelRestoreTimeout bounds the detached write that restores the previous
+// attempt timestamp after cancellation so shutdown or restart cannot hang
+// behind a stalled sync or database writer lock.
+const cancelRestoreTimeout = 5 * time.Second
 
 // SeedFallback installs the embedded catalog (snapshot + supplemental
 // aliases) when pricing.SeedVersion differs from the stored meta.
@@ -205,13 +211,20 @@ func refreshAtWithWriteLock(
 
 	catalog, fetchErr := fetch(ctx)
 	restoreAttempt := func(cause error) (bool, error) {
-		// The restore is one small write, so it runs after cancellation.
-		restoreCtx := context.WithoutCancel(ctx)
+		// Bound detached cleanup so daemon shutdown or restart cannot hang
+		// behind a stalled sync or database writer lock.
+		restoreCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx), cancelRestoreTimeout,
+		)
+		defer cancel()
 		if restoreErr := withWriteLock(restoreCtx, func() error {
 			return database.SetPricingMetaContext(
 				restoreCtx, refreshAttemptMetaKey, previousAttempt,
 			)
 		}); restoreErr != nil {
+			if errors.Is(restoreErr, context.DeadlineExceeded) {
+				return false, cause
+			}
 			return false, fmt.Errorf(
 				"restoring pricing refresh attempt after cancellation: %w: %w",
 				restoreErr, cause,
