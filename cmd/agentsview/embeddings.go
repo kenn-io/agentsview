@@ -93,7 +93,7 @@ func newEmbeddingsSwitchCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "switch <endpoint>",
 		Short:        "Switch the embedding server and rebuild the index",
-		Long:         "Switch to one embedding server and rebuild the session index. Before saving, the command sends one sample query and checks the returned vector dimension. The same model keeps its recipe; a new model starts from its defaults. The command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
+		Long:         "Switch to one embedding server and rebuild the session index. Before saving, the command sends one sample query and checks the returned vector dimension. The same model keeps its recipe; a new model starts from its defaults.\n\nWhen the model changes, nomic-embed-text, nomic-embed-text:latest, nomic-embed-text:v1.5, nomic-embed-text-v1.5, and nomic-ai/nomic-embed-text-v1.5 use \"search_query: \" for queries and \"search_document: \" for documents.\n\nThe command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
 		Example:      "  agentsview index embeddings switch https://host/v1 --model embeddinggemma --dimension 768 --api-key-file ~/.config/agentsview/api-key",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),

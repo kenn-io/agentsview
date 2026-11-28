@@ -4349,8 +4349,7 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 		embeddings["model"] = model
 		embeddings["dimension"] = dimension
 		embeddings["servers"] = map[string]any{"default": server}
-		nomicName := strings.TrimPrefix(model, "nomic-ai/")
-		if oldModel != model && (nomicName == "nomic-embed-text" || strings.HasPrefix(nomicName, "nomic-embed-text:") || strings.HasPrefix(nomicName, "nomic-embed-text-v")) {
+		if oldModel != model && (isNomicModel(model) || model == "nomic-embed-text-v1.5" || model == "nomic-ai/nomic-embed-text-v1.5") {
 			for key, value := range map[string]any{
 				"max_input_chars":      nomicMaxInputChars,
 				"model_context_tokens": nomicModelContextTokens,

@@ -157,6 +157,22 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "changing models requires rebuilding",
 		},
 		{
+			name: "local server rejects unnamespaced alias",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-embed-text-v1.5"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+			wantErr: "changing models requires rebuilding",
+		},
+		{
+			name: "local server rejects namespaced alias",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-ai/nomic-embed-text-v1.5"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+			wantErr: "changing models requires rebuilding",
+		},
+		{
 			name: "local server preserves nomic-embed-text",
 			mutate: func(c *VectorConfig) {
 				c.Embeddings.Model = "nomic-embed-text"
@@ -549,9 +565,9 @@ timeout = '1s'
 		{"nomic-embed-text:v1.5", true},
 		{"nomic-embed-text-v1.5", true},
 		{"nomic-ai/nomic-embed-text-v1.5", true},
-		{"nomic-ai/nomic-embed-text", true},
-		{"nomic-ai/nomic-embed-text:latest", true},
-		{"nomic-embed-text:other", true},
+		{"nomic-ai/nomic-embed-text", false},
+		{"nomic-ai/nomic-embed-text:latest", false},
+		{"nomic-embed-text:other", false},
 		{"nomic-embed-textual", false},
 		{"other/nomic-embed-text-v1.5", false},
 	} {
@@ -580,23 +596,41 @@ timeout = '1s'
 		})
 	}
 
-	for _, prefix := range []string{"custom: ", ""} {
-		t.Run("same alias keeps prefix "+prefix, func(t *testing.T) {
-			f := newConfigFixture(t)
-			f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true, "embeddings": map[string]any{
-				"model": "nomic-ai/nomic-embed-text-v1.5", "dimension": 768,
-				"query_prefix": prefix, "document_prefix": prefix,
-			}}})
-			cfg := f.LoadFile(t)
-			candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "nomic-ai/nomic-embed-text-v1.5", 768, "")
-			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-ai/nomic-embed-text-v1.5", 768, ""))
-			for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
-				assert.Equal(t, prefix, got.QueryPrefix)
-				assert.Equal(t, prefix, got.DocumentPrefix)
-			}
-		})
+	for _, model := range []string{"nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1.5"} {
+		for _, prefix := range []string{"custom: ", ""} {
+			t.Run("same alias keeps prefix "+model+prefix, func(t *testing.T) {
+				f := newConfigFixture(t)
+				f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true, "embeddings": map[string]any{
+					"model": model, "dimension": 768, "max_input_chars": 1234, "model_context_tokens": 512, "input_suffix": "suffix",
+					"query_prefix": prefix, "document_prefix": prefix,
+				}}})
+				cfg := f.LoadFile(t)
+				candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", model, 768, "")
+				require.NoError(t, err)
+				require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", model, 768, ""))
+				for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+					assert.Equal(t, prefix, got.QueryPrefix)
+					assert.Equal(t, prefix, got.DocumentPrefix)
+					assert.Equal(t, 1234, got.MaxInputChars)
+					assert.Equal(t, 512, got.ModelContextTokens)
+					assert.Equal(t, "suffix", got.InputSuffix)
+				}
+			})
+		}
 	}
+
+	t.Run("switch between Nomic spellings resets recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\nquery_prefix = 'custom: '\n")
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "nomic-embed-text-v1.5", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text-v1.5", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			assert.Equal(t, "search_query: ", got.QueryPrefix)
+			assert.Equal(t, "search_document: ", got.DocumentPrefix)
+		}
+	})
 
 	for _, tc := range []struct {
 		name, endpoint string
