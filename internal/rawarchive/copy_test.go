@@ -15,7 +15,7 @@ import (
 )
 
 func TestCopyPreservesAssetReferences(t *testing.T) {
-	for _, state := range []string{"valid", "missing directory"} {
+	for _, state := range []string{"valid", "missing directory", "missing legacy"} {
 		t.Run(state, func(t *testing.T) {
 			ctx := t.Context()
 			source := t.TempDir()
@@ -32,6 +32,10 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(assetDir, name), files[name], 0o600))
 			}
 			content := "![one](" + ref + ") ![two](asset://" + jpegName + ") ![three](asset://legacy.png)"
+			if state == "missing legacy" {
+				content = "![legacy](asset://legacy.png)"
+				require.NoError(t, os.Remove(filepath.Join(assetDir, "legacy.png")))
+			}
 			database, err := db.OpenIsolatedContext(ctx, filepath.Join(source, "sessions.db"))
 			require.NoError(t, err)
 			require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "example", Agent: "claude", Project: "example"}))

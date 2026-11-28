@@ -17,7 +17,7 @@ import (
 	"github.com/yuin/goldmark/v2/parser"
 )
 
-// VerifyAssets checks content-addressed image references in retained messages and tool results.
+// VerifyAssets checks image references in retained messages and tool results.
 // The caller holds the offline writer lock so the references cannot change.
 func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 	rows, err := d.getReader().QueryContext(ctx, `
@@ -44,19 +44,26 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		want, _, valid := assetReferenceDigest(ref)
-		if !valid {
-			return nil
-		}
+		want, _, hashed := assetReferenceDigest(ref)
 		name := strings.TrimPrefix(ref, "asset://")
+		if !hashed {
+			_, image := assets.MediaTypeForExt(strings.ToLower(filepath.Ext(name)))
+			if !image || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
+				return nil
+			}
+		}
 		if root == nil {
 			root, err = os.OpenRoot(directory)
 			if err != nil {
 				return fmt.Errorf("opening required assets: %w", err)
 			}
 		}
-		if !assets.IsCompleteObject(root, name, -1, want) {
-			return fmt.Errorf("required asset %s is missing, corrupt, or has an unsupported file type", name)
+		if hashed {
+			if !assets.IsCompleteObject(root, name, -1, want) {
+				return fmt.Errorf("required asset %s is missing, corrupt, or has an unsupported file type", name)
+			}
+		} else if info, err := root.Stat(name); err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("required asset %s is missing or is not a regular file", name)
 		}
 		seen[ref] = true
 		return nil

@@ -335,6 +335,8 @@ func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 			require.NoError(t, ClearCopiedUsageRollups(t.Context(), cachePath))
 			raw = openRawUsageCacheTestDB(t, cachePath)
 			var kept int
+			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&kept))
+			assert.Equal(t, facts, kept)
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&kept))
 			assert.Zero(t, kept)
 			require.NoError(t, raw.Close())

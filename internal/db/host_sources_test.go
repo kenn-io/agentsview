@@ -89,11 +89,6 @@ func TestClearHostSourcesPreservesCursorUsage(t *testing.T) {
 		return err
 	}))
 	filter := UsageFilter{Timezone: "UTC"}
-	before, err := d.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, 330, before.Totals.InputTokens)
-	require.Equal(t, 100, before.Totals.OutputTokens)
-	require.EqualValues(t, 42, before.Totals.TotalCost.Microdollars)
 	require.NoError(t, d.ClearHostSources(ctx))
 	var user, email, account, polled, conversation string
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT user_id,user_email,account_user_id,account_polled_at,conversation_id FROM cursor_usage_events`).Scan(&user, &email, &account, &polled, &conversation))
@@ -109,7 +104,9 @@ func TestClearHostSourcesPreservesCursorUsage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	after, err := reopened.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
-	assert.Equal(t, before.Totals, after.Totals)
+	assert.Equal(t, 330, after.Totals.InputTokens)
+	assert.Equal(t, 100, after.Totals.OutputTokens)
+	assert.EqualValues(t, 42, after.Totals.TotalCost.Microdollars)
 }
 
 func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {

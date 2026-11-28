@@ -45,6 +45,9 @@ func newArchiveCommand() *cobra.Command {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), args[0])
 		return err
 	}}
+	copyCmd.Long = `Create a detached preview of a stopped archive.
+
+The copy omits raw sources, artifact vault data, and original source links. It stays in archive-only mode, with source sync and publication disabled. Use archive backup to retain raw sources.`
 	var captureRoots []string
 	var identityFrom string
 	var writersStopped bool
