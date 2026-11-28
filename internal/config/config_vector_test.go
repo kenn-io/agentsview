@@ -548,19 +548,27 @@ timeout = '1s'
 		assert.Equal(t, "5m", f.LoadFile(t).Vector.Embeddings.Servers["default"].Timeout)
 	})
 
-	for _, model := range []string{
-		"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5",
-		"nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1.5",
+	for _, tc := range []struct {
+		oldModel, model string
+	}{
+		{"custom", "nomic-embed-text"},
+		{"custom", "nomic-embed-text:latest"},
+		{"custom", "nomic-embed-text:v1.5"},
+		{"custom", "nomic-embed-text-v1.5"},
+		{"custom", "nomic-ai/nomic-embed-text-v1.5"},
+		{"nomic-embed-text", "nomic-embed-text-v1.5"},
 	} {
-		t.Run("new model "+model, func(t *testing.T) {
+		t.Run(tc.oldModel+" to "+tc.model, func(t *testing.T) {
 			f := newConfigFixture(t)
-			f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\ninput_suffix = 'suffix'\n")
+			f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true, "embeddings": map[string]any{
+				"model": tc.oldModel, "dimension": 768, "input_suffix": "suffix", "query_prefix": "custom: ",
+			}}})
 			cfg := f.LoadFile(t)
-			candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", model, 768, "")
+			candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", tc.model, 768, "")
 			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", model, 768, ""))
+			require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", tc.model, 768, ""))
 			for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
-				assert.Equal(t, model, got.Model)
+				assert.Equal(t, tc.model, got.Model)
 				assert.Equal(t, 768, got.Dimension)
 				assert.Empty(t, got.InputSuffix)
 				assert.Equal(t, 4000, got.MaxInputChars)
@@ -580,19 +588,6 @@ timeout = '1s'
 		assert.Empty(t, got.QueryPrefix)
 		assert.Empty(t, got.DocumentPrefix)
 		assert.Equal(t, 8192, got.MaxInputChars)
-	})
-
-	t.Run("switch between Nomic spellings resets recipe", func(t *testing.T) {
-		f := newConfigFixture(t)
-		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\nquery_prefix = 'custom: '\n")
-		cfg := f.LoadFile(t)
-		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "nomic-embed-text-v1.5", 768, "")
-		require.NoError(t, err)
-		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text-v1.5", 768, ""))
-		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
-			assert.Equal(t, "search_query: ", got.QueryPrefix)
-			assert.Equal(t, "search_document: ", got.DocumentPrefix)
-		}
 	})
 
 	for _, tc := range []struct {
