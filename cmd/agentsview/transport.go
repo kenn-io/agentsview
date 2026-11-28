@@ -439,7 +439,11 @@ func waitForManagedDaemon(ctx context.Context, cfg *config.Config, timeout time.
 	}
 	for ctx.Err() == nil {
 		if cfg.AuthToken == "" {
-			adoptBackgroundLaunchConfig(cfg)
+			reloaded, err := config.LoadReadOnly()
+			if err == nil && reloaded.DataDir == cfg.DataDir {
+				cfg.RequireAuth = reloaded.RequireAuth
+				cfg.AuthToken = reloaded.AuthToken
+			}
 		}
 		tr, err := detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, timeout)
 		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {

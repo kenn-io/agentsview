@@ -17,6 +17,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -603,6 +604,78 @@ func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
 			}
 			if tc.auth {
 				assert.Equal(t, "generated-token", cfg.AuthToken)
+			}
+		})
+	}
+}
+
+func TestManagedDaemonWaitWithLockedConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{
+		{"deadline", false},
+		{"authenticated daemon", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			contents := "no_daemon_autostart = true\n"
+			if tc.ready {
+				contents += "require_auth = true\nauth_token = 'generated-token'\n"
+				host, port := testAuthenticatedPingServer(t, "generated-token")
+				writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+				setTestVersion(t, "test")
+			}
+			writeTestConfig(t, dir, contents)
+			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+			lock := flock.New(filepath.Join(dir, "config.toml.lock"))
+			require.NoError(t, lock.Lock())
+			t.Cleanup(func() { require.NoError(t, lock.Close()) })
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a held config lock must not extend the deadline.
+			if tc.ready {
+				cancel()
+				ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
+			}
+			defer cancel()
+			type result struct {
+				tr    transport
+				err   error
+				token string
+			}
+			results := make(chan result, 1)
+			go func() {
+				cfg := config.Config{DataDir: dir}
+				tr, err := ensureTransportContext(ctx, &cfg, transportIntentRead, 2*time.Second)
+				results <- result{tr, err, cfg.AuthToken}
+			}()
+			var got result
+			timedOut := false
+			guard := time.Second
+			if tc.ready {
+				guard = 5 * time.Second
+			}
+			select {
+			case got = <-results:
+			case <-time.After(guard):
+				timedOut = true
+			}
+			require.NoError(t, lock.Unlock())
+			if timedOut {
+				select {
+				case <-results:
+				case <-time.After(5 * time.Second):
+					t.Fatal("transport did not stop after releasing the config lock")
+				}
+				t.Fatal("transport waited on the config lock")
+			}
+			if tc.ready {
+				require.NoError(t, got.err)
+				assert.Equal(t, transportHTTP, got.tr.Mode)
+				assert.Equal(t, "generated-token", got.token)
+			} else {
+				require.ErrorIs(t, got.err, context.DeadlineExceeded)
 			}
 		})
 	}
