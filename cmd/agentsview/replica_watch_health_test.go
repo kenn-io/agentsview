@@ -267,7 +267,7 @@ func TestReplicaPushWatchOwnersRecordHealth(t *testing.T) {
 				}, failed)
 
 				time.Sleep(time.Minute)
-				h.floor <- time.Now()
+				h.retryAfterBackoff()
 				receiveArchiveTest(t, h.attempts)
 				synctest.Wait()
 				succeeded, err := loadReplicaWatchRecord(path)

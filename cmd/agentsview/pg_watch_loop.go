@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -34,11 +35,15 @@ const defaultFlushTimeout = 30 * time.Second
 // time.Ticker channel.
 type pushLoop struct {
 	debounce        time.Duration
+	maxRetry        time.Duration
 	dirty           chan struct{}
 	floor           <-chan time.Time
+	resetFloor      func()
 	after           func(time.Duration) <-chan time.Time
 	push            func(ctx context.Context, reason pushReason, batch *syncpkg.WatchBatch) error
 	label           string
+	failures        int
+	retry           time.Duration
 	pendingMu       sync.Mutex
 	pendingTasks    []queuedPushTask
 	promotionCounts map[syncpkg.WatchBatchPromotionReason]int
@@ -78,8 +83,10 @@ func newPushLoopWithLabel(
 	ticker := time.NewTicker(interval)
 	return &pushLoop{
 		debounce:        debounce,
+		maxRetry:        interval,
 		dirty:           make(chan struct{}, 1),
 		floor:           ticker.C,
+		resetFloor:      func() { ticker.Reset(interval) },
 		after:           time.After,
 		push:            push,
 		label:           label,
@@ -223,7 +230,7 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 		case <-l.dirty:
 			if !armed {
 				armed = true
-				fire = l.after(l.debounce)
+				fire = l.after(l.nextDelay())
 			}
 		case _, ok := <-wake:
 			if !ok {
@@ -234,13 +241,34 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 		case <-fire:
 			armed = false
 			fire = nil
+			wasInBackoff := l.failures > 0
 			l.runNextTask(ctx, false)
+			if (wasInBackoff || l.failures > 0) && l.resetFloor != nil {
+				// Ticker.Reset leaves an already-buffered tick intact, so drain
+				// a tick that fired at the same instant as the backoff timer.
+				l.resetFloor()
+				select {
+				case <-l.floor:
+				default:
+				}
+			}
 		case <-l.floor:
 			// The timer produces an unscoped task. It covers older queued
 			// watcher work; watcher tasks arriving during it stay queued.
+			l.enqueueUnscoped(reasonInterval, nil, false)
+			if l.failures > 0 {
+				// A failed push owes its retry delay. An overdue tick, such
+				// as one buffered while a slow push was failing, keeps the
+				// periodic work queued but must not bypass that delay or
+				// replace the pending retry timer.
+				if !armed {
+					armed = true
+					fire = l.after(l.nextDelay())
+				}
+				continue
+			}
 			armed = false
 			fire = nil
-			l.enqueueUnscoped(reasonInterval, nil, false)
 			l.runNextTask(ctx, false)
 		}
 	}
@@ -253,20 +281,56 @@ type pushClaim struct {
 	waiters  []chan error
 }
 
+func (l *pushLoop) nextDelay() time.Duration {
+	if l.failures > 0 {
+		return l.retry
+	}
+	return l.debounce
+}
+
+func (l *pushLoop) recordPushFailure() {
+	capDelay := l.maxRetry
+	switch {
+	case l.failures == 0 || l.retry <= 0:
+		l.retry = l.debounce
+	case capDelay > 0 && l.retry > capDelay/2:
+		l.retry = capDelay
+	case l.retry > math.MaxInt64/2:
+		l.retry = math.MaxInt64
+	default:
+		l.retry *= 2
+	}
+	if capDelay > 0 && l.retry > capDelay {
+		l.retry = capDelay
+	}
+	l.failures++
+}
+
+func (l *pushLoop) resetBackoff() {
+	l.failures = 0
+	l.retry = 0
+}
+
 func (l *pushLoop) runNextTask(ctx context.Context, final bool) {
 	claim, ok := l.claimPending()
 	if !ok {
 		return
 	}
 	if err := l.push(ctx, claim.reason, claim.batch); err != nil {
-		log.Printf("%s: push (%s) failed: %v", l.label, claim.reason, err)
 		if final {
+			log.Printf("%s: push (%s) failed: %v", l.label, claim.reason, err)
 			completePushWaiters(claim.waiters, err)
 		} else {
+			l.recordPushFailure()
+			log.Printf(
+				"%s: push (%s) failed: %v (next retry in %s)",
+				l.label, claim.reason, err, l.nextDelay(),
+			)
 			l.restorePending(claim)
 		}
 		return
 	}
+	l.resetBackoff()
 	completePushWaiters(claim.waiters, nil)
 	l.signalPending()
 }

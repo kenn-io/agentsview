@@ -139,6 +139,25 @@ func StoresFriction(r Replica) bool {
 	return ok && f.StoresFriction()
 }
 
+// ReachableChecker is optionally implemented by Replica backends that verify
+// remote connectivity before running local source discovery or archive sync
+// preparation.
+type ReachableChecker interface {
+	CheckReachable(ctx context.Context, target ReplicaTarget) error
+}
+
+// CheckReachable verifies that target is reachable when replica implements
+// ReachableChecker.
+func CheckReachable(
+	ctx context.Context, replica Replica, target ReplicaTarget,
+) error {
+	checker, ok := replica.(ReachableChecker)
+	if !ok {
+		return nil
+	}
+	return checker.CheckReachable(ctx, target)
+}
+
 // Replica is a remote database the archive pushes into and that serves the
 // web UI read-only. Implementations must be safe to use as zero values; the
 // CLI and server hold one value per compiled-in backend.

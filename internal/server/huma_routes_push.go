@@ -695,6 +695,9 @@ func (s *Server) humaReplicaPush(
 			pushCtx := db.WithWriterWaitNotice(ctx, func() {
 				reportPhase(storage.PushPhaseWaitingForSync)
 			})
+			if err := storage.CheckReachable(pushCtx, replica, target); err != nil {
+				return storage.PushResult{}, storage.PushNotStartedError{Err: err}
+			}
 			session := &archivepush.ReplicaSession{
 				Connect: func(c context.Context) (storage.Pusher, error) {
 					return replica.NewPusher(c, target, local, storage.PusherOptions{
