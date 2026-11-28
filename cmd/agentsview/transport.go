@@ -46,6 +46,7 @@ type transportIntent int
 const (
 	transportIntentRead transportIntent = iota
 	transportIntentArchiveWrite
+	transportIntentWritableDaemon
 	// Long-lived clients reconnect but never replace an existing daemon.
 	transportIntentLongLived
 )
@@ -171,7 +172,7 @@ func detectTransportContext(
 	if err := ctx.Err(); err != nil {
 		return transport{}, err
 	}
-	if isExternalDaemonStarting(dataDir) {
+	if isExternalDaemonStarting(ctx, dataDir) {
 		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
@@ -187,10 +188,10 @@ func detectTransportContext(
 			return transport{}, err
 		}
 	}
-	if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {
+	if sf := FindDaemonRuntime(ctx, dataDir, authToken); sf != nil {
 		return transportFromRuntime(sf), nil
 	}
-	if IsDaemonStarting(dataDir) {
+	if IsDaemonStarting(ctx, dataDir) {
 		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
@@ -202,16 +203,16 @@ func detectTransportContext(
 		if err := ctx.Err(); err != nil {
 			return transport{}, err
 		}
-		if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {
+		if sf := FindDaemonRuntime(ctx, dataDir, authToken); sf != nil {
 			return transportFromRuntime(sf), nil
 		}
 	}
-	if IsLocalDaemonActive(dataDir, authToken) {
+	if IsLocalDaemonActive(ctx, dataDir, authToken) {
 		directErr := errLocalDaemonUnreachable
 		reason := directErr.Error()
 		incompatible := false
 		ahead := false
-		if rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
+		if rt, err := FindIncompatibleDaemonRuntime(ctx, dataDir, authToken); err != nil {
 			reason = err.Error()
 			directErr = err
 			incompatible = true
@@ -235,8 +236,9 @@ func ensureTransportContext(
 	intent transportIntent,
 	waitTimeout time.Duration,
 ) (transport, error) {
+	needWritable := intent == transportIntentWritableDaemon
 	allowReplacement := intent != transportIntentLongLived
-	if intent == transportIntentLongLived {
+	if intent == transportIntentLongLived || needWritable {
 		intent = transportIntentArchiveWrite
 	}
 	if cfg == nil {
@@ -250,12 +252,27 @@ func ensureTransportContext(
 	}
 	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
 	// invocation only, without touching the process environment.
-	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
+	invocationNoAutostart := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
+	var saved, savedLoaded bool
+	loadSaved := func() (err error) {
+		saved, err = config.LoadSavedNoDaemonAutostart(cfg.DataDir)
+		savedLoaded = true
+		if err != nil {
+			return fmt.Errorf("loading daemon configuration: %w", err)
+		}
+		return nil
+	}
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
-	if intent == transportIntentArchiveWrite {
+	if allowReplacement && (intent == transportIntentRead || needWritable) && !invocationNoAutostart {
+		if err := loadSaved(); err != nil {
+			return transport{}, err
+		}
+	}
+	managedWait := saved
+	if intent == transportIntentArchiveWrite && !managedWait {
 		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
 			ctx, cfg.DataDir, waitTimeout,
 		)
@@ -266,13 +283,21 @@ func ensureTransportContext(
 			adoptBackgroundLaunchConfig(cfg)
 		}
 	}
-	tr, err := detectTransportContext(
-		ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
-	)
+	var tr transport
+	var err error
+	if managedWait {
+		waitCtx, cancel := context.WithTimeout(ctx, min(waitTimeout, 2*time.Second))
+		defer cancel()
+		tr, err = waitForManagedDaemon(waitCtx, cfg, waitTimeout, needWritable)
+	} else {
+		tr, err = detectTransportContext(
+			ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+		)
+	}
 	if err != nil {
 		return transport{}, err
 	}
-	if intent == transportIntentRead && cfg.AuthToken == "" &&
+	if !managedWait && intent == transportIntentRead && cfg.AuthToken == "" &&
 		tr.Mode == transportDirect && tr.DirectReadOnly {
 		adoptBackgroundLaunchConfig(cfg)
 		if cfg.AuthToken != "" {
@@ -284,6 +309,15 @@ func ensureTransportContext(
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return transport{}, err
+	}
+	if !invocationNoAutostart && !savedLoaded && (tr.Mode != transportHTTP || (allowReplacement && shouldReplaceDaemonRuntime(tr.Runtime, version))) {
+		if err := loadSaved(); err != nil {
+			return transport{}, err
+		}
+	}
+	autostartDisabled := invocationNoAutostart || saved
 	if tr.Mode == transportHTTP {
 		if allowReplacement && (intent == transportIntentRead ||
 			intent == transportIntentArchiveWrite) &&
@@ -292,7 +326,7 @@ func ensureTransportContext(
 				if intent == transportIntentRead {
 					return transport{}, errors.New(
 						"daemon restart required: running daemon version differs from this client; " +
-							"run `agentsview daemon restart` or unset AGENTSVIEW_NO_DAEMON to allow automatic replacement",
+							"restart the service managing agentsview, or run `agentsview daemon restart` if no service manager is in use; to replace it automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml",
 					)
 				}
 				return tr, nil
@@ -316,7 +350,7 @@ func ensureTransportContext(
 	}
 	if allowReplacement && (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		!autostartDisabled {
-		if rt, err := FindIncompatibleDaemonRuntime(
+		if rt, err := FindIncompatibleDaemonRuntime(ctx,
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil && rt != nil &&
 			shouldReplaceIncompatibleDaemonRuntime(rt, version) {
@@ -336,11 +370,10 @@ func ensureTransportContext(
 	if intent == transportIntentRead {
 		if autostartDisabled {
 			return transport{}, cliUnavailableError(errors.New(
-				"daemon autostart is disabled; direct SQLite reads are "+
-					"not supported for this command. Start a daemon with "+
-					"`agentsview daemon start` or unset "+
-					"AGENTSVIEW_NO_DAEMON",
-			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON only if this command should start a daemon automatically")
+				"daemon autostart is disabled by AGENTSVIEW_NO_DAEMON or no_daemon_autostart; "+
+					"direct SQLite reads are not supported for this command; restart the service managing agentsview, "+
+					"or run `agentsview daemon start` if no service manager is in use",
+			), "restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use, then retry; to start a daemon automatically, unset AGENTSVIEW_NO_DAEMON and remove no_daemon_autostart from config.toml")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
@@ -397,6 +430,34 @@ func ensureTransportContext(
 	return transportFromRuntime(rt), nil
 }
 
+func waitForManagedDaemon(ctx context.Context, cfg *config.Config, timeout time.Duration, needWritable bool) (transport, error) {
+	if needWritable {
+		_, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, cfg.DataDir, timeout)
+		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {
+			return transport{}, err
+		}
+	}
+	for ctx.Err() == nil {
+		if cfg.AuthToken == "" {
+			adoptBackgroundLaunchConfig(cfg)
+		}
+		tr, err := detectTransportContext(ctx, cfg.DataDir, cfg.AuthToken, timeout)
+		if err != nil && !errors.Is(err, errServeStartupInProgress) && ctx.Err() == nil {
+			return transport{}, err
+		}
+		if tr.DirectIncompatible || (tr.Mode == transportHTTP && (!needWritable || !tr.ReadOnly)) {
+			return tr, nil
+		}
+		timer := time.NewTimer(startProbeTick())
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+	return transport{}, nil
+}
+
 func waitForBackgroundLaunchBeforeArchiveWrite(
 	ctx context.Context,
 	dataDir string,
@@ -432,7 +493,7 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 		if err := ctx.Err(); err != nil {
 			return true, err
 		}
-		if IsDaemonStarting(dataDir) {
+		if IsDaemonStarting(ctx, dataDir) {
 			state := readStartupState(dataDir)
 			if state != nil && state.UpdatedAt.After(lastUpdate) {
 				lastUpdate = state.UpdatedAt
@@ -510,6 +571,9 @@ func guardDaemonAutoStartConfig(cfg config.Config) error {
 	effective, err := config.LoadReadOnlyAt(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("loading daemon configuration: %w", err)
+	}
+	if effective.SavedNoDaemonAutostart {
+		return errors.New("daemon autostart is disabled by no_daemon_autostart in config.toml; restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use; to start a daemon automatically, remove the setting")
 	}
 	host := strings.TrimSpace(effective.Host)
 	if host == "" || effective.RequireAuth || isLoopbackHost(host) {

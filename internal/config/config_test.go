@@ -23,6 +23,25 @@ import (
 
 const configFileName = "config.toml"
 
+func TestNoDaemonAutostartConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		contents string
+		want     bool
+	}{
+		{"omitted", "", false},
+		{"true", "no_daemon_autostart = true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(tc.contents), 0o600))
+			saved, err := LoadSavedNoDaemonAutostart(dir)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, saved)
+		})
+	}
+}
+
 func TestCodeBuddyDefaultAndOverride(t *testing.T) {
 	home := canonicalTempDir(t)
 	setTestHome(t, home)

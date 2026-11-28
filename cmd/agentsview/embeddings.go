@@ -127,7 +127,7 @@ func runEmbeddingsSwitch(
 	}
 	waiting := false
 
-	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
+	client, daemonErr := resolveEmbeddingsDaemonClient(ctx, cfg)
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
 		return daemonErr
 	}
@@ -171,6 +171,9 @@ func runEmbeddingsSwitch(
 		}
 		directBuildLock = nil
 	}
+	if cfg.SavedNoDaemonAutostart {
+		return errors.New("embedding server saved; no_daemon_autostart skipped the daemon restart. Restart the service managing agentsview, or run `agentsview daemon restart` if no service manager is in use, then run `agentsview index embeddings build`")
+	}
 	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
 		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
 	}
@@ -179,7 +182,7 @@ func runEmbeddingsSwitch(
 	if err != nil {
 		return fmt.Errorf("loading config after daemon restart: %w", err)
 	}
-	client, err = resolveEmbeddingsDaemonClient(cfg)
+	client, err = resolveEmbeddingsDaemonClient(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -245,7 +248,7 @@ func pauseEmbeddingsSwitchBuilds(
 				fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
 				*waiting = true
 			}
-			if client, daemonErr = resolveEmbeddingsDaemonClient(cfg); daemonErr == nil {
+			if client, daemonErr = resolveEmbeddingsDaemonClient(ctx, cfg); daemonErr == nil {
 				stop()
 			}
 		})
@@ -746,7 +749,7 @@ func runEmbeddingsBuild(
 		activeClient.store = daemonEmbeddingStore(spec.Name)
 		return buildViaDaemon(ctx, out, activeClient, req)
 	}
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 		err := runEmbeddingsBuildDaemon(ctx, out, cfg, req)
 		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusNotImplemented && flag == "" {
 			if client, pending := daemonSetupClient(ctx, cfg); pending {
@@ -968,7 +971,7 @@ func runDirectBuild(
 func runEmbeddingsBuildDaemon(
 	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
 ) error {
-	client, err := resolveEmbeddingsDaemonClient(cfg)
+	client, err := resolveEmbeddingsDaemonClient(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -1148,8 +1151,8 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 	}
 
 	var gens []vector.GenerationInfo
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		client, err := resolveEmbeddingsDaemonClient(cfg)
+	if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
+		client, err := resolveEmbeddingsDaemonClient(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -1245,8 +1248,8 @@ func runEmbeddingsGenerationAction(
 		return err
 	}
 
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		client, err := resolveEmbeddingsDaemonClient(cfg)
+	if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
+		client, err := resolveEmbeddingsDaemonClient(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -1302,13 +1305,13 @@ func directGenerationAction(
 // resolveEmbeddingsDaemonClient finds the active local daemon and builds an
 // HTTP client for its embeddings API. Callers only reach it after
 // IsLocalDaemonActive reported true.
-func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, error) {
+func resolveEmbeddingsDaemonClient(ctx context.Context, cfg config.Config) (embeddingsDaemonClient, error) {
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return embeddingsDaemonClient{}, fmt.Errorf("loading daemon auth: %w", err)
 	}
-	rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	rt := FindWritableDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if rt == nil {
-		if _, err := findIncompatibleWritableDaemonRuntime(
+		if _, err := findIncompatibleWritableDaemonRuntime(ctx,
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			return embeddingsDaemonClient{}, err
@@ -1464,14 +1467,14 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 }
 
 func activeEmbeddingsDaemon(ctx context.Context, cfg config.Config) (embeddingsDaemonClient, bool) {
-	if cfg.Vector.Enabled || cfg.ArchiveContent.UsageOnly() || !IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if cfg.Vector.Enabled || cfg.ArchiveContent.UsageOnly() || !IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 		return embeddingsDaemonClient{}, false
 	}
 	disabled, err := cfg.VectorExplicitlyDisabled()
 	if err != nil || disabled {
 		return embeddingsDaemonClient{}, false
 	}
-	client, err := resolveEmbeddingsDaemonClient(cfg)
+	client, err := resolveEmbeddingsDaemonClient(ctx, cfg)
 	if err != nil {
 		return client, false
 	}

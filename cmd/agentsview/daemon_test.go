@@ -51,9 +51,9 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
 		return &testDaemonLaunchLock{}, true, nil
 	}
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
-	deps.isStarting = func(string) bool { return false }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.isStarting = func(context.Context, string) bool { return false }
 	deps.readStartupState = func(string) *startupState { return nil }
 	deps.startBackground = func(ctx context.Context,
 		cfg config.Config, args []string, opts serveReplacementOptions,
@@ -67,7 +67,7 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 			Started: true, LogPath: filepath.Join(dir, "serve.log"), childPID: 314,
 		}, nil
 	}
-	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+	deps.waitContendedLaunch = func(context.Context, string) daemonLaunchObservation {
 		return daemonLaunchObservation{LockHeld: true}
 	}
 	deps.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return true }
@@ -252,7 +252,7 @@ func TestDaemonStartCancellationLeavesChildRunning(t *testing.T) {
 
 func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.isStarting = func(string) bool { return true }
+	deps.isStarting = func(context.Context, string) bool { return true }
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{
 			PID: 77, Version: "v1.2.3-test", CreateTime: "123456789",
@@ -286,10 +286,10 @@ func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 
 func TestDaemonStopUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return nil, errors.New("store unavailable")
 	}
-	deps.writableRuntime = func(string, string) *DaemonRuntime {
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime {
 		return &DaemonRuntime{Record: testWritableRecord(76, ""), RuntimeFallback: true}
 	}
 	var stopped daemon.RuntimeRecord
@@ -305,8 +305,8 @@ func TestDaemonStopUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *te
 
 func TestDaemonStopRegisteredRuntimePreservesStartupGuard(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.isStarting = func(string) bool { return true }
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.isStarting = func(context.Context, string) bool { return true }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(78, "runtime.json")}, nil
 	}
 
@@ -317,8 +317,8 @@ func TestDaemonStopRegisteredRuntimePreservesStartupGuard(t *testing.T) {
 
 func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.isStarting = func(string) bool { return true }
-	deps.writableRuntime = func(string, string) *DaemonRuntime {
+	deps.isStarting = func(context.Context, string) bool { return true }
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime {
 		return &DaemonRuntime{
 			Record:          testWritableRecord(79, ""),
 			Host:            "127.0.0.1",
@@ -342,7 +342,7 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.isStarting = func(string) bool { return true }
+	deps.isStarting = func(context.Context, string) bool { return true }
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{PID: 77, StartedAt: time.Unix(100, 0), LogPath: "/tmp/serve.log", Phase: "sync"}
 	}
@@ -364,7 +364,7 @@ func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 func TestDaemonStartLateStartupLockDoesNotReportSuccess(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	starting := false
-	deps.isStarting = func(string) bool { return starting }
+	deps.isStarting = func(context.Context, string) bool { return starting }
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{PID: 78, LogPath: "/tmp/late-serve.log"}
 	}
@@ -424,7 +424,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			loadCalls, startCalls := 0, 0
 			deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
-			deps.waitContendedLaunch = func(string) daemonLaunchObservation { return tt.observation }
+			deps.waitContendedLaunch = func(context.Context, string) daemonLaunchObservation { return tt.observation }
 			deps.loadConfig = func() (config.Config, error) { loadCalls++; return config.Config{}, nil }
 			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				startCalls++
@@ -448,7 +448,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 	}{
 		{name: "stopped", setup: func(*daemonCommandDeps) {}, wanted: []string{"No agentsview daemon is running"}},
 		{name: "starting", setup: func(d *daemonCommandDeps) {
-			d.isStarting = func(string) bool { return true }
+			d.isStarting = func(context.Context, string) bool { return true }
 			d.readStartupState = func(string) *startupState {
 				return &startupState{
 					PID: 9, Version: "v1.2.3-starting", StartedAt: time.Unix(100, 0),
@@ -457,14 +457,14 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 			}
 		}, wanted: []string{"starting", "pid:     9", "version: v1.2.3-starting", "phase:   sync", "/tmp/log"}},
 		{name: "read only", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				rec := testWritableRecord(10, "/runtime/10.json")
 				rec.Metadata[runtimeReadOnly] = "true"
 				return []daemon.RuntimeRecord{rec}, nil
 			}
 		}, wanted: []string{"No agentsview daemon is running."}, unwanted: []string{"running at", "mode:    read-only"}},
 		{name: "incompatible", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				rec := testWritableRecord(11, "/runtime/11.json")
 				rec.Metadata[runtimeAPIVersion] = "0"
 				return []daemon.RuntimeRecord{rec}, nil
@@ -474,7 +474,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 			}
 		}, wanted: []string{"incompatible", "pid:     11", "API version"}},
 		{name: "running", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(12, "/runtime/12.json")}, nil
 			}
 			d.probeRecord = func(rec daemon.RuntimeRecord, _ string) (daemon.PingInfo, bool) {
@@ -500,7 +500,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
-	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+	deps.waitContendedLaunch = func(context.Context, string) daemonLaunchObservation {
 		return daemonLaunchObservation{LockHeld: true, Starting: true}
 	}
 
@@ -515,7 +515,7 @@ func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testi
 func TestDaemonStartContentionHeldStartLockWinsOverPreexistingRecord(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
-	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+	deps.waitContendedLaunch = func(context.Context, string) daemonLaunchObservation {
 		return daemonLaunchObservation{
 			LockHeld: true,
 			Starting: true,
@@ -546,7 +546,7 @@ func TestDaemonStartContentionHeldStartLockWinsOverPreexistingRecord(t *testing.
 
 func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{
 			testWritableRecord(31, "/runtime/31.json"),
 			testWritableRecord(32, "/runtime/32.json"),
@@ -558,7 +558,9 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	assert.Contains(t, out.String(), "pid:     32")
 
 	out.Reset()
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, errors.New("store unavailable") }
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
+		return nil, errors.New("store unavailable")
+	}
 	err := executeDaemonCommand(t, *deps, out, "status")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "store unavailable")
@@ -571,10 +573,10 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 
 func TestDaemonStatusUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return nil, errors.New("store unavailable")
 	}
-	deps.writableRuntime = func(string, string) *DaemonRuntime {
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime {
 		return &DaemonRuntime{
 			Record:          testWritableRecord(54, ""),
 			Host:            "127.0.0.1",
@@ -590,7 +592,7 @@ func TestDaemonStatusUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *
 
 func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(55, "/runtime/55.json")}, nil
 	}
 	deps.probeRecord = func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool) {
@@ -619,7 +621,7 @@ func TestDaemonStatusUsesPingVersionAsAuthoritative(t *testing.T) {
 			rec.Metadata[runtimePort] = strconv.Itoa(endpoint.Port)
 
 			deps, out := daemonCommandTestDeps(t)
-			deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{rec}, nil
 			}
 			deps.probeRecord = probeDaemonRecord
@@ -684,7 +686,7 @@ func TestDaemonStopPrevalidatesEveryWriterBeforeSignalling(t *testing.T) {
 		testWritableRecord(61, "/runtime/61.json"),
 		testWritableRecord(62, "/runtime/62.json"),
 	}
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	var prevalidated []int
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
 		prevalidated = append(prevalidated, rec.PID)
@@ -718,9 +720,9 @@ func TestDaemonStopStartingConfigFailureAndContentionSignalNobody(t *testing.T) 
 			d.loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
 		}, want: "bad config"},
 		{name: "start lock with confirmed record", setup: func(d *daemonCommandDeps) {
-			d.isStarting = func(string) bool { return true }
+			d.isStarting = func(context.Context, string) bool { return true }
 			d.readStartupState = func(string) *startupState { return &startupState{PID: 71, LogPath: "/tmp/serve.log"} }
-			d.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			d.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(72, "/runtime/72.json")}, nil
 			}
 		}, want: "startup is still in progress"},
@@ -745,7 +747,7 @@ func TestDaemonStopMultipleWritersAndRepeatIsIdempotent(t *testing.T) {
 		testWritableRecord(81, "/runtime/81.json"),
 		testWritableRecord(82, "/runtime/82.json"),
 	}
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	var stopped, caddy []int
 	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error { stopped = append(stopped, rec.PID); return nil }
 	deps.stopCaddy = func(_ io.Writer, rec daemon.RuntimeRecord) error {
@@ -774,7 +776,9 @@ func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 	}
 	rec := testWritableRecord(91, "/runtime/91.json")
 	rec.Metadata[runtimeNoSync] = "true"
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{rec}, nil
+	}
 	var order []string
 	deps.loadConfig = func() (config.Config, error) {
 		order = append(order, "config")
@@ -802,7 +806,7 @@ func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 
 func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
 	deps.startBackground = func(ctx context.Context,
@@ -875,7 +879,7 @@ func TestDaemonRestartProgressHeartbeatUsesUnroundedElapsed(t *testing.T) {
 
 func TestDaemonRestartCancellationLeavesReplacementRunning(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1030,11 +1034,11 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 			d.checkDataVersion = func(context.Context, string) error { return errors.New("data too new") }
 		}, want: "data too new"},
 		{name: "persistent start", setup: func(d *daemonCommandDeps) {
-			d.isStarting = func(string) bool { return true }
+			d.isStarting = func(context.Context, string) bool { return true }
 			d.readStartupState = func(string) *startupState { return &startupState{PID: 111, LogPath: "/tmp/log"} }
 		}, want: "startup is still in progress"},
 		{name: "unconfirmed", setup: func(d *daemonCommandDeps) {
-			d.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			d.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(112, "/runtime/112.json")}, nil
 			}
 			d.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return false }
@@ -1056,7 +1060,7 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 
 func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.isStarting = func(string) bool { return true }
+	deps.isStarting = func(context.Context, string) bool { return true }
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{
 			PID: 113, Version: "v1.2.3-test", CreateTime: "987654321",
@@ -1095,10 +1099,10 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 
 func TestDaemonRestartUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return nil, errors.New("store unavailable")
 	}
-	deps.writableRuntime = func(string, string) *DaemonRuntime {
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime {
 		return &DaemonRuntime{Record: testWritableRecord(114, ""), RuntimeFallback: true}
 	}
 	var stopped daemon.RuntimeRecord
@@ -1116,7 +1120,7 @@ func TestDaemonMutationsPreserveRuntimeStoreInspectionErrorWithoutFallback(t *te
 	for _, command := range []string{"stop", "restart"} {
 		t.Run(command, func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return nil, errors.New("store unavailable")
 			}
 
@@ -1165,7 +1169,7 @@ func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
 			}
 			deps.loadConfig = func() (config.Config, error) { return tt.cfg, nil }
 			deps.validateConfig = validateServeConfig
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(121, "/runtime/121.json")}, nil
 			}
 			dataChecks, signals, starts := 0, 0, 0
@@ -1195,7 +1199,7 @@ func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
 		lockAcquisitions++
 		return lock, true, nil
 	}
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(131, "/runtime/131.json")}, nil
 	}
 	var order []string
@@ -1241,7 +1245,7 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 			ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) })).Handler()
 			ts.Start()
 			defer ts.Close()
-			MarkDaemonStarting(dir)
+			MarkDaemonStarting(t.Context(), dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 			writer := newStartupStateWriter(dir, time.Now)
 			writer.state.IdleTimeout = "2s"
@@ -1257,14 +1261,16 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			rt := FindWritableDaemonRuntime(dir)
+			rt := FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			assert.Equal(t, tc.fallback, rt.RuntimeFallback)
 			deps, out := daemonCommandTestDeps(t)
 			deps.resolveDataDir = func() (string, error) { return dir, nil }
 			deps.mkdirAll = os.MkdirAll
 			deps.loadConfig = func() (config.Config, error) { return cfg, nil }
-			deps.writableRuntime = func(dataDir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dataDir, token) }
+			deps.writableRuntime = func(_ context.Context, dataDir, token string) *DaemonRuntime {
+				return FindWritableDaemonRuntime(t.Context(), dataDir, token)
+			}
 			deps.persistRuntime = persistDaemonRuntime
 			if tc.contended {
 				attempts := 0
@@ -1272,7 +1278,7 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 					attempts++
 					return &testDaemonLaunchLock{}, attempts > 1, nil
 				}
-				deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+				deps.waitContendedLaunch = func(context.Context, string) daemonLaunchObservation {
 					return daemonLaunchObservation{Records: []daemon.RuntimeRecord{rt.Record}}
 				}
 			}
@@ -1281,7 +1287,7 @@ func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
 				return backgroundLaunchResult{}, nil
 			}
 			require.NoError(t, runDaemonStart(t.Context(), out, *deps))
-			after := FindWritableDaemonRuntime(dir)
+			after := FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, after)
 			assert.True(t, after.Persistent)
 			require.NotNil(t, after.IdleTimeout)
@@ -1301,7 +1307,9 @@ func TestRestartCommandSelectsLifetime(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			rec := testWritableRecord(79, "")
 			rec.Metadata[runtimePersistent] = strconv.FormatBool(tc.persistent)
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{rec}, nil
+			}
 			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				assert.Equal(t, tc.wantPersistent, policy.Persistent)
 				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, "")}}, nil
@@ -1320,7 +1328,7 @@ func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
 	setTestVersion(t, "1.1.0")
 	rt := daemonRuntimeFromRecord(testWritableRecord(79, ""))
 	rt.Record.Version = "1.0.0"
-	deps.writableRuntime = func(string, string) *DaemonRuntime { return rt }
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime { return rt }
 	promoted, replaced := false, false
 	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error {
 		promoted = true
@@ -1339,7 +1347,7 @@ func TestDaemonStartReturnsFallbackPromotionError(t *testing.T) {
 	setTestVersion(t, "1.1.0")
 	deps, out := daemonCommandTestDeps(t)
 	incumbent := &DaemonRuntime{Record: daemon.RuntimeRecord{Version: "1.0.0"}, RuntimeFallback: true}
-	deps.writableRuntime = func(string, string) *DaemonRuntime { return incumbent }
+	deps.writableRuntime = func(context.Context, string, string) *DaemonRuntime { return incumbent }
 	rejected := errors.New("persistence operation unavailable")
 	deps.persistRuntime = func(_ context.Context, _ config.Config, rt *DaemonRuntime) error {
 		assert.Same(t, incumbent, rt)
@@ -1366,12 +1374,14 @@ func TestDaemonStartRejectsMultipleWritersBeforeReuse(t *testing.T) {
 			otherPID := startSleepProcess(t)
 			_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord("127.0.0.1", 9101, withRuntimePID(otherPID)))
 			require.NoError(t, err)
-			require.NotNil(t, FindWritableDaemonRuntime(dir))
+			require.NotNil(t, FindWritableDaemonRuntime(t.Context(), dir))
 			deps, out := daemonCommandTestDeps(t)
 			deps.resolveDataDir = func() (string, error) { return dir, nil }
 			deps.mkdirAll = os.MkdirAll
 			deps.loadConfig = func() (config.Config, error) { return config.Config{DataDir: dir}, nil }
-			deps.writableRuntime = func(dir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dir, token) }
+			deps.writableRuntime = func(_ context.Context, dir, token string) *DaemonRuntime {
+				return FindWritableDaemonRuntime(t.Context(), dir, token)
+			}
 			promoted := false
 			deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { promoted = true; return nil }
 			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
@@ -1432,7 +1442,7 @@ func TestDaemonRestartWaitsForStoppedWriter(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, lock.Close()) })
 			stopped := make(chan struct{})
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(91, "")}, nil
 			}
 			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {

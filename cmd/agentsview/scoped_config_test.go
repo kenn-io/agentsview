@@ -386,7 +386,7 @@ func TestScopedConfigReplacementRejectsInvalidServerConfigBeforeStop(t *testing.
 			require.ErrorContains(t, err, tt.want)
 			assert.Zero(t, stops, "invalid replacement config must preserve the incumbent")
 			assert.Zero(t, starts)
-			runtime := FindDaemonRuntime(dir, cfg.AuthToken)
+			runtime := FindDaemonRuntime(t.Context(), dir, cfg.AuthToken)
 			require.NotNil(t, runtime, "the incumbent must remain reachable")
 			assert.Equal(t, "1.0.0", runtime.Record.Version)
 		})

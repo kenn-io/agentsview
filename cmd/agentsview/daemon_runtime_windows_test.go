@@ -20,21 +20,21 @@ import (
 func TestDaemonRuntimeFindsLegacyWindowsStartLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "daemon.lock")
-	assert.False(t, isExternalDaemonStarting(dir))
+	assert.False(t, isExternalDaemonStarting(t.Context(), dir))
 	assert.NoFileExists(t, path)
 
 	stdin := startExternalDaemonStartLockHelper(t, path)
-	assert.True(t, isExternalDaemonStarting(dir))
+	assert.True(t, isExternalDaemonStarting(t.Context(), dir))
 
 	require.NoError(t, stdin.Close())
 	require.Eventually(t, func() bool {
-		return !isExternalDaemonStarting(dir)
+		return !isExternalDaemonStarting(t.Context(), dir)
 	}, 5*time.Second, 10*time.Millisecond, "legacy daemon start lock should be released")
 	assert.FileExists(t, path)
 
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Mkdir(path, 0o700))
-	assert.False(t, isExternalDaemonStarting(dir), "an unopenable lock is not a starting daemon")
+	assert.False(t, isExternalDaemonStarting(t.Context(), dir), "an unopenable lock is not a starting daemon")
 	assert.DirExists(t, path)
 }
 
@@ -42,7 +42,7 @@ func TestDaemonRuntimeMakesNewDataDirPrivate(t *testing.T) {
 	dir := t.TempDir()
 	require.Error(t, safefileio.ValidatePrivateDir(dir), "temp dirs inherit their parent's DACL")
 
-	IsDaemonActive(dir)
+	IsDaemonActive(t.Context(), dir)
 	assert.NoError(t, safefileio.ValidatePrivateDir(dir))
 }
 
@@ -71,9 +71,9 @@ func TestDaemonRuntimePreservesArchiveChangeTime(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("archive content"), 0o600))
 		before[i] = testutil.FileChangeTime(t, path)
 	}
-	IsDaemonActive(dir)
-	FindDaemonRuntime(dir)
-	IsDaemonStarting(dir)
+	IsDaemonActive(t.Context(), dir)
+	FindDaemonRuntime(t.Context(), dir)
+	IsDaemonStarting(t.Context(), dir)
 	_, err = WriteDaemonRuntime(dir, "127.0.0.1", 1, "test", false)
 	require.NoError(t, err)
 	RemoveDaemonRuntime(dir)

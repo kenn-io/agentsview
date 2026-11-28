@@ -168,7 +168,7 @@ func TestOpenWriteDBRefusesLiveWritableRuntime(t *testing.T) {
 
 func TestOpenWriteDBAllowsStartupLockHeldByCurrentServe(t *testing.T) {
 	dataDir, cfg := writeDBConfigForTest(t)
-	MarkDaemonStarting(dataDir)
+	MarkDaemonStarting(t.Context(), dataDir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dataDir) })
 
 	database, lock := requireOpenWriteDBForTest(t, cfg)

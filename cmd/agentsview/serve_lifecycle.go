@@ -154,7 +154,7 @@ func pluralSuffix(count int) string {
 // reach it. It always exits zero; the output distinguishes the states.
 func runServeStatus(ctx context.Context, cfg config.Config) {
 	var readOnly *DaemonRuntime
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+	if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil {
 		if rt.ReadOnly {
 			readOnly = rt
 		} else {
@@ -169,7 +169,7 @@ func runServeStatus(ctx context.Context, cfg config.Config) {
 			return
 		}
 	}
-	if rt, compatErr := findIncompatibleWritableDaemonRuntime(
+	if rt, compatErr := findIncompatibleWritableDaemonRuntime(ctx,
 		cfg.DataDir, cfg.AuthToken,
 	); rt != nil {
 		for _, line := range serveIncompatibleDaemonStatusLines(rt, compatErr) {
@@ -177,7 +177,7 @@ func runServeStatus(ctx context.Context, cfg config.Config) {
 		}
 		return
 	}
-	if IsDaemonStarting(cfg.DataDir) {
+	if IsDaemonStarting(ctx, cfg.DataDir) {
 		fmt.Println("agentsview is starting up.")
 		st := readStartupState(cfg.DataDir)
 		for _, line := range serveStartingStatusLines(st, time.Now()) {
@@ -194,7 +194,7 @@ func runServeStatus(ctx context.Context, cfg config.Config) {
 		}
 		return
 	}
-	if recs := liveDaemonRecords(cfg.DataDir); len(recs) > 0 {
+	if recs := liveDaemonRecords(ctx, cfg.DataDir); len(recs) > 0 {
 		fmt.Printf(
 			"agentsview process running (pid %d) but not responding "+
 				"to health checks.\n",
@@ -351,12 +351,12 @@ func serveIncompatibleDaemonStatusLines(
 // identity it can confirm. A record is signalled only once its PID is confirmed
 // to identify the recorded daemon in the caller's PID namespace. A matching
 // process identity also keeps a hung-but-alive daemon stoppable.
-func runServeStop(cfg config.Config) {
-	records, _ := localWritableDaemonRecordsWithFallback(
+func runServeStop(ctx context.Context, cfg config.Config) {
+	records, _ := localWritableDaemonRecordsWithFallback(ctx,
 		cfg.DataDir, cfg.AuthToken,
 	)
 	if len(records) == 0 {
-		if IsDaemonStarting(cfg.DataDir) {
+		if IsDaemonStarting(ctx, cfg.DataDir) {
 			fatal("serve stop: a server is starting; retry once it is ready")
 		}
 		fmt.Println("No agentsview server is running.")
@@ -429,7 +429,7 @@ func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 func stopWritableDaemonsForUpdate(ctx context.Context,
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
-	records, _ := localWritableDaemonRecordsWithFallback(
+	records, _ := localWritableDaemonRecordsWithFallback(ctx,
 		cfg.DataDir, cfg.AuthToken,
 	)
 	var result updateDaemonStopResult
@@ -457,7 +457,7 @@ func stopWritableDaemonsForUpdate(ctx context.Context,
 		}
 		result.Stopped = true
 	}
-	if !result.Stopped && IsDaemonStarting(cfg.DataDir) {
+	if !result.Stopped && IsDaemonStarting(ctx, cfg.DataDir) {
 		return result, errors.New("agentsview server is starting; retry the update once it is ready")
 	}
 	return result, nil

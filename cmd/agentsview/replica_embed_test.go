@@ -670,7 +670,7 @@ endpoint = %q
 		require.Error(t, err, "the unreachable hub fails before building")
 		require.NotErrorIs(t, err, errEmbedNeedsLocalArchive)
 		assert.Zero(t, *starts, "no daemon is started")
-		assert.Nil(t, FindDaemonRuntime(dataDir, ""), "no daemon runtime file appears")
+		assert.Nil(t, FindDaemonRuntime(t.Context(), dataDir, ""), "no daemon runtime file appears")
 	})
 
 	t.Run("watch resolves the local writer", func(t *testing.T) {
@@ -686,7 +686,7 @@ allow_insecure = true
 		require.Error(t, err)
 		require.NotErrorIs(t, err, errEmbedNeedsLocalArchive)
 		assert.Zero(t, *starts)
-		assert.Nil(t, FindDaemonRuntime(dataDir, ""))
+		assert.Nil(t, FindDaemonRuntime(t.Context(), dataDir, ""))
 	})
 
 	for _, watch := range []bool{false, true} {

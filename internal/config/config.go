@@ -1303,6 +1303,8 @@ type Config struct {
 	// NoDaemonAutostart suppresses daemon autostart for this invocation
 	// only; pg push --embed sets it to keep the archive writer local.
 	NoDaemonAutostart bool `json:"-" toml:"-"`
+	// SavedNoDaemonAutostart is the autostart policy from config.toml.
+	SavedNoDaemonAutostart bool `json:"-" toml:"-"`
 	// RequireDaemon sends archive writes only through a live writable daemon;
 	// never autostart one or open the archive directly.
 	RequireDaemon bool `json:"-" toml:"-"`
@@ -1843,6 +1845,16 @@ func LoadReadOnlyAt(dataDir string) (Config, error) {
 	return loadReadOnlyFor(0, dataDir)
 }
 
+// LoadSavedNoDaemonAutostart reads the saved daemon policy with local-client
+// validation and without changing the data directory.
+func LoadSavedNoDaemonAutostart(dataDir string) (bool, error) {
+	cfg, err := loadReadOnlyFor(ScopeLocal, dataDir)
+	if err != nil {
+		return false, err
+	}
+	return cfg.SavedNoDaemonAutostart, nil
+}
+
 func loadReadOnlyFor(scope ValidationScope, dataDir string) (Config, error) {
 	cfg, err := Default()
 	if err != nil {
@@ -2082,6 +2094,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		NoDaemonAutostart              bool                   `toml:"no_daemon_autostart"`
 		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SyncInterval                   time.Duration          `toml:"sync_interval"`
 		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
@@ -2444,6 +2457,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
+	if meta.IsDefined("no_daemon_autostart") {
+		c.SavedNoDaemonAutostart = file.NoDaemonAutostart
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval

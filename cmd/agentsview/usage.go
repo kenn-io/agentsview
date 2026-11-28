@@ -463,9 +463,9 @@ func ensureFreshData(
 	}
 
 	// A writable daemon owns ingestion even while starting or incompatible.
-	if IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
+	if IsLocalDaemonActive(ctx, appCfg.DataDir, appCfg.AuthToken) {
 		stale := true
-		if rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken); rt != nil {
+		if rt := FindWritableDaemonRuntime(ctx, appCfg.DataDir, appCfg.AuthToken); rt != nil {
 			api, err := apiclient.NewHTTPClient(transportFromRuntime(rt).URL, appCfg.AuthToken, &http.Client{Timeout: 30 * time.Second})
 			if err == nil {
 				ctx, archiveStale := apiclient.TrackArchiveFreshness(ctx, nil)

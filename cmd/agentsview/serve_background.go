@@ -140,7 +140,7 @@ func reportBackgroundLaunchInProgress(ctx context.Context, dataDir, authToken st
 	waitForBackgroundLaunchOwner(
 		ctx, dataDir, authToken, backgroundServeReadyTimeout,
 	)
-	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
+	if rt := FindDaemonRuntime(ctx, dataDir, authToken); rt != nil &&
 		!rt.ReadOnly && !shouldReplaceDaemonRuntime(rt, version) {
 		fmt.Printf(
 			"agentsview already running at %s (pid %d)\n",
@@ -253,11 +253,11 @@ func startServeBackground(ctx context.Context,
 			fmt.Println("Auth enabled. Token is configured.")
 		}
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+	if err := validateUniqueWritableDaemonSet(ctx, cfg.DataDir, cfg.AuthToken); err != nil {
 		return result, fmt.Errorf("%s: %w", operation, err)
 	}
 
-	decision := decideServeDaemonReplacement(cfg, opts)
+	decision := decideServeDaemonReplacement(ctx, cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
 	case serveReplacementUseExisting:
@@ -283,7 +283,7 @@ func startServeBackground(ctx context.Context,
 				return result, fmt.Errorf("%s: %w", operation, err)
 			}
 		}
-		decision = refreshServeDaemonReplacementDecision(
+		decision = refreshServeDaemonReplacementDecision(ctx,
 			cfg, opts, decision, waitedForExternalStartup,
 			replacementCheckStarted,
 		)
@@ -340,7 +340,7 @@ func startServeBackground(ctx context.Context,
 	// A writable daemon (a foreground `serve` or a prior background launch)
 	// is mid-startup and holds the start lock but has not yet published a
 	// runtime record. Wait for it instead of racing a second server.
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 		reportBackgroundLaunchInProgress(ctx, cfg.DataDir, cfg.AuthToken)
 		return result, nil
 	}
@@ -393,8 +393,8 @@ func startServeBackground(ctx context.Context,
 	return result, nil
 }
 
-func validateUniqueWritableDaemonSet(dataDir, authToken string) error {
-	records, err := writableDaemonRecords(dataDir, authToken)
+func validateUniqueWritableDaemonSet(ctx context.Context, dataDir, authToken string) error {
+	records, err := writableDaemonRecords(ctx, dataDir, authToken)
 	if err != nil {
 		return fmt.Errorf("inspecting writable daemon runtimes: %w", err)
 	}
@@ -413,7 +413,7 @@ func prepareBackgroundReplacement(ctx context.Context,
 	if cfg == nil {
 		return errors.New("nil replacement config")
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+	if err := validateUniqueWritableDaemonSet(ctx, cfg.DataDir, cfg.AuthToken); err != nil {
 		return err
 	}
 	if err := checkBackgroundReplacementDataVersion(ctx, cfg); err != nil {
@@ -497,14 +497,14 @@ func ensureBackgroundServe(
 			_ = retryLock.Unlock()
 			continue
 		}
-		if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+		if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil &&
 			!rt.ReadOnly {
 			if allowReplacement && shouldReplaceDaemonRuntime(rt, version) {
 				return nil, errors.New("agentsview serve --background is already in progress")
 			}
 			return rt, nil
 		}
-		if _, err := findIncompatibleWritableDaemonRuntime(
+		if _, err := findIncompatibleWritableDaemonRuntime(ctx,
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			if !allowReplacement {
@@ -516,7 +516,7 @@ func ensureBackgroundServe(
 				err,
 			)
 		}
-		if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 			return nil, errors.New("agentsview serve --background is already in progress")
 		}
 		return nil, errors.New("agentsview serve --background did not publish a runtime record")
@@ -526,12 +526,12 @@ func ensureBackgroundServe(
 	if err := ensureServeAuthToken(cfg); err != nil {
 		return nil, fmt.Errorf("generating auth token: %w", err)
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+	if err := validateUniqueWritableDaemonSet(ctx, cfg.DataDir, cfg.AuthToken); err != nil {
 		return nil, err
 	}
 
 probeDaemon:
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+	if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		if allowReplacement && shouldReplaceDaemonRuntime(rt, version) {
 			if waited, err := waitForExternalServeStartupBeforeReplacement(
@@ -542,7 +542,7 @@ probeDaemon:
 				}
 				goto probeDaemon
 			}
-			if serveReplacementTargetChanged(*cfg, rt) {
+			if serveReplacementTargetChanged(ctx, *cfg, rt) {
 				goto probeDaemon
 			}
 			if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
@@ -558,11 +558,11 @@ probeDaemon:
 			return rt, nil
 		}
 	}
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+	if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		return rt, nil
 	}
-	if rt, err := findIncompatibleWritableDaemonRuntime(
+	if rt, err := findIncompatibleWritableDaemonRuntime(ctx,
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
 		if !allowReplacement {
@@ -577,7 +577,7 @@ probeDaemon:
 				}
 				goto probeDaemon
 			}
-			if serveReplacementTargetChanged(*cfg, rt) {
+			if serveReplacementTargetChanged(ctx, *cfg, rt) {
 				goto probeDaemon
 			}
 			if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
@@ -597,19 +597,19 @@ probeDaemon:
 			)
 		}
 	}
-	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 		waitForDaemonStartupForEnsure(
 			ctx, cfg.DataDir, waitTimeout, cfg.AuthToken,
 		)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+		if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil &&
 			!rt.ReadOnly {
 			return rt, nil
 		}
 		stoppedUpgradeable := false
-		if rt, err := findIncompatibleWritableDaemonRuntime(
+		if rt, err := findIncompatibleWritableDaemonRuntime(ctx,
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			if !allowReplacement {
@@ -624,7 +624,7 @@ probeDaemon:
 					}
 					goto probeDaemon
 				}
-				if serveReplacementTargetChanged(*cfg, rt) {
+				if serveReplacementTargetChanged(ctx, *cfg, rt) {
 					goto probeDaemon
 				}
 				if err := prepareAutoStartReplacement(ctx, cfg, rt); err != nil {
@@ -703,7 +703,7 @@ func waitForExternalServeStartup(
 	authToken string,
 	waitTimeout time.Duration,
 ) (*DaemonRuntime, bool, error) {
-	if !isExternalDaemonStarting(dataDir) {
+	if !isExternalDaemonStarting(ctx, dataDir) {
 		return nil, false, nil
 	}
 	if waitTimeout <= 0 {
@@ -713,14 +713,14 @@ func waitForExternalServeStartup(
 	deadline := started.Add(waitTimeout)
 	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
-	for isExternalDaemonStarting(dataDir) {
+	for isExternalDaemonStarting(ctx, dataDir) {
 		if backgroundServeProbeHook != nil {
 			backgroundServeProbeHook()
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, true, err
 		}
-		if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
+		if rt := FindDaemonRuntime(ctx, dataDir, authToken); rt != nil &&
 			!rt.ReadOnly && rt.RuntimeFallback {
 			return rt, true, nil
 		}
@@ -746,10 +746,10 @@ func waitForExternalServeStartup(
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
-	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil && !rt.ReadOnly {
+	if rt := FindDaemonRuntime(ctx, dataDir, authToken); rt != nil && !rt.ReadOnly {
 		return rt, true, nil
 	}
-	if rt, err := findIncompatibleWritableDaemonRuntime(
+	if rt, err := findIncompatibleWritableDaemonRuntime(ctx,
 		dataDir, authToken,
 	); rt != nil && err != nil {
 		return nil, true, fmt.Errorf(
@@ -790,21 +790,21 @@ func waitForExternalServeStartupBeforeReplacement(
 }
 
 func refreshServeDaemonReplacementDecision(
-	cfg config.Config,
+	ctx context.Context, cfg config.Config,
 	opts serveReplacementOptions,
 	original serveReplacementDecision,
 	waitedForExternalStartup bool,
 	replacementCheckStarted time.Time,
 ) serveReplacementDecision {
 	if !opts.Replace {
-		decision := decideServeDaemonReplacement(cfg, opts)
+		decision := decideServeDaemonReplacement(ctx, cfg, opts)
 		if decision.Runtime == nil &&
 			replacementTargetStillStopConfirmed(cfg, original.Runtime) {
 			return original
 		}
 		return decision
 	}
-	decision := decideServeDaemonReplacement(
+	decision := decideServeDaemonReplacement(ctx,
 		cfg, serveReplacementOptions{},
 	)
 	if decision.Action == serveReplacementUseExisting &&
@@ -823,7 +823,7 @@ func refreshServeDaemonReplacementDecision(
 		replacementTargetStillStopConfirmed(cfg, original.Runtime) {
 		return original
 	}
-	return decideServeDaemonReplacement(cfg, opts)
+	return decideServeDaemonReplacement(ctx, cfg, opts)
 }
 
 func daemonRuntimeStartedAfter(rt *DaemonRuntime, started time.Time) bool {
@@ -833,9 +833,9 @@ func daemonRuntimeStartedAfter(rt *DaemonRuntime, started time.Time) bool {
 }
 
 func serveReplacementTargetChanged(
-	cfg config.Config, original *DaemonRuntime,
+	ctx context.Context, cfg config.Config, original *DaemonRuntime,
 ) bool {
-	decision := decideServeDaemonReplacement(cfg, serveReplacementOptions{})
+	decision := decideServeDaemonReplacement(ctx, cfg, serveReplacementOptions{})
 	if decision.Runtime == nil {
 		return !replacementTargetStillStopConfirmed(cfg, original)
 	}
@@ -870,7 +870,7 @@ func waitForBackgroundLaunchOwner(
 	waitTimeout time.Duration,
 ) {
 	deadline := time.Now().Add(waitTimeout)
-	incumbent := FindDaemonRuntime(dataDir, authToken)
+	incumbent := FindDaemonRuntime(ctx, dataDir, authToken)
 	for {
 		// waitForExternalServeStartup treats a non-positive timeout as its
 		// default, so stop here rather than pass an expired deadline.
@@ -881,7 +881,7 @@ func waitForBackgroundLaunchOwner(
 		if backgroundServeProbeHook != nil {
 			backgroundServeProbeHook()
 		}
-		if isExternalDaemonStarting(dataDir) {
+		if isExternalDaemonStarting(ctx, dataDir) {
 			_, _, _ = waitForExternalServeStartup(
 				ctx, dataDir, authToken, remaining,
 			)
@@ -889,14 +889,14 @@ func waitForBackgroundLaunchOwner(
 		if ctx.Err() != nil {
 			return
 		}
-		if launchOwnerPublishedRuntime(FindDaemonRuntime(dataDir, authToken), incumbent) {
+		if launchOwnerPublishedRuntime(FindDaemonRuntime(ctx, dataDir, authToken), incumbent) {
 			return
 		}
-		if IsLocalDaemonActive(dataDir, authToken) {
+		if IsLocalDaemonActive(ctx, dataDir, authToken) {
 			if WaitForDaemonStartupContext(
 				ctx, dataDir, time.Until(deadline), authToken,
 			) && launchOwnerPublishedRuntime(
-				FindDaemonRuntime(dataDir, authToken), incumbent,
+				FindDaemonRuntime(ctx, dataDir, authToken), incumbent,
 			) {
 				return
 			}
@@ -909,7 +909,7 @@ func waitForBackgroundLaunchOwner(
 				// The parent launch lock can clear before the child has
 				// published its writable runtime. Keep waiting through that
 				// handoff instead of treating a read-only mirror as success.
-				if !IsDaemonStarting(dataDir) {
+				if !IsDaemonStarting(ctx, dataDir) {
 					return
 				}
 			}
@@ -1132,12 +1132,12 @@ func waitForBackgroundServeReady(
 // runtime record is not ready to hand off until the child also releases its
 // start lock; a startup-state fallback intentionally keeps that lock as its
 // active marker.
-func probeBackgroundServeReady(dataDir, authToken string) (*DaemonRuntime, bool) {
-	rt := FindWritableDaemonRuntime(dataDir, authToken)
+func probeBackgroundServeReady(ctx context.Context, dataDir, authToken string) (*DaemonRuntime, bool) {
+	rt := FindWritableDaemonRuntime(ctx, dataDir, authToken)
 	if rt != nil && rt.RuntimeFallback {
 		return rt, false
 	}
-	starting := IsDaemonStarting(dataDir)
+	starting := IsDaemonStarting(ctx, dataDir)
 	if rt != nil && !starting {
 		return rt, false
 	}
@@ -1165,7 +1165,7 @@ func waitForBackgroundServeReadyWithPolicy(
 	var lastStartupUpdate time.Time
 
 	for {
-		rt, starting := probeBackgroundServeReady(dataDir, authToken)
+		rt, starting := probeBackgroundServeReady(ctx, dataDir, authToken)
 		if rt != nil {
 			return rt, nil
 		}
@@ -1192,7 +1192,7 @@ func waitForBackgroundServeReadyWithPolicy(
 			return nil, ctx.Err()
 		case <-ticker.C:
 		case <-timeoutC:
-			rt, starting := probeBackgroundServeReady(dataDir, authToken)
+			rt, starting := probeBackgroundServeReady(ctx, dataDir, authToken)
 			if rt != nil {
 				return rt, nil
 			}

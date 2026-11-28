@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/agenthook"
+	"go.kenn.io/kit/daemon"
 
 	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
@@ -101,6 +102,31 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, stderr.String(), "remote unavailable")
+}
+
+func TestMemoryManagedDaemonRequiresWritable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("no_daemon_autostart = true\n"), 0o600))
+	forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var probes atomic.Int32
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: version})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if probes.Add(1) == 2 {
+			cancel()
+		}
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, true)
+	err := requestLocalMemoryRefresh(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.GreaterOrEqual(t, probes.Load(), int32(2))
 }
 
 func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {

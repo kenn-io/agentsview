@@ -106,7 +106,7 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 		return fetchKataStatus(ctx, tr.URL, cfg.AuthToken, kataStatusRequestBudget(cfg.Kata.Timeout))
 	}
 	if !tr.DirectReadOnly {
-		if err := unavailableReadOnlyDaemonError(cfg.DataDir, cfg.AuthToken); err != nil {
+		if err := unavailableReadOnlyDaemonError(ctx, cfg.DataDir, cfg.AuthToken); err != nil {
 			return kata.Status{}, fmt.Errorf("kata status request failed: %w", err)
 		}
 	}
@@ -129,14 +129,14 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 // daemon as the local owner, but pg serve owns this data directory's Kata
 // status too: probing locally instead would report not_hub with exit 0.
 // A reachable compatible daemon already returned an HTTP transport.
-func unavailableReadOnlyDaemonError(dataDir, token string) error {
-	if rt, err := FindIncompatibleDaemonRuntime(dataDir, token); rt != nil && rt.ReadOnly && err != nil {
+func unavailableReadOnlyDaemonError(ctx context.Context, dataDir, token string) error {
+	if rt, err := FindIncompatibleDaemonRuntime(ctx, dataDir, token); rt != nil && rt.ReadOnly && err != nil {
 		if daemonRuntimeAhead(rt) {
 			return fmt.Errorf("%w\n\n%s", err, staleClientUpgradeHint())
 		}
 		return fmt.Errorf("%w\n\n%s", err, readOnlyServerUpgradeHint)
 	}
-	if hasLiveDaemonRuntime(dataDir, token) {
+	if hasLiveDaemonRuntime(ctx, dataDir, token) {
 		return errLocalDaemonUnreachable
 	}
 	return nil

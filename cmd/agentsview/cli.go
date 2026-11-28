@@ -334,7 +334,7 @@ func newServeStopCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeStop(mustLoadConfig(cmd))
+			runServeStop(cmd.Context(), mustLoadConfig(cmd))
 		},
 	}
 }

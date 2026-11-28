@@ -44,7 +44,7 @@ func prepareForegroundServeDaemon(ctx context.Context,
 	if cfg == nil {
 		return false, noRelease, errors.New("nil config")
 	}
-	decision := decideServeDaemonReplacement(*cfg, opts)
+	decision := decideServeDaemonReplacement(ctx, *cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
 		if release, ok := foregroundServeLaunchLocks.Load(backgroundLaunchLockPath(cfg.DataDir)); ok {
@@ -77,7 +77,7 @@ func prepareForegroundServeDaemon(ctx context.Context,
 			return false, noRelease, err
 		}
 
-		ownsStartLock, acquiredStartLock := markDaemonStarting(cfg.DataDir)
+		ownsStartLock, acquiredStartLock := markDaemonStarting(ctx, cfg.DataDir)
 		if !ownsStartLock {
 			releaseReplacementLock()
 			return false, noRelease, errors.New("agentsview serve startup is already in progress; " +
@@ -171,19 +171,19 @@ func checkForegroundReplacementDataVersion(ctx context.Context,
 }
 
 func decideServeDaemonReplacement(
-	cfg config.Config, opts serveReplacementOptions,
+	ctx context.Context, cfg config.Config, opts serveReplacementOptions,
 ) serveReplacementDecision {
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+	if rt := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		return decideCompatibleServeDaemonReplacement(rt, opts)
 	}
 
-	rt, compatErr := findIncompatibleWritableDaemonRuntime(
+	rt, compatErr := findIncompatibleWritableDaemonRuntime(ctx,
 		cfg.DataDir, cfg.AuthToken,
 	)
 	if rt == nil {
 		if opts.Replace {
-			if rt := findConfirmedUnreachableWritableDaemonRuntime(cfg); rt != nil {
+			if rt := findConfirmedUnreachableWritableDaemonRuntime(ctx, cfg); rt != nil {
 				return serveReplacementDecision{
 					Action:  serveReplacementExplicit,
 					Runtime: rt,
@@ -197,9 +197,9 @@ func decideServeDaemonReplacement(
 }
 
 func findConfirmedUnreachableWritableDaemonRuntime(
-	cfg config.Config,
+	ctx context.Context, cfg config.Config,
 ) *DaemonRuntime {
-	for _, rec := range liveDaemonRecords(cfg.DataDir) {
+	for _, rec := range liveDaemonRecords(ctx, cfg.DataDir) {
 		rt := daemonRuntimeFromRecord(rec)
 		if rt.ReadOnly {
 			continue

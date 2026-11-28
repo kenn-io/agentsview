@@ -116,7 +116,7 @@ func runClassifierRebuild(
 		fmt.Fprintf(out, "  - %s\n", p)
 	}
 
-	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(ctx, cfg); err != nil {
 		return fmt.Errorf("checking SQLite write ownership: %w", err)
 	}
 

@@ -301,8 +301,8 @@ var listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeR
 // passes the ping probe. Writable daemons are preferred over read-only pg serve
 // daemons when both are discoverable. When authToken is non-empty, it is sent
 // as a bearer token so require_auth daemons remain discoverable.
-func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
-	migrateLegacyDaemonRuntimes(dataDir, authToken...)
+func FindDaemonRuntime(ctx context.Context, dataDir string, authToken ...string) *DaemonRuntime {
+	migrateLegacyDaemonRuntimes(ctx, dataDir, authToken...)
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
@@ -310,14 +310,13 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	token := firstAuthToken(authToken)
 	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
-		rt := findStartupStateFallback(dataDir, token)
+		rt := findStartupStateFallback(ctx, dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) == nil {
 			return rt
 		}
 		return nil
 	}
 
-	ctx := context.Background()
 	var readOnly *DaemonRuntime
 	writableRecordSeen := false
 	for _, rec := range records {
@@ -353,7 +352,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 		}
 	}
 	if !writableRecordSeen {
-		if rt := findStartupStateFallback(dataDir, token); rt != nil {
+		if rt := findStartupStateFallback(ctx, dataDir, token); rt != nil {
 			if daemonRuntimeCompatibilityError(rt) != nil {
 				return nil
 			}
@@ -366,8 +365,8 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 // FindWritableDaemonRuntime resolves the writable daemon used by lifecycle
 // operations. Runtime records stay primary; the startup-state fallback is
 // accepted only for a writable daemon with a live, identity-matching ping.
-func FindWritableDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
-	rt := FindDaemonRuntime(dataDir, authToken...)
+func FindWritableDaemonRuntime(ctx context.Context, dataDir string, authToken ...string) *DaemonRuntime {
+	rt := FindDaemonRuntime(ctx, dataDir, authToken...)
 	if rt == nil || rt.ReadOnly {
 		return nil
 	}
@@ -406,18 +405,18 @@ func writableDaemonRecordsWithFallback(
 }
 
 func localWritableDaemonRecordsWithFallback(
-	dataDir, authToken string,
+	ctx context.Context, dataDir, authToken string,
 ) ([]daemon.RuntimeRecord, bool) {
 	return writableDaemonRecordsWithFallback(
-		liveDaemonRecords(dataDir),
+		liveDaemonRecords(ctx, dataDir),
 		func() *DaemonRuntime {
-			return FindWritableDaemonRuntime(dataDir, authToken)
+			return FindWritableDaemonRuntime(ctx, dataDir, authToken)
 		},
 	)
 }
 
-func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
-	if !IsDaemonStarting(dataDir) {
+func findStartupStateFallback(ctx context.Context, dataDir, authToken string) *DaemonRuntime {
+	if !IsDaemonStarting(ctx, dataDir) {
 		return nil
 	}
 	st := readStartupState(dataDir)
@@ -463,7 +462,7 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	if st.CaddyCreateTime != "" {
 		rec.Metadata[runtimeCaddyCreateTime] = st.CaddyCreateTime
 	}
-	info, err := probeRuntime(context.Background(), rec, authToken,
+	info, err := probeRuntime(ctx, rec, authToken,
 		daemon.ProbeOptions{ExpectedService: daemonService, Timeout: 500 * time.Millisecond})
 	if err != nil || info.PID != st.PID {
 		return nil
@@ -477,9 +476,9 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 }
 
 func FindIncompatibleDaemonRuntime(
-	dataDir string, authToken ...string,
+	ctx context.Context, dataDir string, authToken ...string,
 ) (*DaemonRuntime, error) {
-	rt := findIncompatibleDaemonRuntime(dataDir, firstAuthToken(authToken))
+	rt := findIncompatibleDaemonRuntime(ctx, dataDir, firstAuthToken(authToken))
 	if rt == nil {
 		return nil, nil
 	}
@@ -487,9 +486,9 @@ func FindIncompatibleDaemonRuntime(
 }
 
 func findIncompatibleWritableDaemonRuntime(
-	dataDir string, authToken ...string,
+	ctx context.Context, dataDir string, authToken ...string,
 ) (*DaemonRuntime, error) {
-	rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken...)
+	rt, err := FindIncompatibleDaemonRuntime(ctx, dataDir, authToken...)
 	if rt != nil && rt.ReadOnly {
 		return nil, nil
 	}
@@ -497,22 +496,21 @@ func findIncompatibleWritableDaemonRuntime(
 }
 
 func findIncompatibleDaemonRuntime(
-	dataDir string, token string,
+	ctx context.Context, dataDir string, token string,
 ) *DaemonRuntime {
-	migrateLegacyDaemonRuntimes(dataDir, token)
+	migrateLegacyDaemonRuntimes(ctx, dataDir, token)
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
 	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
-		rt := findStartupStateFallback(dataDir, token)
+		rt := findStartupStateFallback(ctx, dataDir, token)
 		if rt != nil && daemonRuntimeCompatibilityError(rt) != nil {
 			return rt
 		}
 		return nil
 	}
 
-	ctx := context.Background()
 	var readOnly *DaemonRuntime
 	writableRecordSeen := false
 	for _, rec := range records {
@@ -547,7 +545,7 @@ func findIncompatibleDaemonRuntime(
 		}
 	}
 	if !writableRecordSeen {
-		if rt := findStartupStateFallback(dataDir, token); rt != nil &&
+		if rt := findStartupStateFallback(ctx, dataDir, token); rt != nil &&
 			daemonRuntimeCompatibilityError(rt) != nil {
 			return rt
 		}
@@ -711,8 +709,8 @@ func daemonRuntimeCompatibilityError(rt *DaemonRuntime) error {
 // whose process may still be alive. Unlike FindDaemonRuntime it does not require
 // a successful ping, so it can target a hung server (e.g. for stop) and retain
 // records whose process identity cannot be checked from this PID namespace.
-func liveDaemonRecords(dataDir string) []daemon.RuntimeRecord {
-	migrateLegacyDaemonRuntimes(dataDir)
+func liveDaemonRecords(ctx context.Context, dataDir string) []daemon.RuntimeRecord {
+	migrateLegacyDaemonRuntimes(ctx, dataDir)
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
@@ -742,9 +740,9 @@ type daemonRuntimeRecordStore interface {
 // still be alive. It does not probe the daemon, so callers can recover or stop a
 // hung process without overlooking an owner in another PID namespace.
 func writableDaemonRecords(
-	dataDir string, authToken string,
+	ctx context.Context, dataDir string, authToken string,
 ) ([]daemon.RuntimeRecord, error) {
-	migrateLegacyDaemonRuntimes(dataDir, authToken)
+	migrateLegacyDaemonRuntimes(ctx, dataDir, authToken)
 	return writableDaemonRecordsFromStore(runtimeStore(dataDir))
 }
 
@@ -787,8 +785,8 @@ func writableDaemonRecordsFromStore(
 	return writable, nil
 }
 
-func hasLiveDaemonRuntime(dataDir string, authToken ...string) bool {
-	migrateLegacyDaemonRuntimes(dataDir, authToken...)
+func hasLiveDaemonRuntime(ctx context.Context, dataDir string, authToken ...string) bool {
+	migrateLegacyDaemonRuntimes(ctx, dataDir, authToken...)
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
@@ -825,7 +823,7 @@ func isLegacyStateFileName(name string) bool {
 		strings.HasSuffix(name, ".json")
 }
 
-func migrateLegacyDaemonRuntimes(dataDir string, authToken ...string) {
+func migrateLegacyDaemonRuntimes(ctx context.Context, dataDir string, authToken ...string) {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return
@@ -855,7 +853,7 @@ func migrateLegacyDaemonRuntimes(dataDir string, authToken ...string) {
 			continue
 		}
 		rec := legacyRuntimeRecord(sf)
-		info, err := probeRuntime(context.Background(), rec, token, daemon.ProbeOptions{
+		info, err := probeRuntime(ctx, rec, token, daemon.ProbeOptions{
 			ExpectedService: daemonService,
 			Timeout:         500 * time.Millisecond,
 		})
@@ -903,8 +901,8 @@ func legacyRuntimeRecord(sf legacyStateFile) daemon.RuntimeRecord {
 	return rec
 }
 
-func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
-	migrateLegacyDaemonRuntimes(dataDir, authToken...)
+func hasLiveWritableDaemonRuntime(ctx context.Context, dataDir string, authToken ...string) bool {
+	migrateLegacyDaemonRuntimes(ctx, dataDir, authToken...)
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
@@ -962,7 +960,7 @@ var startLockMu sync.Mutex
 // markDaemonStarting acquires the kit daemon start lock for this data dir while
 // the server is starting. owned reports whether this process now owns the
 // marker; acquired reports whether this call acquired it.
-func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
+func markDaemonStarting(ctx context.Context, dataDir string) (owned bool, acquired bool) {
 	path, err := runtimeStore(dataDir).LockPath()
 	if err != nil {
 		return false, false
@@ -972,7 +970,7 @@ func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
 	if _, ok := startLocks.Load(path); ok {
 		return true, false
 	}
-	release, locked, err := runtimeStore(dataDir).TryAcquireStartLock(context.Background())
+	release, locked, err := runtimeStore(dataDir).TryAcquireStartLock(ctx)
 	if err != nil || !locked {
 		return false, false
 	}
@@ -983,8 +981,8 @@ func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
 // MarkDaemonStarting acquires the kit daemon start lock for this data dir while
 // the server is starting. The lock file itself is advisory; lock ownership is
 // what other processes observe.
-func MarkDaemonStarting(dataDir string) {
-	markDaemonStarting(dataDir)
+func MarkDaemonStarting(ctx context.Context, dataDir string) {
+	markDaemonStarting(ctx, dataDir)
 }
 
 // UnmarkDaemonStarting releases the kit daemon start lock for this data dir.
@@ -1006,11 +1004,11 @@ func UnmarkDaemonStarting(dataDir string) {
 	held.release()
 }
 
-func isDaemonStarting(dataDir string) bool {
-	return daemonStartingWithLockProbe(dataDir, false)
+func isDaemonStarting(ctx context.Context, dataDir string) bool {
+	return daemonStartingWithLockProbe(ctx, dataDir, false)
 }
 
-func daemonStartingWithLockProbe(dataDir string, external bool) bool {
+func daemonStartingWithLockProbe(ctx context.Context, dataDir string, external bool) bool {
 	if config.RuntimeDir(dataDir) != dataDir {
 		// Remove this bridge once upgrades from 0.45.x and earlier are unsupported.
 		path := filepath.Join(dataDir, "daemon.lock")
@@ -1035,7 +1033,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if _, ok := startLocks.Load(path); ok {
 		return !external
 	}
-	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
+	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, ctx)
 	if err == nil {
 		if locked {
 			release()
@@ -1054,7 +1052,7 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
 		return true
 	}
-	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, context.Background())
+	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir).RuntimeStore, ctx)
 	if recoveryErr != nil || !recoveryLocked {
 		return true
 	}
@@ -1102,8 +1100,8 @@ func orphanedStartupState(dataDir string, now time.Time) bool {
 		processCreateTimeStateForPID(st.PID, st.CreateTime) == processCreateTimeMismatch
 }
 
-func isExternalDaemonStarting(dataDir string) bool {
-	return daemonStartingWithLockProbe(dataDir, true)
+func isExternalDaemonStarting(ctx context.Context, dataDir string) bool {
+	return daemonStartingWithLockProbe(ctx, dataDir, true)
 }
 
 const legacyStartupLockPrefix = "server.starting."
@@ -1136,21 +1134,21 @@ func isLegacyDaemonStarting(dataDir string) bool {
 }
 
 // IsDaemonStarting reports whether the shared kit daemon start lock is held.
-func IsDaemonStarting(dataDir string) bool {
-	return isDaemonStarting(dataDir) || isLegacyDaemonStarting(dataDir)
+func IsDaemonStarting(ctx context.Context, dataDir string) bool {
+	return isDaemonStarting(ctx, dataDir) || isLegacyDaemonStarting(dataDir)
 }
 
 // IsDaemonActive reports whether a server process is managing dataDir.
-func IsDaemonActive(dataDir string, authToken ...string) bool {
-	return hasLiveDaemonRuntime(dataDir, authToken...) ||
-		IsDaemonStarting(dataDir)
+func IsDaemonActive(ctx context.Context, dataDir string, authToken ...string) bool {
+	return hasLiveDaemonRuntime(ctx, dataDir, authToken...) ||
+		IsDaemonStarting(ctx, dataDir)
 }
 
 // IsLocalDaemonActive reports whether a writable local daemon is managing the
 // SQLite archive in dataDir.
-func IsLocalDaemonActive(dataDir string, authToken ...string) bool {
-	return hasLiveWritableDaemonRuntime(dataDir, authToken...) ||
-		IsDaemonStarting(dataDir)
+func IsLocalDaemonActive(ctx context.Context, dataDir string, authToken ...string) bool {
+	return hasLiveWritableDaemonRuntime(ctx, dataDir, authToken...) ||
+		IsDaemonStarting(ctx, dataDir)
 }
 
 // WaitForDaemonStartupContext polls until the daemon start lock clears or a
@@ -1166,10 +1164,10 @@ func WaitForDaemonStartupContext(
 	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for time.Now().Before(deadline) {
-		if FindDaemonRuntime(dataDir, authToken...) != nil {
+		if FindDaemonRuntime(ctx, dataDir, authToken...) != nil {
 			return true
 		}
-		if !IsDaemonStarting(dataDir) {
+		if !IsDaemonStarting(ctx, dataDir) {
 			return false
 		}
 		state := readStartupState(dataDir)

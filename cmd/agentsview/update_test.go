@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -190,6 +191,50 @@ func TestPerformUpdateWithDaemonLifecycleDoesNotRestartWhenNoneStopped(t *testin
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"load", "stop", "perform"}, calls)
+}
+
+func TestPerformUpdateWithDaemonLifecycleDoesNotRestartManagedDaemon(t *testing.T) {
+	installErr := errors.New("install failed")
+	for _, tc := range []struct {
+		name       string
+		installErr error
+	}{
+		{"success", nil},
+		{"install failure", installErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			var output bytes.Buffer
+			ctx := context.WithValue(t.Context(), daemonProgressContextKey{}, &output)
+			err := performUpdateWithDaemonLifecycle(ctx, &update.UpdateInfo{}, nil,
+				func() (config.Config, error) {
+					calls = append(calls, "load")
+					return config.Config{DataDir: t.TempDir(), SavedNoDaemonAutostart: true}, nil
+				},
+				func(context.Context, config.Config) (updateDaemonStopResult, error) {
+					calls = append(calls, "stop")
+					return updateDaemonStopResult{Stopped: true}, nil
+				},
+				func(context.Context, *update.UpdateInfo, func(int64, int64)) error {
+					calls = append(calls, "perform")
+					return tc.installErr
+				},
+				func(context.Context, config.Config, updateDaemonStopResult) error {
+					calls = append(calls, "restart")
+					return errors.New("managed daemon must not restart automatically")
+				},
+			)
+			if tc.installErr != nil {
+				require.ErrorIs(t, err, tc.installErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{"load", "stop", "perform"}, calls)
+			assert.Equal(t, 1, strings.Count(output.String(), "daemon restart skipped"))
+			assert.Contains(t, output.String(), "agentsview daemon start")
+			assert.Contains(t, output.String(), "if no service manager is in use")
+		})
+	}
 }
 
 func TestRestartDaemonAfterUpdateArgsPreserveRuntimeBind(t *testing.T) {
@@ -458,17 +503,17 @@ func TestRestartDaemonAfterUpdatePreservesLifetime(t *testing.T) {
 				out, err = exec.CommandContext(ctx, os.Args[0], "daemon", "start").CombinedOutput()
 				require.NoError(t, err, string(out))
 			}
-			rt := FindWritableDaemonRuntime(dir)
+			rt := FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			stopped, err := stopWritableDaemonsForUpdate(ctx, cfg)
 			require.NoError(t, err)
 			t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "2s")
 			require.NoError(t, restartDaemonAfterUpdate(ctx, cfg, stopped))
-			rt = FindWritableDaemonRuntime(dir)
+			rt = FindWritableDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			assert.Equal(t, persistent, rt.Persistent)
 			time.Sleep(5 * time.Second) //nolint:kennlint // sleeptest: the child process uses the real clock for its two-second idle exit.
-			assert.Equal(t, persistent, FindWritableDaemonRuntime(dir) != nil)
+			assert.Equal(t, persistent, FindWritableDaemonRuntime(t.Context(), dir) != nil)
 		})
 	}
 }

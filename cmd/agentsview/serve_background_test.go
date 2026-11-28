@@ -311,7 +311,7 @@ func publishDaemonRuntimeWhenVisible(
 		return err
 	}
 	if assert.Eventually(t, func() bool {
-		rt := FindDaemonRuntime(dataDir)
+		rt := FindDaemonRuntime(t.Context(), dataDir)
 		return rt != nil && !rt.ReadOnly && rt.Port == port
 	}, 2*time.Second, 10*time.Millisecond) {
 		return nil
@@ -447,7 +447,7 @@ func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 	_, err := WriteDaemonRuntime(dir, "127.0.0.1", oldPort, "1.0.0", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
-	require.Nil(t, FindDaemonRuntime(dir),
+	require.Nil(t, FindDaemonRuntime(t.Context(), dir),
 		"precondition: runtime record must be live but unprobeable")
 	setTestVersion(t, "1.0.0")
 	unlockStart := holdExternalDaemonStartLock(t, dir)
@@ -627,7 +627,7 @@ func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) 
 	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
 	assert.Zero(t, startCalls, "invalid config must not launch a child")
 	assert.False(t, result.Started)
-	require.NotNil(t, FindDaemonRuntime(dir),
+	require.NotNil(t, FindDaemonRuntime(t.Context(), dir),
 		"incumbent runtime must remain discoverable")
 }
 
@@ -965,7 +965,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemo
 	assert.True(t, db.IsDataVersionTooNew(err))
 	assert.Nil(t, rt)
 	assert.False(t, stopped)
-	assert.NotNil(t, FindDaemonRuntime(dir))
+	assert.NotNil(t, FindDaemonRuntime(t.Context(), dir))
 }
 
 func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDaemon(
@@ -1004,7 +1004,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDae
 	assert.True(t, db.IsDataVersionTooNew(err))
 	assert.Nil(t, rt)
 	assert.False(t, stopped)
-	found, compatErr := FindIncompatibleDaemonRuntime(dir)
+	found, compatErr := FindIncompatibleDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, found)
 	require.Error(t, compatErr)
 }
@@ -1172,7 +1172,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	observed := make(chan *startupState, 1)
@@ -1247,7 +1247,7 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 			require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 		}
 		writeState("1/2 sessions")
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 		rt, err := waitForBackgroundServeReadyWithPolicy(
@@ -1291,7 +1291,7 @@ func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing
 		})
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -1331,7 +1331,7 @@ func TestWaitForBackgroundServeReadyWaitsForStartLockRelease(t *testing.T) {
 			setStartProbeTickForTest(t, 10*time.Millisecond)
 			dir := runtimeTestDir(t)
 			host, port := testPingServer(t)
-			MarkDaemonStarting(dir)
+			MarkDaemonStarting(t.Context(), dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 			_, err := WriteDaemonRuntime(dir, host, port, version, false)
 			require.NoError(t, err)
@@ -1378,7 +1378,7 @@ func TestWaitForBackgroundServeReadyWaitsForStartLockRelease(t *testing.T) {
 				require.NoError(t, res.err)
 				require.NotNil(t, res.rt)
 				assert.Equal(t, port, res.rt.Port)
-				assert.False(t, IsDaemonStarting(dir))
+				assert.False(t, IsDaemonStarting(t.Context(), dir))
 			case <-time.After(5 * time.Second):
 				require.FailNow(t, "readiness wait did not return after start lock released")
 			}
@@ -1390,7 +1390,7 @@ func TestWaitForBackgroundServeReadyWaitsForStartLockRelease(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			setStartProbeTickForTest(t, time.Second)
 			dir := runtimeTestDir(t)
-			MarkDaemonStarting(dir)
+			MarkDaemonStarting(t.Context(), dir)
 			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 			rt, err := waitForBackgroundServeReadyWithPolicy(
@@ -1665,7 +1665,7 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	published := make(chan error, 1)
 	go func() {
 		if !assert.Eventually(t, func() bool {
-			return FindDaemonRuntime(dir) == nil
+			return FindDaemonRuntime(t.Context(), dir) == nil
 		}, 2*time.Second, 10*time.Millisecond) {
 			published <- errors.New("replacement gap was not observed")
 			return
@@ -1852,7 +1852,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	)
 	assert.Nil(t, rt)
 	assert.False(t, stopped)
-	found, compatErr := FindIncompatibleDaemonRuntime(dir)
+	found, compatErr := FindIncompatibleDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, found)
 	require.Error(t, compatErr)
 }
@@ -1864,7 +1864,7 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 
 	dir := runtimeTestDir(t)
 	releaseLaunchLock := holdExternalBackgroundLaunchLock(t, dir)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	startServeBackgroundProcessForEnsure = func(context.Context,
@@ -2055,7 +2055,7 @@ func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T)
 	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
 	assert.Zero(t, startCalls, "invalid config must not launch a child")
 	assert.Nil(t, rt)
-	require.NotNil(t, FindDaemonRuntime(dir),
+	require.NotNil(t, FindDaemonRuntime(t.Context(), dir),
 		"incumbent runtime must remain discoverable")
 }
 
@@ -2488,7 +2488,7 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 	assert.Equal(t, writableEndpoint.Port, result.Runtime.Port)
 	assert.Equal(t, []string{"serve"}, gotArgs)
 
-	records := liveDaemonRecords(dir)
+	records := liveDaemonRecords(t.Context(), dir)
 	require.Len(t, records, 2)
 	readOnlyModes := make([]bool, 0, len(records))
 	pids := make([]int, 0, len(records))
@@ -2786,12 +2786,12 @@ func TestRefreshServeDaemonReplacementDecisionKeepsStopConfirmedOriginal(
 		),
 	)
 	writeRuntimeRecordFixture(t, dir, rec)
-	require.Nil(t, FindDaemonRuntime(dir),
+	require.Nil(t, FindDaemonRuntime(t.Context(), dir),
 		"precondition: runtime record must be live but unprobeable")
 	original := daemonRuntimeFromRecord(rec)
 	require.True(t, stopTargetConfirmed(original.Record, ""))
 
-	got := refreshServeDaemonReplacementDecision(
+	got := refreshServeDaemonReplacementDecision(t.Context(),
 		config.Config{DataDir: dir},
 		serveReplacementOptions{},
 		serveReplacementDecision{
@@ -2824,7 +2824,7 @@ func TestRefreshServeDaemonReplacementDecisionKeepsStartupPublishedRuntime(
 	)
 	writeRuntimeRecordFixture(t, dir, rec)
 
-	got := refreshServeDaemonReplacementDecision(
+	got := refreshServeDaemonReplacementDecision(t.Context(),
 		config.Config{DataDir: dir},
 		serveReplacementOptions{Replace: true},
 		serveReplacementDecision{
@@ -2856,7 +2856,7 @@ func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {
 	host, port := testPingServer(t)
 	errCh := make(chan error, 1)
 	runAfterBackgroundProbe(t, func() {
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		_, err := WriteDaemonRuntime(dir, host, port, "test", false)
 		if err == nil {
 			UnmarkDaemonStarting(dir)

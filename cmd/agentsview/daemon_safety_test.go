@@ -43,7 +43,7 @@ func TestDaemonWaitForLaunchContentionDoesNotAcceptRecordWhileLockHeld(t *testin
 	waitDeps.onAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
 	resultCh := make(chan daemonLaunchObservation, 1)
 	go func() {
-		resultCh <- waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+		resultCh <- waitForDaemonLaunchContentionWithDeps(t.Context(), dir, waitDeps)
 	}()
 	select {
 	case <-attempted:
@@ -99,7 +99,7 @@ func TestDaemonWaitForLaunchContentionRejectsUnconfirmedLiveWriter(t *testing.T)
 	waitDeps.onAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
 	resultCh := make(chan daemonLaunchObservation, 1)
 	go func() {
-		resultCh <- waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+		resultCh <- waitForDaemonLaunchContentionWithDeps(t.Context(), dir, waitDeps)
 	}()
 	select {
 	case <-attempted:
@@ -143,11 +143,11 @@ func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *tes
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
 		return config.Config{DataDir: dir}, nil
 	}
-	waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	waitDeps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 
-	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	observation := waitForDaemonLaunchContentionWithDeps(t.Context(), dir, waitDeps)
 	select {
 	case <-probed:
 	case <-time.After(time.Second):
@@ -175,11 +175,11 @@ func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *tes
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
 		return config.Config{DataDir: dir}, nil
 	}
-	waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	waitDeps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 
-	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	observation := waitForDaemonLaunchContentionWithDeps(t.Context(), dir, waitDeps)
 	var out bytes.Buffer
 	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
 	require.Error(t, err)
@@ -196,7 +196,7 @@ func TestDaemonWaitForLaunchContentionSurfacesReadOnlyConfigError(t *testing.T) 
 		return config.Config{}, errors.New("read-only config failed")
 	}
 
-	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	observation := waitForDaemonLaunchContentionWithDeps(t.Context(), dir, waitDeps)
 	require.Error(t, observation.Err)
 	require.ErrorContains(t, observation.Err, "read-only config failed")
 	var out bytes.Buffer
@@ -212,7 +212,7 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 		testWritableRecord(202, "/runtime/202.json"),
 		testWritableRecord(203, "/runtime/203.json"),
 	}
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	identityChanged := false
 	var confirmations, signalled []int
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
@@ -252,14 +252,14 @@ func TestDaemonStopRequiresLocalIdentityDespiteMatchingPing(t *testing.T) {
 				rec.ProcessIdentityV2 = "future-v1:unavailable"
 			}
 			path := writeRuntimeRecordFixture(t, dir, rec)
-			require.NotNil(t, FindDaemonRuntime(dir), "both identities remain discoverable")
+			require.NotNil(t, FindDaemonRuntime(t.Context(), dir), "both identities remain discoverable")
 			deps := defaultDaemonCommandDeps()
 			deps.resolveDataDir = func() (string, error) { return dir, nil }
 			deps.loadConfig = func() (config.Config, error) {
 				return config.Config{DataDir: dir}, nil
 			}
 			var out bytes.Buffer
-			err := runDaemonStop(&out, deps)
+			err := runDaemonStop(t.Context(), &out, deps)
 			if knownIdentity {
 				require.NoError(t, err)
 				<-reaped
@@ -270,10 +270,10 @@ func TestDaemonStopRequiresLocalIdentityDespiteMatchingPing(t *testing.T) {
 			require.ErrorContains(t, err, "cannot confirm")
 			assert.True(t, daemon.ProcessAlive(pid), "a ping must not authorize signaling this child")
 			assert.FileExists(t, path)
-			assert.True(t, hasLiveWritableDaemonRuntime(dir), "the record must still exclude another writer")
+			assert.True(t, hasLiveWritableDaemonRuntime(t.Context(), dir), "the record must still exclude another writer")
 			assert.True(t, daemonRecordPingConfirmed(rec, ""))
 
-			rt := FindDaemonRuntime(dir)
+			rt := FindDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			err = stopDaemonRuntimeForUpgradeImpl(t.Context(), config.Config{DataDir: dir}, rt)
 			require.ErrorContains(t, err, "cannot confirm")
@@ -286,7 +286,7 @@ func TestDaemonStopRequiresLocalIdentityDespiteMatchingPing(t *testing.T) {
 func TestDaemonStopRevalidationFailureBeforeFirstSignalSaysAborted(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	rec := testWritableRecord(204, "/runtime/204.json")
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 	confirmations := 0
@@ -330,7 +330,7 @@ func TestDaemonRestartSlowReadinessIsNotReportedSuccessful(t *testing.T) {
 		t.Run(fmt.Sprintf("was-running-%t", wasRunning), func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			if wasRunning {
-				deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+				deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 					return []daemon.RuntimeRecord{testWritableRecord(302, "/runtime/302.json")}, nil
 				}
 			}
@@ -355,7 +355,7 @@ func TestDaemonCanonicalCleanupFailureStopsRestart(t *testing.T) {
 	for _, command := range []string{"stop", "restart"} {
 		t.Run(command, func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(401, "/runtime/401.json")}, nil
 			}
 			deps.stopCaddy = func(w io.Writer, rec daemon.RuntimeRecord) error {
@@ -380,7 +380,7 @@ func TestDaemonCanonicalCleanupFailureStopsRestart(t *testing.T) {
 
 func TestDaemonStatusReportsIncompatibleAndNotResponding(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		rec := testWritableRecord(501, "/runtime/501.json")
 		rec.Metadata[runtimeAPIVersion] = "0"
 		return []daemon.RuntimeRecord{rec}, nil
@@ -434,7 +434,7 @@ func TestDaemonMutationRejectsLoadedDataDirMismatch(t *testing.T) {
 				}, nil
 			}
 			discoveries, signals, starts := 0, 0, 0
-			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 				discoveries++
 				return nil, nil
 			}

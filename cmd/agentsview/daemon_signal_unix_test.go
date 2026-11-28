@@ -34,7 +34,7 @@ func TestDaemonRestartSIGTERMHelperProcess(t *testing.T) {
 	}
 
 	deps, out := daemonCommandTestDeps(t)
-	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(context.Context, string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
 	deps.startBackground = func(ctx context.Context,
