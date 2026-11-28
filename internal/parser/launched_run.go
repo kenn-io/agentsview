@@ -6,7 +6,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"path"
 	"regexp"
-	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -122,7 +121,7 @@ func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) 
 			return true
 		}
 		if j == i-1 && agent == "claude" && (words[j] == "-p" || words[j] == "--print") {
-			return true
+			return i == len(words)-1
 		}
 		if launchedFlagTakesValue(agent, words[j]) {
 			j++
@@ -133,6 +132,10 @@ func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) 
 
 // launchedRunID returns the one run ID a starting shell call shows.
 func launchedRunID(ctx context.Context, input, output string) string {
+	return launchedRunIDConfirmed(ctx, input, output, false)
+}
+
+func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOutput bool) string {
 	if command, ok := codeModeCommand(input); ok {
 		input = command
 		output = codeModeOutput(output)
@@ -222,15 +225,17 @@ func launchedRunID(ctx context.Context, input, output string) string {
 	if launches != 1 {
 		return ""
 	}
+	confirmed := map[string]bool{}
 	if !unsafeOutput && (jsonOutput || prefix != "" && launchedOutputID.MatchString(output)) {
 		for _, id := range launchedOutputIDs(output) {
 			if strings.HasPrefix(id, "codex:") == (prefix != "") {
 				ids[id] = true
+				confirmed[id] = true
 			}
 		}
 	}
 	for id := range ids {
-		if len(ids) == 1 {
+		if len(ids) == 1 && (!requireOutput || confirmed[id]) {
 			return id
 		}
 	}
@@ -337,11 +342,8 @@ func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
-func launchedResultID(ctx context.Context, input, output string, failed bool) (id string) {
-	if id = launchedRunID(ctx, input, output); failed && !slices.Contains(launchedOutputIDs(launchedRunOutput(codeModeOutput(output))), id) {
-		return ""
-	}
-	return id
+func launchedResultID(ctx context.Context, input, output string, failed bool) string {
+	return launchedRunIDConfirmed(ctx, input, output, failed)
 }
 
 func launchedResultFailed(output string) bool {

@@ -68,6 +68,12 @@ func TestLaunchedRunLinksAfterIncrementalResult(t *testing.T) {
 	}
 	require.Len(t, calls, 1)
 	assert.Equal(t, "codex:"+id, calls[0].SubagentSessionID)
+	content += launchedRunResult("abcdefab-1234-1234-1234-123456789abc")
+	require.NoError(t, os.WriteFile(launcher, []byte(content), 0o600))
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	children, err = database.GetChildSessions(t.Context(), "launcher")
+	require.NoError(t, err)
+	assert.Empty(t, children)
 }
 
 func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {

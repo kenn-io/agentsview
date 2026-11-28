@@ -1486,3 +1486,20 @@ func TestLinkSubagentSessionsOrdersStartTimesChronologically(t *testing.T) {
 		"the chronologically earliest spawner must win; ordering the raw "+
 			"RFC3339Nano strings would pick the later copied spawner")
 }
+
+func TestQueuedSubagentCleanupRemovesWithdrawnEdge(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p")
+	insertSession(t, d, "kid", "p")
+	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
+	require.NoError(t, err)
+	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
+	_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM tool_calls WHERE session_id = ?", "spawner")
+	require.NoError(t, err)
+	require.NoError(t, d.RepairQueuedSubagentParents())
+	kid, err := d.GetSession(t.Context(), "kid")
+	require.NoError(t, err)
+	assert.Nil(t, kid.ParentSessionID)
+}

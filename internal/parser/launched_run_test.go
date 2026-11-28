@@ -25,7 +25,7 @@ func TestLaunchedRunID(t *testing.T) {
 		{"setup before launch", "cd project && codex exec hello", startup, "codex:" + id},
 		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
-		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", id},
+		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", ""},
 		{"trailing command substitution prompt", `claude -p --session-id ` + id + ` "$(cat p)"`, "", id},
 		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"quoted substitution after option value delimiter", `claude --model -- "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
@@ -75,6 +75,8 @@ func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
 		{"no output ID", `{"command":"claude -p --session-id ` + id + `"}`, "failed", ""},
 		{"Codex startup", `{"command":"codex exec hello"}`, startup, "codex:" + id},
 		{"Claude system event", `{"command":"claude -p --output-format json --session-id ` + id + `"}`, `{"type":"system","session_id":"` + id + `"}`, id},
+		{"unrelated matching Claude output", `{"command":"cat old.log && claude -p --session-id ` + id + `"}`, `{"type":"result","session_id":"` + id + `"}`, ""},
+		{"plain output matching Claude ID", `{"command":"claude -p --session-id ` + id + `"}`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"unrelated startup", `{"command":"cat old.log && claude -p --session-id ` + id + `"}`, strings.ReplaceAll(startup, id, other), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
