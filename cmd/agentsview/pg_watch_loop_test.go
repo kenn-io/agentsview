@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -548,6 +549,155 @@ func TestPushLoop_NewPushLoopWithLabelBackoffAndCap(t *testing.T) {
 			45*time.Minute + 30*time.Second,
 			46*time.Minute + 30*time.Second,
 		}, attempts)
+	})
+}
+
+// A push that keeps failing for longer than the floor interval leaves an
+// overdue tick buffered. The tick must keep its periodic work queued but wait
+// for the retry delay instead of retrying the expensive push at once.
+func TestPushLoop_SlowFailureOverdueFloorTickWaitsForRetryDelay(t *testing.T) {
+	for _, drainDirty := range []bool{true, false} {
+		name := "dirty signal pending"
+		if drainDirty {
+			name = "only floor tick pending"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+
+				const (
+					slowFailure = 50 * time.Second
+					interval    = 30 * time.Second
+					debounce    = 10 * time.Second
+				)
+				type attempt struct {
+					at     time.Duration
+					reason pushReason
+					batch  *syncpkg.WatchBatch
+				}
+				start := time.Now()
+				var (
+					mu       sync.Mutex
+					attempts []attempt
+				)
+				loop, ticker := newPushLoopWithLabel(
+					"pg watch", debounce, interval,
+					func(_ context.Context, reason pushReason, batch *syncpkg.WatchBatch) error {
+						mu.Lock()
+						attempts = append(attempts, attempt{
+							at: time.Since(start), reason: reason, batch: batch,
+						})
+						count := len(attempts)
+						mu.Unlock()
+						if count <= 2 {
+							time.Sleep(slowFailure)
+							return errors.New("pg unreachable")
+						}
+						return nil
+					},
+				)
+				defer ticker.Stop()
+
+				ack := loop.NotifyDirtyWithAck()
+				<-loop.dirty
+				loop.enqueueUnscoped(reasonStartup, nil, false)
+				// The startup push outlasts the floor interval and fails, so a
+				// tick is overdue by the time the loop starts.
+				loop.runNextTask(ctx, false)
+				if drainDirty {
+					<-loop.dirty
+				}
+				go loop.Run(ctx)
+
+				// The startup failure already used 50s. Floor ticks at 60s and
+				// 90s land during the slow retry; neither may shorten the 10s
+				// then 20s retry delays. Run until just before the 160s tick.
+				time.Sleep(100 * time.Second)
+				synctest.Wait()
+
+				mu.Lock()
+				recorded := append([]attempt(nil), attempts...)
+				mu.Unlock()
+				assert.Equal(t, []attempt{
+					{at: 0, reason: reasonStartup},
+					{at: 60 * time.Second, reason: reasonInterval},
+					{at: 130 * time.Second, reason: reasonInterval},
+				}, recorded, "retries start only after each full backoff delay")
+				require.NoError(t, <-ack,
+					"the preserved task still acknowledges its waiter after the retry succeeds")
+			})
+		})
+	}
+}
+
+// An overdue floor tick that arrives while a retry delay is pending queues
+// unscoped periodic work behind that delay: nothing runs early, and the work
+// runs once the delay expires.
+func TestPushLoop_FloorTickDuringBackoffQueuesPeriodicWorkUntilRetryDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var (
+			mu       sync.Mutex
+			attempts []time.Duration
+			reasons  []pushReason
+		)
+		start := time.Now()
+		floor := make(chan time.Time, 1)
+		loop := &pushLoop{
+			debounce:        10 * time.Second,
+			maxRetry:        time.Minute,
+			dirty:           make(chan struct{}, 1),
+			floor:           floor,
+			after:           time.After,
+			promotionCounts: make(map[syncpkg.WatchBatchPromotionReason]int),
+			push: func(_ context.Context, reason pushReason, _ *syncpkg.WatchBatch) error {
+				mu.Lock()
+				attempts = append(attempts, time.Since(start))
+				reasons = append(reasons, reason)
+				count := len(attempts)
+				mu.Unlock()
+				if count == 1 {
+					return errors.New("pg unreachable")
+				}
+				return nil
+			},
+		}
+
+		loop.enqueueUnscoped(reasonStartup, nil, false)
+		loop.runNextTask(ctx, false)
+		<-loop.dirty
+		go loop.Run(ctx)
+
+		snapshot := func() ([]time.Duration, []pushReason) {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]time.Duration(nil), attempts...), append([]pushReason(nil), reasons...)
+		}
+
+		floor <- time.Now()
+		synctest.Wait()
+		gotAttempts, _ := snapshot()
+		assert.Equal(t, []time.Duration{0}, gotAttempts,
+			"an overdue floor tick must not retry before the delay expires")
+		pending, _ := pushLoopPendingState(loop)
+		assert.True(t, pending, "the failed work stays queued behind the delay")
+
+		time.Sleep(9 * time.Second)
+		synctest.Wait()
+		gotAttempts, _ = snapshot()
+		assert.Equal(t, []time.Duration{0}, gotAttempts, "retry delay has not elapsed")
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+		gotAttempts, gotReasons := snapshot()
+		assert.Equal(t, []time.Duration{0, 10 * time.Second}, gotAttempts)
+		assert.Equal(t, []pushReason{reasonStartup, reasonInterval}, gotReasons,
+			"the periodic work queued by the overdue tick runs at the retry delay")
+		pending, _ = pushLoopPendingState(loop)
+		assert.False(t, pending, "the successful retry drains the queue")
 	})
 }
 

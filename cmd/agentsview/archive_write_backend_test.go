@@ -650,6 +650,15 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 	}
 }
 
+// retryAfterBackoff delivers an overdue floor tick to a loop that is backing
+// off a failed push, then lets the retry delay expire. The tick must not start
+// the retry itself.
+func (h *pushWatchOwnerHarness) retryAfterBackoff() {
+	h.floor <- time.Now()
+	synctest.Wait()
+	h.fire <- time.Now()
+}
+
 func (h *pushWatchOwnerHarness) record(event string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -793,7 +802,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 				default:
 				}
 
-				h.floor <- time.Now()
+				h.retryAfterBackoff()
 				second := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 2, second.index)
 				assert.Equal(t, reasonInterval, second.reason)
@@ -840,7 +849,7 @@ func TestDaemonPushWatchRetriesPartialArchiveChanges(t *testing.T) {
 				pending, waiters = h.pending()
 				require.True(t, pending && waiters == 0)
 
-				h.floor <- time.Now()
+				h.retryAfterBackoff()
 				third := receiveArchiveTest(t, h.attempts)
 				assert.Equal(t, reasonInterval, third.reason)
 				synctest.Wait()

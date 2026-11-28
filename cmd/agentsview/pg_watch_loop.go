@@ -255,9 +255,20 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 		case <-l.floor:
 			// The timer produces an unscoped task. It covers older queued
 			// watcher work; watcher tasks arriving during it stay queued.
+			l.enqueueUnscoped(reasonInterval, nil, false)
+			if l.failures > 0 {
+				// A failed push owes its retry delay. An overdue tick, such
+				// as one buffered while a slow push was failing, keeps the
+				// periodic work queued but must not bypass that delay or
+				// replace the pending retry timer.
+				if !armed {
+					armed = true
+					fire = l.after(l.nextDelay())
+				}
+				continue
+			}
 			armed = false
 			fire = nil
-			l.enqueueUnscoped(reasonInterval, nil, false)
 			l.runNextTask(ctx, false)
 		}
 	}

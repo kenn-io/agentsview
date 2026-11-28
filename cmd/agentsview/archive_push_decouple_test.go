@@ -199,7 +199,7 @@ func TestLocalPushWatchOpensDispatchBeforeStartupPush(t *testing.T) {
 					ctx, syncpkg.WatchBatch{FullSync: true},
 				))
 
-				h.floor <- time.Now()
+				h.retryAfterBackoff()
 				second := receiveArchiveTest(t, h.attempts)
 				require.Equal(t, 2, second.index)
 				synctest.Wait()
@@ -264,7 +264,7 @@ func TestLocalPushWatchHoldsPushesUntilLocalSyncCompletes(t *testing.T) {
 				assert.True(t, first.full, "--full makes the first push full")
 				synctest.Wait()
 
-				h.floor <- time.Now()
+				h.retryAfterBackoff()
 				retry := receiveArchiveTest(t, h.attempts)
 				assert.False(t, retry.full,
 					"the mirror resumes a failed full push, so a retry must not start it over")
