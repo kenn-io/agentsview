@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"path"
@@ -180,7 +179,7 @@ func launchedRunOutput(text string) string {
 	var envelope struct {
 		Output string `json:"output"`
 	}
-	if json.Unmarshal([]byte(text), &envelope) == nil && envelope.Output != "" {
+	if jsonv2.Unmarshal([]byte(text), &envelope) == nil && envelope.Output != "" {
 		return envelope.Output
 	}
 	return text
@@ -235,7 +234,7 @@ func launchedOutputIDs(text string) []string {
 			SessionID string `json:"session_id"`
 			ThreadID  string `json:"thread_id"`
 		}
-		if !strings.Contains(line, `_id"`) || json.Unmarshal([]byte(line), &event) != nil {
+		if !strings.Contains(line, `_id"`) || jsonv2.Unmarshal([]byte(line), &event) != nil {
 			continue
 		}
 		if i == 0 && event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
