@@ -439,8 +439,8 @@ func waitForManagedDaemon(ctx context.Context, cfg *config.Config, timeout time.
 	}
 	for ctx.Err() == nil {
 		if cfg.AuthToken == "" {
-			reloaded, err := config.LoadReadOnly()
-			if err == nil && reloaded.DataDir == cfg.DataDir {
+			reloaded, err := config.LoadReadOnlyAt(cfg.DataDir)
+			if err == nil {
 				cfg.RequireAuth = reloaded.RequireAuth
 				cfg.AuthToken = reloaded.AuthToken
 			}

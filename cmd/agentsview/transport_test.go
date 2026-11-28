@@ -623,6 +623,7 @@ func TestManagedDaemonWaitWithLockedConfig(t *testing.T) {
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 			contents := "no_daemon_autostart = true\n"
 			if tc.ready {
+				t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
 				contents += "require_auth = true\nauth_token = 'generated-token'\n"
 				host, port := testAuthenticatedPingServer(t, "generated-token")
 				writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
