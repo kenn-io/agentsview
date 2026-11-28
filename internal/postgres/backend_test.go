@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,4 +90,29 @@ func TestAsStoreUnwrapsHostedStore(t *testing.T) {
 	got, err := asStore(&HostedStore{physical: physical})
 	require.NoError(t, err)
 	assert.Same(t, physical, got)
+}
+
+func TestBackendCheckReachable(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := Backend{}.CheckReachable(canceledCtx, storage.ReplicaTarget{})
+	require.ErrorIs(t, err, context.Canceled)
+
+	err = Backend{}.CheckReachable(t.Context(), storage.ReplicaTarget{
+		URL: "postgres://x", Schema: "agentsview", PushBatchSize: 10,
+	})
+	require.EqualError(t, err,
+		"push_batch_size is a ClickHouse setting; PostgreSQL push does not accept it (got 10)")
+
+	err = Backend{}.CheckReachable(t.Context(), storage.ReplicaTarget{
+		URL: "postgres://u:p@db.example.test/agentsview?sslmode=disable", Schema: "agentsview",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permits plaintext")
+
+	err = Backend{}.CheckReachable(t.Context(), storage.ReplicaTarget{
+		URL: "postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable", Schema: "agentsview",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg ping")
 }

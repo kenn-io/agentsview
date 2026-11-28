@@ -453,6 +453,104 @@ func TestPushLoop_RunWithWakeQueuesChange(t *testing.T) {
 	})
 }
 
+func TestPushLoop_ConsecutiveFailuresBackOffCappedAndReset(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		start := time.Now()
+		var attempts []time.Duration
+		calls := 0
+		loop := &pushLoop{
+			debounce:        10 * time.Second,
+			maxRetry:        35 * time.Second,
+			dirty:           make(chan struct{}, 1),
+			floor:           make(chan time.Time),
+			after:           time.After,
+			promotionCounts: make(map[syncpkg.WatchBatchPromotionReason]int),
+			push: func(context.Context, pushReason, *syncpkg.WatchBatch) error {
+				calls++
+				attempts = append(attempts, time.Since(start))
+				if calls <= 4 {
+					return errors.New("pg down")
+				}
+				return nil
+			},
+		}
+		go loop.Run(ctx)
+
+		loop.NotifyDirty()
+		time.Sleep(12 * time.Second)
+		// Dirty signals arriving mid-backoff coalesce without shortening the delay.
+		loop.NotifyDirty()
+		time.Sleep(103 * time.Second)
+		synctest.Wait()
+
+		// Once a push succeeds, subsequent changes return to normal debounce.
+		loop.NotifyDirty()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+
+		assert.Equal(t, []time.Duration{
+			10 * time.Second,
+			20 * time.Second,
+			40 * time.Second,
+			75 * time.Second,
+			110 * time.Second,
+			125 * time.Second,
+		}, attempts)
+	})
+}
+
+func TestPushLoop_NewPushLoopWithLabelBackoffAndCap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		start := time.Now()
+		var attempts []time.Duration
+		calls := 0
+		loop, ticker := newPushLoopWithLabel(
+			"pg watch",
+			30*time.Second,
+			15*time.Minute,
+			func(context.Context, pushReason, *syncpkg.WatchBatch) error {
+				calls++
+				attempts = append(attempts, time.Since(start))
+				if calls <= 7 {
+					return errors.New("pg ping failed")
+				}
+				return nil
+			},
+		)
+		defer ticker.Stop()
+
+		loop.enqueueUnscoped(reasonStartup, nil, false)
+		loop.runNextTask(ctx, false)
+		go loop.Run(ctx)
+
+		time.Sleep(46 * time.Minute)
+		synctest.Wait()
+
+		// Post-recovery dirty uses the 30s debounce again.
+		loop.NotifyDirty()
+		time.Sleep(30 * time.Second)
+		synctest.Wait()
+
+		assert.Equal(t, []time.Duration{
+			0,
+			30 * time.Second,
+			90 * time.Second,
+			210 * time.Second,
+			450 * time.Second,
+			15*time.Minute + 30*time.Second,
+			30*time.Minute + 30*time.Second,
+			45*time.Minute + 30*time.Second,
+			46*time.Minute + 30*time.Second,
+		}, attempts)
+	})
+}
+
 func TestPushWatchFallbackCoverageMarksLoopDirty(t *testing.T) {
 	loop, _, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
 

@@ -636,6 +636,9 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	if err := b.database.RequireSourceSync(ctx); err != nil {
 		return storage.PushResult{}, err
 	}
+	if err := storage.CheckReachable(ctx, backend, target.Target); err != nil {
+		return storage.PushResult{}, storage.PushNotStartedError{Err: err}
+	}
 	var embedder *replicaEmbedder
 	if cfg.Embed {
 		var err error

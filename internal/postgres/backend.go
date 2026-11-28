@@ -86,6 +86,33 @@ func ReplicaTarget(pg config.PGConfig) storage.ReplicaTarget {
 // negotiated by sslmode at connect time, not rejected up front.
 func (Backend) ValidateTarget(storage.ReplicaTarget) error { return nil }
 
+var _ storage.ReachableChecker = Backend{}
+
+// CheckReachable verifies PostgreSQL connectivity and push eligibility before
+// running expensive local source discovery or archive sync scans.
+func (Backend) CheckReachable(
+	ctx context.Context, target storage.ReplicaTarget,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if target.PushBatchSize != 0 {
+		return fmt.Errorf(
+			"push_batch_size is a ClickHouse setting; PostgreSQL push does not accept it (got %d)",
+			target.PushBatchSize,
+		)
+	}
+	pg, err := Open(ctx, target.URL, target.Schema, target.AllowInsecure)
+	if err != nil {
+		return err
+	}
+	if err := RejectHostedPush(ctx, pg); err != nil {
+		_ = pg.Close()
+		return err
+	}
+	return pg.Close()
+}
+
 func (Backend) NewPusher(
 	ctx context.Context, target storage.ReplicaTarget, local *db.DB,
 	opts storage.PusherOptions,

@@ -284,10 +284,16 @@ func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 }
 
 func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-	database := s.db.(*db.DB)
-	s.ensurePricing = func(_ context.Context, got *db.DB) error {
-		require.Same(t, database, got)
+	f := newSyncRouteFixture(t)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+	srv := New(f.srv.cfg, f.db, engine, WithReplicas(stubReplica{
+		newPusher: func() (storage.Pusher, error) {
+			return nil, errors.New("connect failed")
+		},
+	}))
+	srv.ensurePricing = func(_ context.Context, got *db.DB) error {
+		require.Same(t, f.db, got)
 		require.NoError(t, got.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",
 			InputPerMTok:  money.MustParseDollars("2"),
@@ -299,21 +305,79 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/push/pg",
-		strings.NewReader(`{"full":false,"replica":{"url":"postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable","schema":"agentsview","machine_name":"test","allow_insecure":false}}`),
+		strings.NewReader(`{"full":false,"replica":{"url":"postgres://127.0.0.1:5432/test?sslmode=disable","schema":"agentsview","machine_name":"test","allow_insecure":false}}`),
 	)
 	req.Host = "127.0.0.1:0"
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, req)
+	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code,
 		"body: %s", w.Body.String())
-	rate, err := database.GetModelPricing("new-model")
+	rate, err := f.db.GetModelPricing("new-model")
 	require.NoError(t, err)
 	require.NotNil(t, rate)
 	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
+}
+
+func TestPGPushPreflightRejectsUnreachableTargetBeforeDiscoveryAndSync(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		full   bool
+		accept string
+	}{
+		{name: "incremental/json", full: false, accept: "application/json"},
+		{name: "incremental/sse", full: false, accept: "text/event-stream"},
+		{name: "full/json", full: true, accept: "application/json"},
+		{name: "full/sse", full: true, accept: "text/event-stream"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runnerCalls := 0
+			pricingCalls := 0
+			f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+				context.Context, func(syncpkg.Progress),
+			) (syncpkg.SyncStats, error) {
+				runnerCalls++
+				return syncpkg.SyncStats{}, nil
+			}))
+			f.writeClaudeSession(t, "proj/uningested.jsonl", "must not be scanned")
+			f.srv.ensurePricing = func(context.Context, *db.DB) error {
+				pricingCalls++
+				return nil
+			}
+
+			w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/push/pg",
+				map[string]any{
+					"full": tc.full,
+					"replica": map[string]any{
+						"url":            "postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable",
+						"schema":         "agentsview",
+						"machine_name":   "test",
+						"allow_insecure": false,
+					},
+				},
+				withAccept(tc.accept),
+			)
+
+			payload := w.Body.String()
+			if tc.accept == "text/event-stream" {
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", payload)
+				require.Contains(t, payload, "event: error\n")
+				_, payload, _ = strings.Cut(payload, "data: ")
+			} else {
+				require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", payload)
+			}
+			var body pushErrorResponse
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &body))
+			assert.Contains(t, body.Error, "pg ping")
+			assert.False(t, body.PushStarted)
+			assert.Zero(t, runnerCalls, "unreachable target must skip worker resync")
+			assert.Zero(t, pricingCalls, "unreachable target must skip pricing refresh")
+			assertSessionCount(t, f.db, 0)
+		})
+	}
 }
 
 func TestSyncBrowserRouteIsSSEOnly(t *testing.T) {
@@ -868,20 +932,28 @@ func TestValidatePushWatchScopeAcceptsConfiguredAndProviderWatchRoots(t *testing
 // on-disk session must not land in the archive).
 func TestPGPushFullRoutesResyncThroughWorkerRunner(t *testing.T) {
 	runnerCalls := 0
-	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
-		context.Context, func(syncpkg.Progress),
-	) (syncpkg.SyncStats, error) {
-		runnerCalls++
-		return syncpkg.SyncStats{}, nil
-	}))
+	f := newSyncRouteFixture(t)
+	srv := New(f.srv.cfg, f.db, nil,
+		WithReplicas(stubReplica{
+			newPusher: func() (storage.Pusher, error) {
+				return nil, errors.New("connect failed")
+			},
+		}),
+		WithLocalResyncRunner(func(
+			context.Context, func(syncpkg.Progress),
+		) (syncpkg.SyncStats, error) {
+			runnerCalls++
+			return syncpkg.SyncStats{}, nil
+		}),
+	)
 	f.writeClaudeSession(t, "proj/session.jsonl", "full push worker routing")
-	f.srv.ensurePricing = func(context.Context, *db.DB) error { return nil }
+	srv.ensurePricing = func(context.Context, *db.DB) error { return nil }
 
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/push/pg",
+	w := serveJSON(t, srv.Handler(), http.MethodPost, "/api/v1/push/pg",
 		map[string]any{
 			"full": true,
 			"replica": map[string]any{
-				"url":            "postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable",
+				"url":            "postgres://127.0.0.1:5432/test?sslmode=disable",
 				"schema":         "agentsview",
 				"machine_name":   "test",
 				"allow_insecure": false,
@@ -889,7 +961,7 @@ func TestPGPushFullRoutesResyncThroughWorkerRunner(t *testing.T) {
 		})
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code,
-		"the push itself fails against the unreachable target; body: %s",
+		"the push itself fails after connect; body: %s",
 		w.Body.String())
 	assert.Equal(t, 1, runnerCalls,
 		"a full push must run the worker-backed resync pass")
@@ -1040,7 +1112,17 @@ func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
 // stubReplica is a PostgreSQL replica whose pusher the test supplies.
 type stubReplica struct {
 	postgres.Backend
-	newPusher func() (storage.Pusher, error)
+	checkReachable func() error
+	newPusher      func() (storage.Pusher, error)
+}
+
+func (r stubReplica) CheckReachable(
+	context.Context, storage.ReplicaTarget,
+) error {
+	if r.checkReachable != nil {
+		return r.checkReachable()
+	}
+	return nil
 }
 
 func (r stubReplica) NewPusher(

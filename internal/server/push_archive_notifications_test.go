@@ -74,7 +74,19 @@ func TestDaemonArchivePushDoesNotBypassRequiredRebuild(t *testing.T) {
 				opts = append(opts, withStaleDB())
 			}
 			f := newSyncRouteFixture(t, opts...)
-			response := serveJSON(t, f.handler, http.MethodPost, "/api/v1/push/pg", map[string]any{
+			srv := New(f.srv.cfg, f.db, nil,
+				WithReplicas(stubReplica{
+					newPusher: func() (storage.Pusher, error) {
+						return archiveSnapshotPusher{}, nil
+					},
+				}),
+				WithLocalResyncRunner(func(
+					context.Context, func(syncpkg.Progress),
+				) (syncpkg.SyncStats, error) {
+					return syncpkg.SyncStats{}, errors.New("rebuild temporarily unavailable")
+				}),
+			)
+			response := serveJSON(t, srv.Handler(), http.MethodPost, "/api/v1/push/pg", map[string]any{
 				"full": tt.full, "no_source_sync": true,
 				"replica": map[string]any{
 					"url":          "postgres://127.0.0.1:5432/test?sslmode=disable",

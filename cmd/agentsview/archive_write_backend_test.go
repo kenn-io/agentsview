@@ -155,6 +155,16 @@ func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T)
 		})
 }
 
+type reachableTestReplica struct {
+	storage.Replica
+}
+
+func (reachableTestReplica) CheckReachable(
+	context.Context, storage.ReplicaTarget,
+) error {
+	return nil
+}
+
 func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
 	backend.ensurePricing = func(_ context.Context, database *db.DB) error {
@@ -167,7 +177,7 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	}
 
 	_, err := backend.ReplicaPush(
-		t.Context(), pgReplica{},
+		t.Context(), reachableTestReplica{pgReplica{}},
 		storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
 		ReplicaPushConfig{}, nil, nil,
 	)
@@ -177,6 +187,48 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rate)
 	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
+}
+
+func TestLocalPGPushPreflightStopsBeforeLocalSync(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	syncCalls := 0
+	original := coordinateLocalSyncRunner
+	coordinateLocalSyncRunner = func(
+		context.Context,
+		config.Config,
+		*db.DB,
+		bool,
+		syncpkg.ProgressFunc,
+		bool,
+		func() (syncpkg.RebuildOptions, syncpkg.RebuildCleanup, error),
+		func(bool, bool) error,
+	) (bool, syncpkg.SyncStats, error) {
+		syncCalls++
+		return false, syncpkg.SyncStats{}, nil
+	}
+	t.Cleanup(func() { coordinateLocalSyncRunner = original })
+
+	pricingCalls := 0
+	backend.ensurePricing = func(context.Context, *db.DB) error {
+		pricingCalls++
+		return nil
+	}
+
+	_, err := backend.ReplicaPush(
+		t.Context(), pgReplica{},
+		storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+			URL:    unreachablePGURL,
+			Schema: "agentsview",
+		}},
+		ReplicaPushConfig{}, nil, nil,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg ping")
+	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
+	assert.True(t, notStarted, "unreachable preflight must report push not started")
+	assert.Zero(t, syncCalls, "unreachable target must fail before local discovery/sync")
+	assert.Zero(t, pricingCalls, "unreachable target must fail before pricing refresh")
 }
 
 func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
@@ -220,7 +272,7 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 	var err error
 	out := captureStdout(t, func() {
 		_, err = backend.ReplicaPush(
-			t.Context(), pgReplica{},
+			t.Context(), reachableTestReplica{pgReplica{}},
 			storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
 			ReplicaPushConfig{}, nil, nil,
 		)
@@ -254,7 +306,7 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredRebuildWithOfflineAttachme
 	var err error
 	out := captureStdout(t, func() {
 		_, err = backend.ReplicaPush(
-			t.Context(), pgReplica{},
+			t.Context(), reachableTestReplica{pgReplica{}},
 			storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
 			ReplicaPushConfig{}, nil, nil,
 		)

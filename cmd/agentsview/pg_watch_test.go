@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/archivepush"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -919,4 +921,84 @@ func TestPusherKeepsRewriteRequestUntilAFullPushStarts(t *testing.T) {
 		rewrite = append(rewrite, opts.RewriteUnchanged)
 	}
 	assert.Equal(t, []bool{false, true, true, false}, rewrite)
+}
+
+func TestArchiveWriteBackendPGWatchBacksOffAndResets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		dataDir := t.TempDir()
+		dbPath := filepath.Join(dataDir, "sessions.db")
+		dbtest.OpenTestDBAt(t, dbPath)
+
+		start := time.Now()
+		var attempts []time.Duration
+		calls := 0
+		var loopRef *pushLoop
+
+		backend := newDaemonArchiveWriteBackendForTest(
+			config.Config{DataDir: dataDir, DBPath: dbPath},
+			"http://127.0.0.1:0",
+		)
+		backend.watchHooks = &archivePushWatchHooks{
+			startArchiveNotifications: func(context.Context, func()) (func(), func()) {
+				return func() {}, func() {}
+			},
+			newLoop: func(
+				label string, debounce, interval time.Duration,
+				push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
+			) (*pushLoop, func()) {
+				loop, ticker := newPushLoopWithLabel(label, debounce, interval, push)
+				loopRef = loop
+				return loop, ticker.Stop
+			},
+			replicaPush: func(_ context.Context, reason pushReason, _ ReplicaPushConfig) (storage.PushResult, error) {
+				if reason == reasonShutdown {
+					return storage.PushResult{}, nil
+				}
+				calls++
+				attempts = append(attempts, time.Since(start))
+				if calls <= 4 {
+					return storage.PushResult{}, storage.PushNotStartedError{
+						Err: errors.New("pg ping: connection refused"),
+					}
+				}
+				return storage.PushResult{SessionsPushed: 1}, nil
+			},
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- backend.ReplicaPushWatch(
+				ctx, pgReplica{},
+				storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+					URL: "postgres://user:pass@host/db",
+				}},
+				ReplicaPushConfig{}, nil, nil,
+				10*time.Second, 35*time.Second,
+			)
+		}()
+
+		// Wait for startup failure at t=0 + 3 backed-off retries (10s, 30s, 65s) + recovery (100s).
+		time.Sleep(105 * time.Second)
+		synctest.Wait()
+
+		// After recovery, an archive notification uses normal 10s debounce (105s+10s=115s).
+		loopRef.NotifyArchiveChanged()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+
+		cancel()
+		require.NoError(t, receiveArchiveTest(t, done))
+
+		assert.Equal(t, []time.Duration{
+			0,
+			10 * time.Second,
+			30 * time.Second,
+			65 * time.Second,
+			100 * time.Second,
+			115 * time.Second,
+		}, attempts)
+	})
 }
