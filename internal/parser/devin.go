@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"github.com/tidwall/gjson"
 )
 
@@ -320,15 +320,7 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 		if !os.IsNotExist(err) {
 			return nil, nil, newDevinTranscriptError("stat", err)
 		}
-		fallbackErr := newDevinTranscriptError("missing", nil)
-		sess, msgs, ok, err := parseDevinSessionFromMessageNodes(ctx, dbPath, rawSessionID, machine, meta)
-		if err == nil && ok {
-			return sess, msgs, nil
-		}
-		if err != nil {
-			return nil, nil, fallbackErr
-		}
-		return nil, nil, fallbackErr
+		return parseDevinSessionFromMessageNodes(ctx, dbPath, rawSessionID, machine, meta)
 	}
 
 	data, err := os.ReadFile(transcriptPath)
@@ -410,13 +402,13 @@ func parseDevinSession(ctx context.Context, dbPath, rawSessionID, machine string
 func parseDevinSessionFromMessageNodes(ctx context.Context,
 	dbPath, rawSessionID, machine string,
 	meta *DevinSessionMeta,
-) (*ParsedSession, []ParsedMessage, bool, error) {
+) (*ParsedSession, []ParsedMessage, error) {
 	rows, err := listDevinMessageNodes(ctx, dbPath, rawSessionID)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	if len(rows) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil
 	}
 
 	model := metaValue(meta, func(m *DevinSessionMeta) string { return m.Model })
@@ -434,7 +426,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 	for _, row := range chain {
 		msg, ok, err := parseDevinDBMessageNode(ctx, rawSessionID, row, len(messages), model)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, err
 		}
 		if !ok {
 			continue
@@ -454,7 +446,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 		}
 	}
 	if len(messages) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil
 	}
 
 	startedAt := firstNonZeroTime(
@@ -471,7 +463,7 @@ func parseDevinSessionFromMessageNodes(ctx context.Context,
 	devinApplyFileInfoTimes(&fileInfo, meta, endedAt)
 	sess := buildDevinParsedSession(ctx, meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
 	accumulateMessageTokenUsage(sess, messages)
-	return sess, messages, true, nil
+	return sess, messages, nil
 }
 
 // devinMainChainRows returns the message-node rows along the session's main
@@ -528,10 +520,34 @@ type devinMessageNodeRow struct {
 	CreatedAt    int64
 }
 
+// Keep the original cause for errors.Is/As, but never log a driver-supplied
+// path or the source value that database/sql quotes in conversion errors.
+type devinMessageNodesError struct {
+	op    string
+	cause error
+}
+
+func (e *devinMessageNodesError) Unwrap() error { return e.cause }
+
+func (e *devinMessageNodesError) Error() string {
+	msg := e.op + " devin message_nodes"
+	if dbErr, ok := errors.AsType[sqlite3.Error](e.cause); ok {
+		// SQLite's message names schema objects but never the database
+		// path or bound values; the path comes only from openDevinDB's wrap.
+		return msg + ": " + dbErr.Error()
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, os.ErrPermission, os.ErrNotExist} {
+		if errors.Is(e.cause, cause) {
+			return msg + ": " + cause.Error()
+		}
+	}
+	return msg
+}
+
 func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]devinMessageNodeRow, error) {
 	db, err := openDevinDB(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, &devinMessageNodesError{"opening", err}
 	}
 	defer db.Close()
 
@@ -546,7 +562,7 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 		 ORDER BY created_at ASC, row_id ASC
 	`, rawSessionID)
 	if err != nil {
-		return nil, err
+		return nil, &devinMessageNodesError{"querying", err}
 	}
 	defer rows.Close()
 
@@ -554,12 +570,12 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 	for rows.Next() {
 		var row devinMessageNodeRow
 		if err := rows.Scan(&row.RowID, &row.NodeID, &row.ParentNodeID, &row.ChatMessage, &row.CreatedAt); err != nil {
-			return nil, err
+			return nil, &devinMessageNodesError{"scanning", err}
 		}
 		nodes = append(nodes, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, &devinMessageNodesError{"iterating", err}
 	}
 	return nodes, nil
 }
