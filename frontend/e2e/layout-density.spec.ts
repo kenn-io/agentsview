@@ -68,7 +68,10 @@ test("Compact packs grouped and parallel tool rows tighter than Default", async 
 for (const layout of ["stream", "skim"]) {
   test(`keeps message actions available in ${layout} layout`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.addInitScript((value) => localStorage.setItem("agentsview-message-layout", value), layout);
+    await page.addInitScript(
+      (value) => localStorage.setItem("agentsview-message-layout", value),
+      layout,
+    );
     await serveTranscript(page, SESSION_ID, messages);
     await page.goto(`/sessions/${SESSION_ID}`);
     const card = page.locator(".message").filter({ hasText: "Run the checks" });
@@ -84,8 +87,15 @@ for (const layout of ["stream", "skim"]) {
       const range = document.createRange();
       range.selectNodeContents(content);
       const text = range.getBoundingClientRect();
-      const action = el.querySelector('[aria-label="Copy link to message"]')!.getBoundingClientRect();
-      return { textRight: text.right, actionLeft: action.left, actionRight: action.right, viewport: innerWidth };
+      const action = el
+        .querySelector('[aria-label="Copy link to message"]')!
+        .getBoundingClientRect();
+      return {
+        textRight: text.right,
+        actionLeft: action.left,
+        actionRight: action.right,
+        viewport: innerWidth,
+      };
     });
     expect(bounds.textRight).toBeLessThanOrEqual(bounds.actionLeft);
     expect(bounds.actionRight).toBeLessThanOrEqual(bounds.viewport);
@@ -110,7 +120,8 @@ test("keeps grouped-message links within the narrow viewport", async ({ page }) 
       const style = getComputedStyle(parent);
       if (!/(hidden|clip|auto|scroll)/.test(style.overflowX)) continue;
       const box = parent.getBoundingClientRect();
-      if (rect.left < box.left || rect.right > box.right) clippedBy.push({ left: box.left, right: box.right });
+      if (rect.left < box.left || rect.right > box.right)
+        clippedBy.push({ left: box.left, right: box.right });
     }
     return { left: rect.left, right: rect.right, viewport: innerWidth, clippedBy };
   });

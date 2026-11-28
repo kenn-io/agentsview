@@ -64,15 +64,18 @@ describe("session search scope", () => {
   });
 
   it("keeps hidden thinking out of search for a linked visible tool group", () => {
-    const tool = (ordinal: number) => message(ordinal, "[Thinking]\nprivate thought\n[/Thinking]", {
-      has_thinking: true,
-      has_tool_use: true,
-      tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
-    });
+    const tool = (ordinal: number) =>
+      message(ordinal, "[Thinking]\nprivate thought\n[/Thinking]", {
+        has_thinking: true,
+        has_tool_use: true,
+        tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+      });
     const linked = tool(1);
     const other = tool(2);
     const result = scope([linked, other], { ...filtered(["tool"]), revealOrdinal: 1 });
-    expect(result.items.map((item) => [item.kind, item.ordinals])).toEqual([["tool-group", [1, 2]]]);
+    expect(result.items.map((item) => [item.kind, item.ordinals])).toEqual([
+      ["tool-group", [1, 2]],
+    ]);
     expect(result.allowsBlock(linked, "tool-input")).toBe(true);
     expect(result.allowsBlock(linked, "thinking")).toBe(false);
   });
