@@ -332,12 +332,25 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("lands on a later tool-group member", async () => {
-    const tool = (ordinal: number) => ({ ...makeMessage(ordinal), role: "assistant", content: "", content_length: 0, has_tool_use: true, tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }] });
+    const tool = (ordinal: number) => ({
+      ...makeMessage(ordinal),
+      role: "assistant",
+      content: "",
+      content_length: 0,
+      has_tool_use: true,
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+    });
     messages.messages = [makeMessage(10), tool(11), tool(12)];
     setVirtualRows(2);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      const top = this.matches('[data-message-ordinal="12"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const top = this.matches('[data-message-ordinal="12"]')
+        ? 260
+        : this.matches(".virtual-row")
+          ? 40
+          : 0;
       return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
     });
     component = mount(MessageList, { target: document.body });

@@ -47,7 +47,9 @@ export interface SearchView {
 }
 
 export function linkedOrdinal(sessionId: string | null): number | undefined {
-  return sessionId && ui.linkedMessage?.sessionId === sessionId ? ui.linkedMessage.ordinal : undefined;
+  return sessionId && ui.linkedMessage?.sessionId === sessionId
+    ? ui.linkedMessage.ordinal
+    : undefined;
 }
 
 const EMPTY_MATCHES: Match[] = [];

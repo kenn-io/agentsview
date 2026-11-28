@@ -659,7 +659,12 @@ class UIStore {
   }
 
   scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
-    if (this.linkedMessage && (this.linkedMessage.ordinal !== ordinal || (sessionId && this.linkedMessage.sessionId !== sessionId))) this.linkedMessage = null;
+    if (
+      this.linkedMessage &&
+      (this.linkedMessage.ordinal !== ordinal ||
+        (sessionId && this.linkedMessage.sessionId !== sessionId))
+    )
+      this.linkedMessage = null;
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;

@@ -6,7 +6,14 @@ function setURL(path: string) {
 }
 
 describe("parseMessageOrdinal", () => {
-  it.each([["0", 0], ["3", 3], ["3abc", undefined], ["last", undefined], ["-1", undefined], ["9007199254740992", undefined]])("parses %s", (value, expected) => {
+  it.each([
+    ["0", 0],
+    ["3", 3],
+    ["3abc", undefined],
+    ["last", undefined],
+    ["-1", undefined],
+    ["9007199254740992", undefined],
+  ])("parses %s", (value, expected) => {
     expect(parseMessageOrdinal(value as string)).toBe(expected);
   });
 });

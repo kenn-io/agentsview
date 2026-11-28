@@ -28,18 +28,21 @@ describe("UIStore", () => {
     ui.followLatestRequest = 0;
   });
 
-  it.each(["selection", "filter", "mode", "follow"])('dismisses a linked reveal on %s', (change) => {
-    ui.showAllBlocks();
-    ui.setTranscriptMode("normal");
-    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
-    if (change === "selection") ui.selectOrdinal(2);
-    if (change === "filter") ui.toggleBlock("thinking");
-    if (change === "mode") ui.setTranscriptMode("focused");
-    if (change === "follow") ui.setFollowLatest(true);
-    expect(ui.linkedMessage).toBeNull();
-    ui.showAllBlocks();
-    ui.setTranscriptMode("normal");
-  });
+  it.each(["selection", "filter", "mode", "follow"])(
+    "dismisses a linked reveal on %s",
+    (change) => {
+      ui.showAllBlocks();
+      ui.setTranscriptMode("normal");
+      ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+      if (change === "selection") ui.selectOrdinal(2);
+      if (change === "filter") ui.toggleBlock("thinking");
+      if (change === "mode") ui.setTranscriptMode("focused");
+      if (change === "follow") ui.setFollowLatest(true);
+      expect(ui.linkedMessage).toBeNull();
+      ui.showAllBlocks();
+      ui.setTranscriptMode("normal");
+    },
+  );
 
   it("keeps a reveal during automatic link corrections", () => {
     ui.showAllBlocks();

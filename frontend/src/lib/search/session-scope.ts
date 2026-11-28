@@ -151,7 +151,9 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
       ? undefined
       : baseMessages.find((message) => message.ordinal === input.revealOrdinal);
   const revealBlocks =
-    !!revealed && (!normalItems.some((item) => item.ordinals.includes(revealed.ordinal)) || !isVisible(revealed.role === "user" ? "user" : "assistant"));
+    !!revealed &&
+    (!normalItems.some((item) => item.ordinals.includes(revealed.ordinal)) ||
+      !isVisible(revealed.role === "user" ? "user" : "assistant"));
   let revealedItem: DisplayItem | undefined;
   if (revealed && !items.some((item) => item.ordinals.includes(revealed.ordinal))) {
     revealedItem = buildDisplayItems([revealed])[0]!;
@@ -163,7 +165,8 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const revealedVisible = (message: Message, type: BlockType): boolean =>
     revealBlocks &&
     message === revealed &&
-    ((revealedItem?.kind === "message" || !revealedItem) ||
+    (revealedItem?.kind === "message" ||
+      !revealedItem ||
       (type === "tool" && revealedItem?.kind === "tool-group"));
 
   const messages: Message[] = [];

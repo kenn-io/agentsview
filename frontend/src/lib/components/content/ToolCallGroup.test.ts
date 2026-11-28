@@ -42,12 +42,21 @@ describe("ToolCallGroup", () => {
   it("copies links for each member and still copies the group", async () => {
     copyMock.mockClear();
     const messages = [makeToolMessage(7), makeToolMessage(9)];
-    const component = mount(ToolCallGroup, { target: document.body, props: { messages, timestamp: messages[0]!.timestamp } });
+    const component = mount(ToolCallGroup, {
+      target: document.body,
+      props: { messages, timestamp: messages[0]!.timestamp },
+    });
     await tick();
     for (const ordinal of [7, 9]) {
-      document.querySelector<HTMLButtonElement>(`[data-message-ordinal="${ordinal}"] [aria-label="Copy link to message"]`)!.click();
+      document
+        .querySelector<HTMLButtonElement>(
+          `[data-message-ordinal="${ordinal}"] [aria-label="Copy link to message"]`,
+        )!
+        .click();
       await tick();
-      expect(copyMock).toHaveBeenLastCalledWith(`${window.location.origin}/sessions/s1?msg=${ordinal}`);
+      expect(copyMock).toHaveBeenLastCalledWith(
+        `${window.location.origin}/sessions/s1?msg=${ordinal}`,
+      );
     }
     document.querySelector<HTMLButtonElement>('[aria-label="Copy tool calls"]')!.click();
     await tick();
