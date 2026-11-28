@@ -33,7 +33,16 @@ func TestLaunchedRunID(t *testing.T) {
 		{"resume prompt", "claude -p resume the review --session-id " + id, "", id},
 		{"resume short", "claude -p -r " + id, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"continue short", "claude -c -p hello --session-id " + id, "", ""},
-		{"conflicting assistant JSON", "claude -p --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, ""},
+		{"conflicting assistant JSON", "claude -p --output-format json --session-id " + id, `{"type":"result","session_id":"` + other + `"}`, ""},
+		{"plain Claude output", "claude -p hello", `{"type":"result","session_id":"` + id + `"}`, ""},
+		{"Claude JSON array", "claude -p --output-format json hello", `[{"type":"result","session_id":"` + id + `"}]`, id},
+		{"conflicting Claude JSON array", "claude -p --output-format json hello", `[{"type":"system","session_id":"` + id + `"},{"type":"result","session_id":"` + other + `"}]`, ""},
+		{"wrapped Codex banner", "codex exec hello", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\n" + startup, "codex:" + id},
+		{"wrapped Codex JSON", "codex exec --json hello", "Wall time: 1 seconds\nExit code: 0\nOutput:\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
+		{"function definition", "f() { claude -p --session-id " + id + "; }", "", ""},
+		{"dynamic resume", "codex exec $mode " + id, startup, ""},
+		{"dynamic prompt", `claude -p --session-id ` + id + ` -- "$prompt"`, "", id},
+		{"dynamic option", `claude -p "$option" --session-id ` + id, "", ""},
 		{"duplicate flags", "claude -p --session-id " + id + " --session-id " + other, "", ""},
 		{"unrelated json", "claude -p hello", `{"type":"message","session_id":"` + id + `"}`, ""},
 		{"quoted text", `echo 'codex exec hello'`, startup, ""},
@@ -45,4 +54,8 @@ func TestLaunchedRunID(t *testing.T) {
 			assert.Equal(t, tt.want, launchedRunID(t.Context(), tt.command, tt.output))
 		})
 	}
+}
+
+func TestHasLaunchedOutputIDArray(t *testing.T) {
+	assert.True(t, hasLaunchedOutputID(`[{"type":"result","session_id":"12345678-1234-1234-1234-123456789abc"}]`))
 }

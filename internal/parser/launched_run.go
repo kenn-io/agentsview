@@ -88,6 +88,8 @@ func launchedRunArgs(agent string, words []string) (ids map[string]bool, jsonEve
 			}
 		case "--json":
 			jsonEvents = true
+		case "--output-format":
+			jsonEvents = agent == "claude" && (value == "json" || value == "stream-json")
 		case "-r", "--resume", "-c", "--continue":
 			resumed = resumed || agent == "claude"
 		}
@@ -104,7 +106,7 @@ func launchedRunID(ctx context.Context, input, output string) string {
 	output = launchedRunOutput(output)
 	ids := map[string]bool{}
 	launches, prefix := 0, ""
-	unsafeOutput, codexJSON := false, false
+	unsafeOutput, jsonOutput := false, false
 	var scan func(string, int)
 	scan = func(command string, depth int) {
 		if depth > 8 || ctx.Err() != nil {
@@ -117,6 +119,9 @@ func launchedRunID(ctx context.Context, input, output string) string {
 			return
 		}
 		syntax.Walk(file, func(node syntax.Node) bool {
+			if _, ok := node.(*syntax.FuncDecl); ok {
+				return false
+			}
 			call, ok := node.(*syntax.CallExpr)
 			if !ok {
 				return true
@@ -126,7 +131,7 @@ func launchedRunID(ctx context.Context, input, output string) string {
 				scan(inner, depth+1)
 				return false
 			}
-			words, _ := shellWords(args)
+			words, literal := shellWords(args)
 			name := ""
 			if len(words) > 0 {
 				name = strings.TrimSuffix(path.Base(strings.ToLower(strings.ReplaceAll(words[0], `\`, "/"))), ".exe")
@@ -138,6 +143,23 @@ func launchedRunID(ctx context.Context, input, output string) string {
 				}
 				return false
 			}
+			for i := 1; i < len(words); i++ {
+				if literal[i] {
+					if launchedFlagTakesValue(name, words[i]) && i+1 < len(words) {
+						i++
+						if !literal[i] && !quotedValue(args[i]) {
+							unsafeOutput = true
+							return false
+						}
+					}
+					continue
+				}
+				// Only a quoted argument after -- cannot change option roles.
+				if !quotedValue(args[i]) || i == 0 || words[i-1] != "--" {
+					unsafeOutput = true
+					return false
+				}
+			}
 			explicit, jsonEvents, resumed := launchedRunArgs(name, words)
 			if resumed {
 				unsafeOutput = true
@@ -145,8 +167,9 @@ func launchedRunID(ctx context.Context, input, output string) string {
 			}
 			launches++
 			if name == "codex" {
-				prefix, codexJSON = "codex:", jsonEvents
+				prefix = "codex:"
 			}
+			jsonOutput = jsonEvents
 			for id := range explicit {
 				ids[prefix+id] = true
 			}
@@ -159,7 +182,7 @@ func launchedRunID(ctx context.Context, input, output string) string {
 	if launches != 1 {
 		return ""
 	}
-	if !unsafeOutput && (prefix == "" || codexJSON || launchedOutputID.MatchString(output)) {
+	if !unsafeOutput && (jsonOutput || prefix != "" && launchedOutputID.MatchString(output)) {
 		for _, id := range launchedOutputIDs(output) {
 			if strings.HasPrefix(id, "codex:") == (prefix != "") {
 				ids[id] = true
@@ -180,7 +203,13 @@ func launchedRunOutput(text string) string {
 		Output string `json:"output"`
 	}
 	if jsonv2.Unmarshal([]byte(text), &envelope) == nil && envelope.Output != "" {
-		return envelope.Output
+		text = envelope.Output
+	}
+	if i := strings.Index(text, "\nOutput:\n"); i >= 0 {
+		header := text[:i]
+		if strings.HasPrefix(header, "Chunk ID: ") || strings.HasPrefix(header, "Wall time: ") || strings.HasPrefix(header, "Process exited with code ") || strings.HasPrefix(header, "Exit code: ") || strings.HasPrefix(header, "Script completed\n") {
+			return text[i+len("\nOutput:\n"):]
+		}
 	}
 	return text
 }
@@ -228,7 +257,15 @@ func launchedOutputIDs(text string) []string {
 		return []string{"codex:" + strings.ToLower(match[1])}
 	}
 	var ids []string
-	for i, line := range strings.Split(text, "\n") {
+	var events []jsontext.Value
+	lines := strings.Split(text, "\n")
+	if jsonv2.Unmarshal([]byte(text), &events) == nil {
+		lines = nil
+		for _, event := range events {
+			lines = append(lines, string(event))
+		}
+	}
+	for i, line := range lines {
 		var event struct {
 			Type      string `json:"type"`
 			SessionID string `json:"session_id"`
@@ -249,6 +286,13 @@ func launchedOutputIDs(text string) []string {
 
 func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(text))) > 0
+}
+
+func annotateClaudeLaunchedRunsIfNative(ctx context.Context, messages []ParsedMessage, compatible bool) error {
+	if compatible {
+		return nil
+	}
+	return annotateClaudeLaunchedRuns(ctx, messages)
 }
 
 // annotateClaudeLaunchedRuns associates a Bash call with its own results.

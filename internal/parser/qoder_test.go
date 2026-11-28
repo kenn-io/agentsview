@@ -44,6 +44,27 @@ func TestParseQoderSession(t *testing.T) {
 	assert.Equal(t, 30, results[0].Messages[1].OutputTokens)
 }
 
+func TestParseQoderDoesNotLinkClaudeLaunch(t *testing.T) {
+	for _, dag := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dag=%t", dag), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "11111111-1111-4111-8111-111111111111.jsonl")
+			parent := ""
+			if dag {
+				parent = `,"uuid":"a1","parentUuid":"u1"`
+			}
+			content := `{"type":"user","uuid":"u1","message":{"role":"user","content":"hello"}}` + "\n" +
+				`{"type":"assistant"` + parent + `,"message":{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"Bash","input":{"command":"claude -p --session-id 12345678-1234-1234-1234-123456789abc"}}]}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			results, err := ParseQoderSession(path, "proj", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Len(t, results[0].Messages, 2)
+			require.Len(t, results[0].Messages[1].ToolCalls, 1)
+			assert.Empty(t, results[0].Messages[1].ToolCalls[0].SubagentSessionID)
+		})
+	}
+}
+
 func TestParseQoderSessionSidecarMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "proj", "22222222-2222-4222-8222-222222222222.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

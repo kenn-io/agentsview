@@ -98,6 +98,7 @@ var (
 // Claude transcript pipeline.
 type claudeParseOptions struct {
 	persistedOutputPathResolver func(string) (string, bool)
+	foreign                     bool
 	// siblingLineage enables background-fork lineage resolution
 	// against sibling transcripts in the same directory.
 	siblingLineage bool

@@ -496,6 +496,7 @@ func claudeParseFile(
 	}
 
 	meta := claudeSessionMeta{
+		foreign:         opts.foreign,
 		sourceSessionID: sourceSessionID,
 		sourceVersion:   sourceVersion,
 		cwd:             cwd,
@@ -1612,6 +1613,7 @@ func extractMessagesFrom(
 // claudeSessionMeta holds source metadata extracted during the
 // main parse loop and applied to all resulting ParsedSessions.
 type claudeSessionMeta struct {
+	foreign         bool
 	sourceSessionID string
 	sourceVersion   string
 	cwd             string
@@ -1658,7 +1660,7 @@ func parseLinear(
 	if err := annotateSubagentSessionsContext(ctx, messages, subagentMap); err != nil {
 		return nil, err
 	}
-	if err := annotateClaudeLaunchedRuns(ctx, messages); err != nil {
+	if err := annotateClaudeLaunchedRunsIfNative(ctx, messages, meta.foreign); err != nil {
 		return nil, err
 	}
 
@@ -1885,7 +1887,7 @@ func parseDAG(
 		); err != nil {
 			return nil, nil, err
 		}
-		if err := annotateClaudeLaunchedRuns(ctx, messages); err != nil {
+		if err := annotateClaudeLaunchedRunsIfNative(ctx, messages, meta.foreign); err != nil {
 			return nil, nil, err
 		}
 

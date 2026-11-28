@@ -321,8 +321,8 @@ func parseCoworkSession(
 	meta := readCoworkMeta(metaPath)
 	project := coworkProjectName(meta)
 
-	results, excluded, err := claudeParseWithExclusions(
-		ctx, transcriptPath, project, machine,
+	results, excluded, err := claudeParseFile(
+		ctx, transcriptPath, project, machine, claudeParseOptions{foreign: true},
 	)
 	if err != nil {
 		return nil, nil, err
