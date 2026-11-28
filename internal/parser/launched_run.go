@@ -291,15 +291,20 @@ func ShellInputCommands(input string) ([]string, bool) {
 	return []string{payload.Cmd}, true
 }
 
+func launchedBannerIDs(text string) []string {
+	var ids []string
+	for _, match := range launchedOutputBanners.FindAllStringSubmatch(text, -1) {
+		ids = append(ids, "codex:"+strings.ToLower(match[1]))
+	}
+	return ids
+}
+
 // launchedOutputIDs reads Codex startup banners and structured events.
 func launchedOutputIDs(text string) []string {
-	var ids []string
 	if launchedOutputID.MatchString(text) {
-		for _, match := range launchedOutputBanners.FindAllStringSubmatch(text, -1) {
-			ids = append(ids, "codex:"+strings.ToLower(match[1]))
-		}
-		return ids
+		return launchedBannerIDs(text)
 	}
+	var ids []string
 	var events []jsontext.Value
 	lines := strings.Split(text, "\n")
 	if jsonv2.Unmarshal([]byte(text), &events) == nil {
