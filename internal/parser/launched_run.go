@@ -328,7 +328,7 @@ func launchedResultFailed(output string) bool {
 		output = launchedRunOutput(output)
 	}
 	header, _, ok := strings.Cut(output, "\nOutput:\n")
-	if !ok || !(strings.HasPrefix(header, "Chunk ID: ") || strings.HasPrefix(header, "Wall time: ") || strings.HasPrefix(header, "Process exited with code ") || strings.HasPrefix(header, "Exit code: ")) {
+	if !ok || !strings.HasPrefix(header, "Chunk ID: ") && !strings.HasPrefix(header, "Wall time: ") && !strings.HasPrefix(header, "Process exited with code ") && !strings.HasPrefix(header, "Exit code: ") {
 		return false
 	}
 	match := launchedExitCode.FindStringSubmatch(header)
