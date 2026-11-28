@@ -414,6 +414,32 @@ afterEach(() => {
 });
 
 describe("SessionBreadcrumb", () => {
+  it("shows host actions while server version is unavailable", async () => {
+    sync.serverVersion = null;
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("codex"), onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".resume-btn")).not.toBeNull();
+  });
+  it("does not build a local command when server version is unavailable", async () => {
+    sync.serverVersion = null;
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("unavailable"));
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item"))
+      .find((button) => button.textContent?.includes("Default terminal"))
+      ?.click();
+    await flushPromises();
+    expect(sessionsService.postApiV1SessionsByIdResume).toHaveBeenCalled();
+    expect(copyToClipboard).not.toHaveBeenCalled();
+  });
   it("hides host actions in a copied archive", async () => {
     sync.serverVersion = { host_paths_detached: true } as NonNullable<typeof sync.serverVersion>;
     mount(SessionBreadcrumb, {

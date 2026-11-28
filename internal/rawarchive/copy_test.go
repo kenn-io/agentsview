@@ -182,6 +182,11 @@ func TestCopyUsageCache(t *testing.T) {
 			require.NoError(t, copied.QueryRowContext(ctx, `SELECT sum(input_tokens), sum(output_tokens) FROM usage_facts`).Scan(&input, &output))
 			assert.Equal(t, 330, input)
 			assert.Equal(t, 100, output)
+			for _, table := range []string{"usage_rollup_installs", "usage_day_totals"} {
+				var paths int
+				require.NoError(t, copied.QueryRowContext(ctx, "SELECT count(*) FROM "+table+" WHERE project = ?", "/work/api").Scan(&paths))
+				assert.Zero(t, paths, table)
+			}
 			require.NoError(t, copied.Close())
 			assert.NoFileExists(t, filepath.Join(dest, "usage-cache-v999-unrelated.db"))
 			copyDB, err := db.OpenIsolatedContext(ctx, filepath.Join(dest, "sessions.db"))

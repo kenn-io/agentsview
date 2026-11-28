@@ -93,6 +93,9 @@ func TestCommitLinksNonCommitCandidatesSkipResultReadsAndDelete(t *testing.T) {
 			if op == sqlite3.SQLITE_READ && ((table == "tool_calls" && column == "result_content") || (table == "tool_result_events" && column == "content")) {
 				return sqlite3.SQLITE_DENY
 			}
+			if op == sqlite3.SQLITE_READ && table == "archive_metadata" {
+				return sqlite3.SQLITE_DENY
+			}
 			if op == sqlite3.SQLITE_DELETE && table == "commit_links" {
 				return sqlite3.SQLITE_DENY
 			}

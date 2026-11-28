@@ -155,7 +155,7 @@ export class SessionOpeners {
   // could neither launch nor return one. The model comes from the session
   // the request was for, even if another session opened while it ran.
   private async copyLocalResumeCommand(session: Session) {
-    if (!sync.hostSessionActionsAvailable) return;
+    if (sync.serverVersion === null || !sync.hostSessionActionsAvailable) return;
     const cmd = buildResumeCommand(session.agent, session.id, {
       model: messagesStore.resumeModelFor(session.id),
     });

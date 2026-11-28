@@ -21,6 +21,17 @@ import (
 	"go.kenn.io/docbank/docbank"
 )
 
+func TestArchiveCopyReportsDestination(t *testing.T) {
+	source := testDataDir(t)
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(source, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	destination := filepath.Join(t.TempDir(), "copy")
+	output, err := executeCommand(newRootCommand(), "archive", "copy", destination)
+	require.NoError(t, err)
+	assert.Equal(t, destination+"\n", output)
+}
+
 func TestArchiveExtractCaptureAfterRestore(t *testing.T) {
 	ctx := t.Context()
 	run := func(args ...string) (string, error) {

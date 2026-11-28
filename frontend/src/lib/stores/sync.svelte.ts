@@ -113,7 +113,7 @@ class SyncStore {
   }
 
   get hostSessionActionsAvailable(): boolean {
-    return this.serverVersion !== null && this.serverVersion.host_paths_detached !== true;
+    return this.serverVersion?.host_paths_detached !== true;
   }
 
   private watchEventSource: LiveSource | null = null;

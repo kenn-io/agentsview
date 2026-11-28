@@ -144,6 +144,22 @@ describe("registerShortcuts", () => {
     },
   );
 
+  it("does not build a local resume command when server version is unavailable", async () => {
+    sync.serverVersion = null;
+    sessions.sessions = [
+      { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+    ];
+    sessions.activeSessionId = "claude:copied";
+    const resume = vi
+      .spyOn(SessionsService, "postApiV1SessionsByIdResume")
+      .mockRejectedValue(new Error("unavailable"));
+    fireKey("c");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resume).toHaveBeenCalled();
+    expect(copyToClipboard).not.toHaveBeenCalled();
+  });
+
   describe("remote c copy", () => {
     it.each([
       ["claude", false, "cd '/remote/project' && claude --resume abc-123"],

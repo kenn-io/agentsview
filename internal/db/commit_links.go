@@ -473,10 +473,6 @@ func bumpIncrementalTranscriptRevisionTx(ctx context.Context, tx transactionQuer
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {
-	var detached bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
-		return err
-	}
 	var calls []commitCall
 	var cwd string
 	load := func(filter string, args ...any) error {
@@ -594,7 +590,14 @@ func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error 
 	if _, err := tx.Exec(`DELETE FROM commit_links WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}
-	for _, l := range commitLinks(calls, cwd) {
+	links := commitLinks(calls, cwd)
+	var detached bool
+	if len(links) > 0 {
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
+			return err
+		}
+	}
+	for _, l := range links {
 		if detached {
 			l.Repository = ""
 		}

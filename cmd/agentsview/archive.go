@@ -35,11 +35,15 @@ func newArchiveCommand() *cobra.Command {
 		if err := db.RecoverCompactManifest(cfg.DBPath); err != nil {
 			return err
 		}
-		report, err := rawarchive.Copy(cmd.Context(), rawarchive.CopyOptions{
+		_, err = rawarchive.Copy(cmd.Context(), rawarchive.CopyOptions{
 			DataDir: cfg.DataDir, Destination: args[0],
 			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories},
 		})
-		return errors.Join(err, writeArchiveJSON(cmd.OutOrStdout(), report))
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), args[0])
+		return err
 	}}
 	var captureRoots []string
 	var identityFrom string

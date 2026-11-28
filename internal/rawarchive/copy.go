@@ -89,6 +89,9 @@ func Copy(ctx context.Context, options CopyOptions) (report Report, retErr error
 		if err == nil {
 			err = rawcapture.SnapshotSQLite(ctx, cache, target, info)
 		}
+		if err == nil {
+			err = db.ClearCopiedUsageRollups(ctx, target)
+		}
 		if err != nil {
 			return report, err
 		}

@@ -256,7 +256,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
               if (cmd) void copyToClipboard(cmd);
             })
             .catch(() => {
-              if (!sync.hostSessionActionsAvailable) return;
+              if (sync.serverVersion === null || !sync.hostSessionActionsAvailable) return;
               const cmd = buildResumeCommand(session.agent, session.id, {
                 model: activeResumeModel(session.id),
               });
