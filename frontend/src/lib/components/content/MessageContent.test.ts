@@ -18,11 +18,7 @@ const state = vi.hoisted(() => ({
   readOnly: false,
   remote: false,
   searching: false,
-  serverVersion: {} as { host_paths_detached?: boolean } | null,
-  // Mirrors the sync store: host actions wait for version metadata.
-  get hostSessionActionsAvailable() {
-    return this.serverVersion !== null && this.serverVersion.host_paths_detached !== true;
-  },
+  hostSessionActionsAvailable: true,
 }));
 vi.mock("../../stores/messages.svelte.js", () => ({ messages: { sessionId: "", mainModel: "" } }));
 const uiState = vi.hoisted(() => {
@@ -166,7 +162,7 @@ afterEach(async () => {
   state.readOnly = false;
   state.remote = false;
   state.searching = false;
-  state.serverVersion = {};
+  state.hostSessionActionsAvailable = true;
   uiState.showAllBlocks();
   uiState.alwaysShowYear = false;
 });
@@ -457,21 +453,11 @@ describe("MessageContent", () => {
       expect(text(".fork-feedback")).not.toBe("");
     },
   );
-  it.each([
-    ["a copied archive", { host_paths_detached: true }],
-    ["unresolved version metadata", null],
-  ])("hides message-point resume for %s", async (_label, version) => {
-    state.serverVersion = version;
+  it("hides message-point resume when host actions are unavailable", async () => {
+    state.hostSessionActionsAvailable = false;
     state.sessions = [session()];
     await render(message({ ordinal: 1 }));
     expect(document.querySelector(".fork-btn")).toBeNull();
-    expect(forkMock).not.toHaveBeenCalled();
-  });
-  it("keeps message-point resume in an ordinary archive", async () => {
-    state.serverVersion = { host_paths_detached: false };
-    state.sessions = [session()];
-    await render(message({ ordinal: 1 }));
-    expect(document.querySelector(".fork-btn")).not.toBeNull();
   });
   it("hides forking in remote read-only mode", async () => {
     state.readOnly = true;

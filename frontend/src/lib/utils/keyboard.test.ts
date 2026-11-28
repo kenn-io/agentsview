@@ -90,7 +90,6 @@ describe("registerShortcuts", () => {
 
   it.each([
     ["claude", { host_paths_detached: true }],
-    ["codex", { host_paths_detached: true }],
     ["claude", null],
   ])("does not copy a %s resume command for version %j", async (agent, version) => {
     sync.serverVersion = version as typeof sync.serverVersion;

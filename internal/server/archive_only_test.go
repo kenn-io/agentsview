@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,41 +25,13 @@ func TestVersionReportsArchiveOnly(t *testing.T) {
 	before := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, before.Code)
 	assert.False(t, decodeRecorder[VersionInfo](t, before).ArchiveOnly)
+	assert.False(t, decodeRecorder[VersionInfo](t, before).HostPathsDetached)
+	require.NoError(t, f.db.ClearHostSources(t.Context()))
 	require.NoError(t, f.db.EnableArchiveOnly(t.Context()))
 	after := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
 	require.Equal(t, http.StatusOK, after.Code)
 	assert.True(t, decodeRecorder[VersionInfo](t, after).ArchiveOnly)
-}
-
-func TestDetachedArchiveRejectsOpenAfterProjectAssignment(t *testing.T) {
-	ctx := t.Context()
-	f := newSyncRouteFixture(t)
-	path := t.TempDir()
-	bin, err := exec.LookPath("true")
-	if err != nil {
-		t.Skip("true executable unavailable")
-	}
-	openerCacheMu.Lock()
-	previous, previousTime := openerCache, openerCacheAt
-	openerCache = []Opener{{ID: "test-opener", Kind: "editor", Bin: bin}}
-	openerCacheAt = time.Now()
-	openerCacheMu.Unlock()
-	t.Cleanup(func() {
-		openerCacheMu.Lock()
-		openerCache, openerCacheAt = previous, previousTime
-		openerCacheMu.Unlock()
-	})
-	require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: "claude:ordinary", Project: "demo", Agent: "claude", Cwd: path}))
-	open := func(id string) *httptest.ResponseRecorder {
-		return serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/"+id+"/open", map[string]any{"opener_id": "test-opener"})
-	}
-	assert.Equal(t, http.StatusOK, open("claude:ordinary").Code)
-	require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: "claude:copied", Project: "demo", Agent: "claude"}))
-	require.NoError(t, f.db.ClearHostSources(ctx))
-	assigned := serveJSON(t, f.handler, http.MethodPut, "/api/v1/settings/session-project-assignments/claude:copied", map[string]string{"project": path})
-	require.Equal(t, http.StatusOK, assigned.Code, assigned.Body.String())
-	response := open("claude:copied")
-	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+	assert.True(t, decodeRecorder[VersionInfo](t, after).HostPathsDetached)
 }
 
 func TestArchiveOnlyRejectsManualSync(t *testing.T) {

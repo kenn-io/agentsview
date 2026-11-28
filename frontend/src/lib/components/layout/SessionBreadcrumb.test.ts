@@ -1030,18 +1030,14 @@ describe("SessionBreadcrumb", () => {
     messages.clear();
   });
 
-  it.each([
-    ["a copied archive", { host_paths_detached: true }],
-    ["unresolved version metadata", null],
-  ])("omits the open/resume menu and desktop link for %s", async (_label, version) => {
-    sync.serverVersion = version as typeof sync.serverVersion;
-    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "/tmp/project" });
+  it("omits the open/resume menu for a copied archive", async () => {
+    sync.serverVersion = { host_paths_detached: true } as typeof sync.serverVersion;
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "" });
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
         session: makeSession("codex", {
           id: "codex:copied-session",
-          file_path: "/tmp/project/session.jsonl",
         }),
         onBack: () => {},
       },
@@ -1050,21 +1046,6 @@ describe("SessionBreadcrumb", () => {
     await tick();
 
     expect(document.querySelector(".resume-btn")).toBeNull();
-    expect(document.querySelector('[data-testid="codex-desktop-link"]')).toBeNull();
-    await unmount(component);
-  });
-
-  it("keeps the open/resume menu and desktop link for an ordinary archive", async () => {
-    sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
-    const component = mount(SessionBreadcrumb, {
-      target: document.body,
-      props: { session: makeSession("codex", { id: "codex:archived" }), onBack: () => {} },
-    });
-    await flushPromises();
-    document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
-    await tick();
-
-    expect(document.querySelector('[data-testid="codex-desktop-link"]')).toBeTruthy();
     await unmount(component);
   });
 

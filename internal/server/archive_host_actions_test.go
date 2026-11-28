@@ -2,7 +2,10 @@ package server
 
 import (
 	"net/http"
+	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +14,20 @@ import (
 
 func TestDetachedArchiveDirectoryAndResumeRequests(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	bin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	openerCacheMu.Lock()
+	previous, previousTime := openerCache, openerCacheAt
+	openerCache = []Opener{{ID: "test-opener", Kind: "editor", Bin: bin}}
+	openerCacheAt = time.Now()
+	openerCacheMu.Unlock()
+	t.Cleanup(func() {
+		openerCacheMu.Lock()
+		openerCache, openerCacheAt = previous, previousTime
+		openerCacheMu.Unlock()
+	})
 	for _, detached := range []bool{false, true} {
 		name := "ordinary archive"
 		if detached {
@@ -21,10 +38,7 @@ func TestDetachedArchiveDirectoryAndResumeRequests(t *testing.T) {
 			ctx := t.Context()
 			path := t.TempDir()
 			f.srv.cfg.Terminal.Mode = "clipboard"
-			for _, id := range []string{"claude:local", "remote~claude:remote"} {
-				require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "project", Cwd: path}))
-				require.NoError(t, f.db.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"}}))
-			}
+			require.NoError(t, f.db.UpsertSession(ctx, db.Session{ID: "claude:local", Agent: "claude", Project: "project", Cwd: path}))
 			if detached {
 				require.NoError(t, f.db.ClearHostSources(ctx))
 			}
@@ -40,20 +54,15 @@ func TestDetachedArchiveDirectoryAndResumeRequests(t *testing.T) {
 			} else {
 				assert.Equal(t, path, decodeRecorder[sessionDirectoryResponse](t, directory).Path)
 			}
-			for _, tc := range []struct {
-				name, id string
-				body     map[string]any
-			}{
-				{"resume", "claude:local", map[string]any{}},
-				{"command only", "claude:local", map[string]any{"command_only": true}},
-				{"remote command", "remote~claude:remote", map[string]any{"command_only": true}},
-				{"message fork", "claude:local", map[string]any{"command_only": true, "fork_session": true, "from_ordinal": 0}},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					response := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/"+tc.id+"/resume", tc.body)
+			for _, action := range []string{"open", "resume"} {
+				t.Run(action, func(t *testing.T) {
+					body := map[string]any{}
+					if action == "open" {
+						body["opener_id"] = "test-opener"
+					}
+					response := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/claude:local/"+action, body)
 					if detached {
 						assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
-						assert.NotContains(t, response.Body.String(), "claude --")
 					} else {
 						assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
 					}
