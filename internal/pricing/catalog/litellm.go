@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
 
@@ -66,7 +65,7 @@ var priorityInputThresholdRatePattern = regexp.MustCompile(
 func FetchLiteLLMPricingContext(
 	ctx context.Context,
 ) ([]ModelPricing, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newClient()
 	return fetchLiteLLMPricing(ctx, client, litellmURL)
 }
 
@@ -75,7 +74,7 @@ func FetchLiteLLMPricingContext(
 func FetchLiteLLMPricingAtRef(
 	ctx context.Context, ref string,
 ) ([]ModelPricing, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newClient()
 	return fetchLiteLLMPricing(
 		ctx,
 		client,

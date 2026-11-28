@@ -35,7 +35,9 @@ type pricingCatalogTransport struct {
 func (t pricingCatalogTransport) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
-	t.requests <- req
+	if t.requests != nil {
+		t.requests <- req
+	}
 	if t.before != nil {
 		t.before(req)
 	}
