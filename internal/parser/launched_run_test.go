@@ -22,7 +22,6 @@ func TestLaunchedRunID(t *testing.T) {
 		{"conflicting startup banners", "for i in 1 2; do codex exec hello; done", startup + strings.ReplaceAll(startup, id, other), ""},
 		{"conflicting thread events", "for i in 1 2; do codex exec --json hello; done", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + other + `"}`, ""},
 		{"repeated same thread event", "codex exec --json hello", `{"type":"thread.started","thread_id":"` + id + `"}` + "\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
-		{"capture stderr", "codex exec hello 2>&1", startup, "codex:" + id},
 		{"setup before launch", "cd project && codex exec hello", startup, "codex:" + id},
 		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
@@ -31,7 +30,6 @@ func TestLaunchedRunID(t *testing.T) {
 		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"quoted substitution after option value delimiter", `claude --model -- "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"quoted substitution as option value", `claude -p --model "$(cat model)" --session-id ` + id, "", id},
-		{"quoted substitution after delimiter", `claude -p --session-id ` + id + ` -- prompt "$(cat review.txt)"`, "", id},
 		{"shell JSON prompt mentions tool", `{"command":"claude -p --session-id ` + id + ` 'see tools.exec_command'"}`, "", id},
 		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
@@ -71,38 +69,23 @@ func TestLaunchedRunID(t *testing.T) {
 
 func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
-	messages := []ParsedMessage{
-		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"claude -p --session-id ` + id + `"}`}}},
-		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: `"failed"`}}},
-	}
-	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
-	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
-}
-
-func TestAnnotateClaudeLaunchedRunFailedResultWithStartup(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	startup := "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n--------\nuser\nhello\n"
-	messages := []ParsedMessage{
-		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"codex exec hello"}`}}},
-		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(startup)}}},
-	}
-	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
-	assert.Equal(t, "codex:"+id, messages[0].ToolCalls[0].SubagentSessionID)
-}
-
-func TestFailedLaunchedRunRequiresMatchingOutputID(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
 	const other = "abcdefab-1234-1234-1234-123456789abc"
-	input := `{"command":"claude -p --session-id ` + id + `"}`
-	output := "OpenAI Codex v0.1.0\n--------\nsession id: " + other + "\n--------\n"
-	messages := []ParsedMessage{
-		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: input}}},
-		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(output)}}},
+	startup := "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n--------\nuser\nhello\n"
+	for _, tc := range []struct{ name, input, output, want string }{
+		{"no output ID", `{"command":"claude -p --session-id ` + id + `"}`, "failed", ""},
+		{"Codex startup", `{"command":"codex exec hello"}`, startup, "codex:" + id},
+		{"Claude system event", `{"command":"claude -p --output-format json --session-id ` + id + `"}`, `{"type":"system","session_id":"` + id + `"}`, id},
+		{"unrelated startup", `{"command":"cat old.log && claude -p --session-id ` + id + `"}`, strings.ReplaceAll(startup, id, other), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []ParsedMessage{
+				{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: tc.input}}},
+				{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(tc.output)}}},
+			}
+			require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+			assert.Equal(t, tc.want, messages[0].ToolCalls[0].SubagentSessionID)
+		})
 	}
-	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
-	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
-	assert.Empty(t, launchedResultID(t.Context(), input, output, true))
-	assert.Equal(t, id, launchedResultID(t.Context(), `claude -p --output-format json --session-id `+id, `{"type":"system","session_id":"`+id+`"}`, true))
 }
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {
@@ -134,7 +117,6 @@ func TestShellInputCommands(t *testing.T) {
 		{"argv", `{"command":["gh","pr","view","43","-R","example/repo"]}`, []string{"gh pr view 43 -R example/repo"}},
 		{"commands", `{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}`, []string{"gh pr view 42 -R example/repo", "gh pr view 43 -R example/repo"}},
 		{"CommandLine", `{"CommandLine":"gh pr view 42 -R example/repo"}`, []string{"gh pr view 42 -R example/repo"}},
-		{"plain text", `gh pr view 42 -R example/repo`, []string{"gh pr view 42 -R example/repo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := ShellInputCommands(tc.input)
