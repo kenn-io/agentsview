@@ -87,6 +87,67 @@ func TestRepairMessageFTSRecoversAfterFailure(t *testing.T) {
 	})
 }
 
+func TestBackfillPRLinksRecoversAfterFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		database, err := db.Open(t.Context(), path)
+		require.NoError(t, err)
+		dbtest.SeedSession(t, database, "pr-session", "project", func(s *db.Session) {
+			s.MessageCount = 1
+			s.StartedAt = new("2025-01-15T10:00:00Z")
+		})
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "pr-session", []db.Message{
+			{SessionID: "pr-session", Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{
+				{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 77 -R example/repo"}`},
+			}},
+		}))
+		require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id='pr-session'`); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 189`)
+			return err
+		}))
+		require.NoError(t, database.Close())
+
+		database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		require.True(t, database.PRLinksBackfillPending())
+
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, raw.Close()) })
+		_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_pr_backfill BEFORE UPDATE OF pr_links ON sessions BEGIN SELECT RAISE(ABORT, 'pr backfill failed'); END`)
+		require.NoError(t, err)
+
+		failed, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			runDeferredArchiveTask(t.Context(), nil, "pull request link backfill", func(ctx context.Context) error {
+				err := database.BackfillPRLinks(ctx)
+				if err != nil {
+					close(failed)
+					<-resume
+				}
+				return err
+			})
+		}()
+		<-failed
+		assert.True(t, database.PRLinksBackfillPending())
+		_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_pr_backfill`)
+		require.NoError(t, err)
+		close(resume)
+		<-done
+		assert.False(t, database.PRLinksBackfillPending())
+
+		got, err := database.GetSession(t.Context(), "pr-session")
+		require.NoError(t, err)
+		require.Len(t, got.PRLinks, 1)
+		assert.Equal(t, "https://github.com/example/repo/pull/77", got.PRLinks[0].URL)
+	})
+}
+
 func TestRepairMessageFTSRetryStopsOnCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/shellquote"
@@ -241,25 +242,30 @@ func withoutSystemReminders(text string) string {
 	return result.String()
 }
 
-func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links []PRLink) error {
+func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links []PRLink) (bool, error) {
 	encoded := EncodePRLinks(links)
 	if encoded == stored {
-		return nil
+		return false, nil
 	}
 	_, err := tx.Exec(`UPDATE sessions SET pr_links=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, encoded, id)
-	return err
+	return err == nil, err
 }
 
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
 func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
+	_, err := refreshSessionPromptPRLinksChangedTx(ctx, tx, id)
+	return err
+}
+
+func refreshSessionPromptPRLinksChangedTx(ctx context.Context, tx transactionQueries, id string) (bool, error) {
 	var stored, structured string
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
-		return err
+		return false, err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rows.Close()
 	messages, err := scanMessages(rows)
@@ -267,11 +273,11 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 		err = closeErr
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	tools, err := storedToolCallPRLinksTx(ctx, tx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	links := parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools)
 	return writeSessionPromptPRLinksTx(tx, id, stored, links)
@@ -297,7 +303,8 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+	_, err = writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+	return err
 }
 
 // GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
@@ -313,9 +320,36 @@ func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRL
 // links found in retained prompts.
 const promptPRLinksDataVersion = 184
 
-// upgradePRLinksTx copies legacy structured links and refreshes each candidate once.
-// Older binaries may have rewritten pr_links without updating structured_pr_links.
-// Copy and refresh in the version transaction so old archives never hold derived links.
+const (
+	prLinksBackfillStateKey   = "pr_links_backfill_state"
+	prLinksBackfillVersion    = "1"
+	prLinksBackfillScopeAll   = "all"
+	prLinksBackfillScopeTools = "tools"
+	prLinksBackfillBatchSize  = 256
+)
+
+func formatPRLinksBackfillState(scope, cursor string) string {
+	return prLinksBackfillVersion + ":" + scope + ":" + cursor
+}
+
+func parsePRLinksBackfillState(raw string) (scope, cursor string, known bool) {
+	version, rest, ok := strings.Cut(raw, ":")
+	if !ok || version != prLinksBackfillVersion {
+		return "", "", false
+	}
+	scope, cursor, ok = strings.Cut(rest, ":")
+	if !ok || (scope != prLinksBackfillScopeAll && scope != prLinksBackfillScopeTools) {
+		return "", "", false
+	}
+	return scope, cursor, true
+}
+
+// upgradePRLinksTx copies legacy structured links and queues a resumable
+// PR-link backfill before user_version advances. Older binaries may have
+// rewritten pr_links without updating structured_pr_links, so copying inside
+// the version transaction keeps legacy structured links intact while the
+// derivation itself runs in batches after startup (or inline for non-daemon
+// opens).
 func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
 	if err != nil || version >= toolPRLinksDataVersion {
@@ -329,29 +363,375 @@ func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if db.usageOnlyStorage() {
 		return nil
 	}
-	candidate := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
+	var hasSessions bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions)`).Scan(&hasSessions); err != nil {
+		return fmt.Errorf("checking sessions for PR link backfill: %w", err)
+	}
+	if !hasSessions {
+		return nil
+	}
 	if version < promptPRLinksDataVersion {
-		candidate += " OR id IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO stats(key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			prLinksBackfillStateKey, formatPRLinksBackfillState(prLinksBackfillScopeAll, ""),
+		)
+	} else {
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO stats(key, value) VALUES (?, ?)`,
+			prLinksBackfillStateKey, formatPRLinksBackfillState(prLinksBackfillScopeTools, ""),
+		)
 	}
-	ids, err := sessionIDsTx(ctx, tx, candidate)
 	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
-			return fmt.Errorf("backfilling PR links: %w", err)
-		}
+		return fmt.Errorf("queueing PR link backfill: %w", err)
 	}
 	return nil
+}
+
+// PRLinksBackfillPending reports whether a deferred PR-link backfill is owed.
+func (db *DB) PRLinksBackfillPending() bool {
+	return db.prLinksBackfillPending.Load()
+}
+
+// preparePRLinksBackfill checks whether a PR-link backfill is pending and
+// either defers it for the daemon or finishes it synchronously before Open
+// returns.
+func (db *DB) preparePRLinksBackfill(ctx context.Context, progress OpenProgressFunc, deferBackfill bool) error {
+	if db.usageOnlyStorage() {
+		db.prLinksBackfillPending.Store(false)
+		return nil
+	}
+	var raw string
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT CAST(value AS TEXT) FROM stats WHERE key = ?`,
+		prLinksBackfillStateKey,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		db.prLinksBackfillPending.Store(false)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading PR link backfill state: %w", err)
+	}
+	if _, _, known := parsePRLinksBackfillState(raw); !known {
+		db.prLinksBackfillPending.Store(false)
+		return nil
+	}
+	db.prLinksBackfillPending.Store(true)
+	if deferBackfill {
+		return nil
+	}
+	progress.report("Backfilling pull request links")
+	return db.BackfillPRLinks(ctx)
+}
+
+// BackfillPRLinks derives prompt and tool-call pull request links for sessions
+// queued by an archive upgrade. Each batch reads and parses on the reader pool
+// without holding the write lock, then commits only changed sessions and
+// advances its durable cursor in stats so restarts resume where they left off.
+func (db *DB) BackfillPRLinks(ctx context.Context) error {
+	if !db.prLinksBackfillPending.Load() || db.usageOnlyStorage() {
+		return nil
+	}
+	start := time.Now()
+	var totalScanned, totalUpdated int
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		scanned, updated, done, err := db.backfillPRLinksBatch(ctx)
+		if err != nil {
+			return err
+		}
+		totalScanned += scanned
+		totalUpdated += updated
+		if done {
+			if totalScanned > 0 || totalUpdated > 0 {
+				log.Printf(
+					"backfill: pull request links scanned %d sessions, updated %d in %s",
+					totalScanned, totalUpdated, time.Since(start).Round(time.Millisecond),
+				)
+			}
+			return nil
+		}
+	}
+}
+
+type prLinkBackfillSession struct {
+	id         string
+	stored     string
+	structured string
+}
+
+func (db *DB) backfillPRLinksBatch(ctx context.Context) (scanned, updated int, done bool, err error) {
+	if db.usageOnlyStorage() {
+		db.prLinksBackfillPending.Store(false)
+		return 0, 0, true, nil
+	}
+	rawState, scope, batch, dirtyIDs, done, err := db.scanPRLinksBackfillBatch(ctx)
+	if err != nil || done {
+		if done && err == nil {
+			db.prLinksBackfillPending.Store(false)
+		}
+		return 0, 0, done, err
+	}
+	batchDone, batchUpdated, err := db.commitPRLinksBackfillBatch(ctx, rawState, scope, batch, dirtyIDs)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if batchDone {
+		db.prLinksBackfillPending.Store(false)
+	}
+	return len(batch), batchUpdated, batchDone, nil
+}
+
+func (db *DB) scanPRLinksBackfillBatch(ctx context.Context) (
+	rawState, scope string, batch []prLinkBackfillSession, dirtyIDs []string, done bool, err error,
+) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return "", "", nil, nil, false, err
+	}
+	defer release()
+
+	r := db.getReader()
+	err = r.QueryRowContext(ctx,
+		`SELECT CAST(value AS TEXT) FROM stats WHERE key = ?`,
+		prLinksBackfillStateKey,
+	).Scan(&rawState)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil, nil, true, nil
+	}
+	if err != nil {
+		return "", "", nil, nil, false, fmt.Errorf("reading PR link backfill state: %w", err)
+	}
+	var cursor string
+	var known bool
+	scope, cursor, known = parsePRLinksBackfillState(rawState)
+	if !known {
+		return "", "", nil, nil, true, nil
+	}
+
+	rows, err := r.QueryContext(ctx,
+		`SELECT id, pr_links, structured_pr_links FROM sessions WHERE id > ? ORDER BY id LIMIT ?`,
+		cursor, prLinksBackfillBatchSize,
+	)
+	if err != nil {
+		return "", "", nil, nil, false, fmt.Errorf("listing PR link backfill batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s prLinkBackfillSession
+		if err := rows.Scan(&s.id, &s.stored, &s.structured); err != nil {
+			return "", "", nil, nil, false, fmt.Errorf("scanning PR link backfill session: %w", err)
+		}
+		batch = append(batch, s)
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", nil, nil, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return "", "", nil, nil, false, err
+	}
+	if len(batch) == 0 {
+		return rawState, scope, nil, nil, false, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+	args := make([]any, len(batch))
+	for i, s := range batch {
+		args[i] = s.id
+	}
+
+	toolLinks, err := scanBatchToolCallPRLinks(ctx, r, placeholders, args)
+	if err != nil {
+		return "", "", nil, nil, false, err
+	}
+	var promptLinks map[string][]PRLink
+	if scope == prLinksBackfillScopeAll {
+		promptLinks, err = scanBatchPromptPRLinks(ctx, r, placeholders, args)
+		if err != nil {
+			return "", "", nil, nil, false, err
+		}
+	}
+
+	for _, s := range batch {
+		if err := ctx.Err(); err != nil {
+			return "", "", nil, nil, false, err
+		}
+		var derived []PRLink
+		if scope == prLinksBackfillScopeAll {
+			derived = parser.CombinePRLinks(DecodePRLinks(s.structured), promptLinks[s.id], toolLinks[s.id])
+		} else {
+			tools := toolLinks[s.id]
+			if len(tools) == 0 {
+				continue
+			}
+			derived = parser.CombinePRLinks(DecodePRLinks(s.stored), tools)
+		}
+		if EncodePRLinks(derived) != s.stored {
+			dirtyIDs = append(dirtyIDs, s.id)
+		}
+	}
+	return rawState, scope, batch, dirtyIDs, false, nil
+}
+
+func scanBatchToolCallPRLinks(ctx context.Context, r *readerHandle, placeholders string, args []any) (map[string][]PRLink, error) {
+	rows, err := r.QueryContext(ctx,
+		`SELECT session_id, category, input_json FROM tool_calls WHERE session_id IN (`+placeholders+`) AND category IN ('Bash','Task') AND input_json IS NOT NULL`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scanning batch tool calls for PR links: %w", err)
+	}
+	defer rows.Close()
+	bySession := make(map[string][]PRLink)
+	for rows.Next() {
+		var sessionID, category, inputJSON string
+		if err := rows.Scan(&sessionID, &category, &inputJSON); err != nil {
+			return nil, fmt.Errorf("scanning tool call for PR links: %w", err)
+		}
+		links, err := callPRLinks(ctx, category, inputJSON)
+		if err != nil {
+			return nil, err
+		}
+		if len(links) > 0 {
+			bySession[sessionID] = parser.CombinePRLinks(bySession[sessionID], links)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bySession, rows.Close()
+}
+
+func scanBatchPromptPRLinks(ctx context.Context, r *readerHandle, placeholders string, args []any) (map[string][]PRLink, error) {
+	rows, err := r.QueryContext(ctx,
+		`SELECT session_id, role, is_system, is_compact_boundary, source_subtype, content, `+sqliteDialogueExprBare+`
+		 FROM messages
+		 WHERE session_id IN (`+placeholders+`)
+		   AND is_system = 0
+		   AND is_compact_boundary = 0
+		   AND source_subtype <> 'tool_result'
+		   AND `+promptPRLinkCandidateSQL+`
+		 ORDER BY session_id, ordinal`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scanning batch messages for PR links: %w", err)
+	}
+	defer rows.Close()
+	bySession := make(map[string][]PRLink)
+	for rows.Next() {
+		var msg Message
+		var dialogue sql.NullString
+		if err := rows.Scan(
+			&msg.SessionID, &msg.Role, &msg.IsSystem, &msg.IsCompactBoundary,
+			&msg.SourceSubtype, &msg.Content, &dialogue,
+		); err != nil {
+			return nil, fmt.Errorf("scanning message for PR links: %w", err)
+		}
+		if dialogue.Valid {
+			msg.DialogueText = &dialogue.String
+		}
+		links, err := PromptPRLinksContext(ctx, []Message{msg})
+		if err != nil {
+			return nil, err
+		}
+		if len(links) > 0 {
+			bySession[msg.SessionID] = parser.CombinePRLinks(bySession[msg.SessionID], links)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bySession, rows.Close()
+}
+
+func (db *DB) commitPRLinksBackfillBatch(
+	ctx context.Context, rawState, scope string, batch []prLinkBackfillSession, dirtyIDs []string,
+) (done bool, updated int, err error) {
+	type commitResult struct {
+		done    bool
+		updated int
+	}
+	res, err := RetryAcrossHandoff(ctx, db, func() (commitResult, error) {
+		if err := db.lockWriterCtx(ctx); err != nil {
+			return commitResult{}, err
+		}
+		defer db.mu.Unlock()
+		if db.writerClosed.Load() {
+			return commitResult{}, ErrWriterClosed
+		}
+		if db.usageOnlyStorage() {
+			return commitResult{done: true}, nil
+		}
+		tx, err := db.getWriter().BeginTx(ctx, nil)
+		if err != nil {
+			return commitResult{}, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		// Lock before reading state so concurrent writers or restarts cannot
+		// race on cursor progression.
+		if _, err := tx.ExecContext(ctx, `UPDATE stats SET value = value WHERE key = ?`, prLinksBackfillStateKey); err != nil {
+			return commitResult{}, err
+		}
+		var currentState string
+		err = tx.QueryRowContext(ctx,
+			`SELECT CAST(value AS TEXT) FROM stats WHERE key = ?`,
+			prLinksBackfillStateKey,
+		).Scan(&currentState)
+		if errors.Is(err, sql.ErrNoRows) {
+			return commitResult{done: true}, tx.Commit()
+		}
+		if err != nil {
+			return commitResult{}, fmt.Errorf("re-reading PR link backfill state: %w", err)
+		}
+		if currentState != rawState {
+			return commitResult{done: false}, tx.Commit()
+		}
+		var batchUpdated int
+		txq := contextTransaction{ctx: ctx, tx: tx}
+		for _, id := range dirtyIDs {
+			changed, err := refreshSessionPromptPRLinksChangedTx(ctx, txq, id)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return commitResult{}, fmt.Errorf("backfilling PR links: %w", err)
+			}
+			if changed {
+				batchUpdated++
+			}
+		}
+		if len(batch) < prLinksBackfillBatchSize {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key = ?`, prLinksBackfillStateKey); err != nil {
+				return commitResult{}, fmt.Errorf("clearing PR link backfill state: %w", err)
+			}
+			return commitResult{done: true, updated: batchUpdated}, tx.Commit()
+		}
+		nextState := formatPRLinksBackfillState(scope, batch[len(batch)-1].id)
+		if _, err := tx.ExecContext(ctx, `UPDATE stats SET value = ? WHERE key = ?`, nextState, prLinksBackfillStateKey); err != nil {
+			return commitResult{}, fmt.Errorf("advancing PR link backfill cursor: %w", err)
+		}
+		return commitResult{done: false, updated: batchUpdated}, tx.Commit()
+	})
+	return res.done, res.updated, err
 }
 
 const maxPRCommandInputBytes = 256 * 1024
 
 func callPRLinks(ctx context.Context, category, input string) ([]PRLink, error) {
 	if category == "Task" {
+		if !strings.Contains(input, "://") && !strings.Contains(input, `\u`) {
+			return nil, ctx.Err()
+		}
 		return taskPRLinks(ctx, input)
 	}
 	if category != "Bash" || len(input) > maxPRCommandInputBytes {
+		return nil, ctx.Err()
+	}
+	if !strings.Contains(input, `\u`) && !parser.MayContainPRCommand(input) {
 		return nil, ctx.Err()
 	}
 	commands, ok := shellInputCommands(input)

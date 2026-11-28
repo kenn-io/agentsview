@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -393,4 +394,312 @@ func TestToolPRLinksStoredMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, 44, got.PRLinks[0].Number)
+}
+
+func TestPRLinksDeferredDaemonBackfill(t *testing.T) {
+	structuredLink, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
+	require.True(t, ok)
+
+	for _, tc := range []struct {
+		name        string
+		fromVersion int
+	}{
+		{name: "from pre-prompt version", fromVersion: promptPRLinksDataVersion - 1},
+		{name: "from pre-tool version", fromVersion: toolPRLinksDataVersion - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d, err := OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if d != nil {
+					_ = d.Close()
+				}
+			})
+
+			promptSession := Session{ID: "s-prompt", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{structuredLink}}
+			bashSession := Session{ID: "s-bash", Project: "project", Machine: "local", Agent: "claude"}
+			taskSession := Session{ID: "s-task", Project: "project", Machine: "local", Agent: "claude"}
+			plainSession := Session{ID: "s-plain", Project: "project", Machine: "local", Agent: "claude"}
+			for _, s := range []Session{promptSession, bashSession, taskSession, plainSession} {
+				require.NoError(t, d.UpsertSession(t.Context(), s))
+			}
+
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), promptSession.ID, []Message{
+				{SessionID: promptSession.ID, Ordinal: 0, Role: "user", Content: "review https://github.com/example/repo/pull/2"},
+			}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), bashSession.ID, []Message{
+				{SessionID: bashSession.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{
+					{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 3 -R example/repo"}`},
+				}},
+			}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), taskSession.ID, []Message{
+				{SessionID: taskSession.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{
+					{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"check https://github.com/example/repo/pull/4"}`},
+				}},
+			}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), plainSession.ID, []Message{
+				{SessionID: plainSession.ID, Ordinal: 0, Role: "user", Content: "just a normal prompt"},
+				{SessionID: plainSession.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{
+					{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"git status"}`},
+				}},
+			}))
+
+			const sentinelModified = "2020-01-01T00:00:00.000Z"
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				if tc.fromVersion < promptPRLinksDataVersion {
+					if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET structured_pr_links='', pr_links=? WHERE id=?`, EncodePRLinks([]PRLink{structuredLink}), promptSession.ID); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id IN (?,?,?)`, bashSession.ID, taskSession.ID, plainSession.ID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET local_modified_at=? WHERE id=?`, sentinelModified, plainSession.ID); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, tc.fromVersion)
+			}))
+			require.NoError(t, d.Close())
+			d = nil
+
+			// Daemon open advances user_version and copies legacy structured links
+			// without blocking on prompt/tool derivation.
+			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			assert.True(t, d.PRLinksBackfillPending())
+
+			structured, err := d.GetSessionStructuredPRLinks(t.Context(), promptSession.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []PRLink{structuredLink}, structured)
+
+			gotBash, err := d.GetSession(t.Context(), bashSession.ID)
+			require.NoError(t, err)
+			assert.Empty(t, gotBash.PRLinks, "daemon open should defer PR link derivation")
+
+			// A second daemon open (e.g. startup worker handoff or restart before
+			// backfill completes) keeps the durable pending state intact.
+			require.NoError(t, d.Close())
+			d = nil
+			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			assert.True(t, d.PRLinksBackfillPending())
+
+			require.NoError(t, d.BackfillPRLinks(t.Context()))
+			assert.False(t, d.PRLinksBackfillPending())
+
+			gotPrompt, err := d.GetSession(t.Context(), promptSession.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{
+				"https://github.com/example/repo/pull/1",
+				"https://github.com/example/repo/pull/2",
+			}, prLinkURLs(gotPrompt.PRLinks))
+
+			gotBash, err = d.GetSession(t.Context(), bashSession.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"https://github.com/example/repo/pull/3"}, prLinkURLs(gotBash.PRLinks))
+
+			gotTask, err := d.GetSession(t.Context(), taskSession.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"https://github.com/example/repo/pull/4"}, prLinkURLs(gotTask.PRLinks))
+
+			gotPlain, err := d.GetSession(t.Context(), plainSession.ID)
+			require.NoError(t, err)
+			assert.Empty(t, gotPlain.PRLinks)
+
+			var plainModified string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id=?`, plainSession.ID).Scan(&plainModified))
+			assert.Equal(t, sentinelModified, plainModified, "unchanged session must not be rewritten")
+
+			var markerCount int
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, prLinksBackfillStateKey).Scan(&markerCount))
+			assert.Zero(t, markerCount)
+
+			// Reopening after completion does not re-queue backfill.
+			require.NoError(t, d.Close())
+			d = nil
+			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			assert.False(t, d.PRLinksBackfillPending())
+		})
+	}
+}
+
+func TestPRLinksDeferredBackfillResumesAcrossBatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+
+	total := prLinksBackfillBatchSize + 10
+	firstID := "codex:0000:first"
+	boundaryID := fmt.Sprintf("codex:%04d:with:colons", prLinksBackfillBatchSize-1)
+	lastID := fmt.Sprintf("codex:%04d:last", total-1)
+
+	for i := range total {
+		id := fmt.Sprintf("codex:%04d:item", i)
+		switch i {
+		case 0:
+			id = firstID
+		case prLinksBackfillBatchSize - 1:
+			id = boundaryID
+		case total - 1:
+			id = lastID
+		}
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: "local", Agent: "codex"}))
+	}
+	for _, item := range []struct {
+		id  string
+		num int
+	}{
+		{firstID, 10},
+		{boundaryID, 20},
+		{lastID, 30},
+	} {
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), item.id, []Message{
+			{SessionID: item.id, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{
+				{ToolName: "Bash", Category: "Bash", InputJSON: fmt.Sprintf(`{"command":"gh pr view %d -R example/repo"}`, item.num)},
+			}},
+		}))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=''`); err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+	}))
+	require.NoError(t, d.Close())
+	d = nil
+
+	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	require.True(t, d.PRLinksBackfillPending())
+
+	// Commit only the first batch, stopping before the tail batch.
+	scanned, updated, done, err := d.backfillPRLinksBatch(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, prLinksBackfillBatchSize, scanned)
+	assert.Equal(t, 2, updated)
+	assert.False(t, done)
+	assert.True(t, d.PRLinksBackfillPending())
+
+	gotFirst, err := d.GetSession(t.Context(), firstID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/10"}, prLinkURLs(gotFirst.PRLinks))
+
+	gotBoundary, err := d.GetSession(t.Context(), boundaryID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/20"}, prLinkURLs(gotBoundary.PRLinks))
+
+	gotLast, err := d.GetSession(t.Context(), lastID)
+	require.NoError(t, err)
+	assert.Empty(t, gotLast.PRLinks, "second batch should not have run yet")
+
+	// A non-daemon open resumes from the persisted cursor (including colons in
+	// the session ID) and finishes the remaining batch synchronously.
+	require.NoError(t, d.Close())
+	d = nil
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	assert.False(t, d.PRLinksBackfillPending())
+
+	gotLast, err = d.GetSession(t.Context(), lastID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/30"}, prLinkURLs(gotLast.PRLinks))
+}
+
+func TestPRLinksBackfillFreshAndUsageOnlyAndConcurrentDelete(t *testing.T) {
+	t.Run("fresh archive queues no backfill", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "fresh.db")
+		d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, d.Close()) })
+		assert.False(t, d.PRLinksBackfillPending())
+	})
+
+	t.Run("usage-only archive skips deferred backfill", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "usage.db")
+		d, err := OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		s := Session{ID: "usage-s", Project: "project", Machine: "local", Agent: "claude"}
+		require.NoError(t, d.UpsertSession(t.Context(), s))
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{
+			{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "review https://github.com/example/repo/pull/50"},
+		}))
+		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=''`); err != nil {
+				return err
+			}
+			return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
+		}))
+		require.NoError(t, d.Close())
+
+		// Queue via full daemon open, then reopen under usage-only policy.
+		d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		require.True(t, d.PRLinksBackfillPending())
+		require.NoError(t, d.Close())
+
+		d, err = OpenIsolatedWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, d.Close()) })
+		assert.False(t, d.PRLinksBackfillPending())
+		got, err := d.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		assert.Empty(t, got.PRLinks)
+	})
+
+	t.Run("deleted session between scan and commit is skipped", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "concurrent.db")
+		d, err := OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		for _, id := range []string{"a-deleted", "b-kept"} {
+			require.NoError(t, d.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: "local", Agent: "claude"}))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []Message{
+				{SessionID: id, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{
+					{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 99 -R example/repo"}`},
+				}},
+			}))
+		}
+		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=''`); err != nil {
+				return err
+			}
+			return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+		}))
+		require.NoError(t, d.Close())
+
+		d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+		rawState, scope, batch, dirtyIDs, done, err := d.scanPRLinksBackfillBatch(t.Context())
+		require.NoError(t, err)
+		require.False(t, done)
+		require.ElementsMatch(t, []string{"a-deleted", "b-kept"}, dirtyIDs)
+
+		// Delete one session after scan and before commit.
+		require.NoError(t, d.DeleteSession(t.Context(), "a-deleted"))
+
+		commitDone, updated, err := d.commitPRLinksBackfillBatch(t.Context(), rawState, scope, batch, dirtyIDs)
+		require.NoError(t, err)
+		assert.True(t, commitDone)
+		assert.Equal(t, 1, updated)
+
+		gotKept, err := d.GetSession(t.Context(), "b-kept")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"https://github.com/example/repo/pull/99"}, prLinkURLs(gotKept.PRLinks))
+	})
+}
+
+func prLinkURLs(links []PRLink) []string {
+	urls := make([]string, len(links))
+	for i, link := range links {
+		urls[i] = link.URL
+	}
+	return urls
 }

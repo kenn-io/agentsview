@@ -214,8 +214,48 @@ func shellCommand(args []*syntax.Word) (string, bool) {
 	return "", false
 }
 
+// MayContainPRCommand reports whether text could possibly hold a literal
+// `gh` + `pr` shell invocation under shellLiteral's quoting rules. Callers may
+// use it as a fast reject before JSON or shell parsing; false guarantees
+// AnalyzePRCommand returns no links.
+func MayContainPRCommand(text string) bool {
+	return containsQuotedPair(text, 'g', 'h') && containsQuotedPair(text, 'p', 'r')
+}
+
+// containsQuotedPair reports whether a appears before b with only shell
+// quoting or line-continuation characters between them.
+func containsQuotedPair(s string, a, b byte) bool {
+	for i := 0; i < len(s); {
+		idx := strings.IndexByte(s[i:], a)
+		if idx < 0 {
+			return false
+		}
+		j := i + idx + 1
+		for j < len(s) {
+			switch s[j] {
+			case '\'', '"', '\\', '\r', '\n':
+				j++
+			default:
+				goto check
+			}
+		}
+	check:
+		if j < len(s) && s[j] == b {
+			return true
+		}
+		i = i + idx + 1
+	}
+	return false
+}
+
 // AnalyzePRCommand finds PR links in a single shell invocation.
 func AnalyzePRCommand(ctx context.Context, command string) ([]PRLink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !MayContainPRCommand(command) {
+		return nil, nil
+	}
 	return analyzePRCommand(ctx, command, strings.Contains(command, "GH_HOST"), 0)
 }
 

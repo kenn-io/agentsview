@@ -222,6 +222,9 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://r.example/go/https://evil.example/a/b/pull/1", nil},
 		{"https://r.example/?u=https://evil.example/a/b/pull/1 https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/2"}},
 		{"https://github.com/o/r/pull/1?u=https://evil.example/a/b/pull/2", []string{"https://github.com/o/r/pull/1"}},
+		{"no links anywhere in this prompt", nil},
+		{"://bare-start and bare-end://", nil},
+		{"ftp://example.com/o/r/pull/1 " + strings.Repeat("filler ", 200) + "https://github.com/o/r/pull/7" + strings.Repeat(" tail", 200), []string{"https://github.com/o/r/pull/7"}},
 	} {
 		t.Run(tt.text, func(t *testing.T) {
 			links, err := PromptPRLinksContext(t.Context(), tt.text)

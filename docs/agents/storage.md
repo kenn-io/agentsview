@@ -1488,6 +1488,20 @@ otherwise. Hand-built legacy schemas in tests must drop `message_trigram_source`
 and the index before rebuilding or narrowing `messages`, because the view and
 triggers name its columns.
 
+### Pull request link backfill
+
+Upgrading an archive from below data version 184 copies `pr_links` into
+`structured_pr_links` inside the version transaction (touching only rows where
+the columns differ) before `PRAGMA user_version` advances, so older binaries can
+never overwrite derived links. Prompt and tool-call PR-link derivation queues a
+durable cursor in `stats` (`pr_links_backfill_state`) and runs in 256-session
+batches. Daemon opens (`OpenDaemonWithProgress`) defer the derivation until the
+HTTP server listens; non-daemon writable opens complete any pending backfill
+synchronously. Each batch scans and parses on the bulk-read lane without holding
+the write lock, acquires the writer only to refresh changed sessions and advance
+or delete the cursor, and skips unchanged rows. A restart resumes from the last
+committed cursor. Usage-only archives skip derived PR-link backfill.
+
 ### Transcript usage identity
 
 Token usage, Claude message/request identities, and source UUID participate in
