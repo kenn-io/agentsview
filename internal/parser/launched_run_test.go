@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLaunchedRunID(t *testing.T) {
@@ -65,7 +66,7 @@ func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
 		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"claude -p --session-id ` + id + `"}`}}},
 		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: `"failed"`}}},
 	}
-	assert.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
 	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
 }
 
