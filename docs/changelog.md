@@ -21,6 +21,11 @@ The latest release is
   of latency, a test push of new sessions went from about 27 to about 1,100
   sessions a minute. Pushes of sessions already in PostgreSQL work as before.
 
+- The Docker image can sync [SSH remote hosts](/docs/remote-access/#ssh-remote-sync)
+  without a custom build, because it now includes an SSH client. See
+  [SSH hosts from a container](/docs/configuration/#ssh-hosts-from-a-container)
+  for mounting a dedicated key.
+
 **Bug fixes**
 
 - Muse Personal scheduled jobs and upkeep runs now count as automated, so they
