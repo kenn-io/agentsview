@@ -291,11 +291,10 @@ func TestRestrictedArchiveKeepsOnlySourceFreeCheckpoints(t *testing.T) {
 }
 
 // codexCursorBytes encodes a Codex cursor (codexCursorState.MarshalBinary,
-// version 6) with only a model and no pending tool calls.
+// version 9) with only a model and no pending tool calls.
 func codexCursorBytes(t *testing.T) []byte {
 	t.Helper()
-	var b []byte
-	b = append(b, 6)
+	b := []byte{9}
 	for _, str := range []string{"gpt-5.4", "", "", "", ""} {
 		b = binary.LittleEndian.AppendUint32(b, uint32(len(str)))
 		b = append(b, str...)
@@ -303,6 +302,12 @@ func codexCursorBytes(t *testing.T) []byte {
 	b = append(b, make([]byte, sha256.Size)...) // first user digest
 	b = append(b, 0)                            // flags
 	b = append(b, make([]byte, sha256.Size)...) // last token usage digest
+	b = append(b, make([]byte, sha256.Size)...) // last usage record digest
+	b = append(b, make([]byte, sha256.Size)...) // pending usage record digest
+	b = binary.LittleEndian.AppendUint64(b, 0)  // last token count total
+	b = binary.LittleEndian.AppendUint64(b, 0)  // usage recorded since the last count
+	b = binary.LittleEndian.AppendUint32(b, 0)  // last usage record response ID
+	b = binary.LittleEndian.AppendUint32(b, 0)  // pending usage record response ID
 	b = binary.LittleEndian.AppendUint32(b, 0)  // last task event
 	b = append(b, 0)                            // pending call count
 	require.True(t, parser.IsCodexCursor(b), "update to the current cursor encoding")

@@ -318,6 +318,11 @@ func applyCodexTokenUsage(msg *ParsedMessage, raw string) {
 		"output_tokens":           output,
 		"cache_read_input_tokens": cached,
 	}
+	// reasoning_output_tokens is a subset of output_tokens, not additional
+	// billable output. Preserve it for usage detail when present.
+	if reasoning := int(usage.Get("reasoning_output_tokens").Int()); reasoning > 0 {
+		normalized["reasoning_tokens"] = reasoning
+	}
 	// Writes sit inside Codex's input count; zero keeps older rows byte-identical.
 	if cacheWrite > 0 {
 		normalized["cache_creation_input_tokens"] = cacheWrite

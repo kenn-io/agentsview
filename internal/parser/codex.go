@@ -384,7 +384,15 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
 ) (skip bool, err error) {
 	b.sourceLine++
-	if gjson.Get(line, "type").Str == codexTypeTurnContext {
+	lineType := gjson.Get(line, "type").Str
+	// A token_usage_record is commonly followed by response_item and
+	// item_completed lines before Codex emits the mirrored token_count, so the
+	// record stays pending across those lines. The next non-repeat token_count
+	// resolves it, and a new turn expires it.
+	if lineType == codexTypeTurnContext {
+		b.expireUsageRecordAtTurn()
+	}
+	if lineType == codexTypeTurnContext {
 		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
 		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
 		b.sourceInTurn = true
@@ -740,16 +748,15 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 func (b *codexSessionBuilder) handleTokenUsageRecord(
 	payload gjson.Result,
 ) {
-	if b.agent != AgentTraeX {
-		return
-	}
 	usage := payload.Get("usage")
 	if !usage.IsObject() {
 		return
 	}
 	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
 		if usage.Get(counter).Type == gjson.Number {
-			b.applyTokenUsage(usage.Raw, usage.Raw, payload.Get("response_id").Str)
+			if !b.observeTokenUsageRecord(usage.Raw, payload.Get("response_id").Str) {
+				b.attachTokenUsage(usage.Raw)
+			}
 			return
 		}
 	}
@@ -767,19 +774,16 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	if raw == "" {
 		return
 	}
-	// A repeated token_count carries the same cumulative total_token_usage;
-	// a new call with equal per-call counts raises it. Keying on the whole
-	// info object therefore drops only true repeats.
-	b.applyTokenUsage(raw, info.Raw, "")
-}
-
-// applyTokenUsage attaches one call's usage, raw, unless dedupKey and
-// responseID repeat the previous observation.
-func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string) {
-	if b.observeTokenUsage(dedupKey, responseID) {
+	total := info.Get("total_token_usage.total_tokens")
+	if b.observeTokenUsage(raw, info.Raw, total.Int(), total.Exists()) {
 		return
 	}
+	b.attachTokenUsage(raw)
+}
 
+// handleTokenUsageRecord and handleTokenCountEvent dedupe first, then
+// attachTokenUsage attaches one call's usage.
+func (b *codexSessionBuilder) attachTokenUsage(raw string) {
 	// Attach usage to the last assistant message without usage in the
 	// current turn; the sink stops at the user boundary so turns are
 	// never crossed.

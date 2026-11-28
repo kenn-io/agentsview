@@ -346,7 +346,7 @@ func TestTraeXProviderParsesHistoryMutationRollout(t *testing.T) {
 	assert.Equal(t, `{"cmd":"ls internal/parser"}`, call.InputJSON)
 	require.Len(t, call.ResultEvents, 1)
 	assert.Equal(t, "codex.go\ntraex.go", call.ResultEvents[0].Content)
-	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(msgs[2].TokenUsage))
+	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12,"reasoning_tokens":2}`, string(msgs[2].TokenUsage))
 	assert.Equal(t, RoleAssistant, msgs[3].Role)
 	assert.Equal(t,
 		"The parser files are codex.go and traex.go.",

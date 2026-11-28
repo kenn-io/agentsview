@@ -13,15 +13,17 @@ import (
 
 func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 	seed := codexCursorState{
-		model:                    "gpt-5.6-luna",
-		serviceTierProviderID:    "openai-priority",
-		cwd:                      "/workspace/project-a",
-		agentPath:                "codex/agents/a",
-		firstUserSeen:            true,
-		sawUserTurnAfterFirst:    true,
-		mayReplayFirstUserPrompt: false,
-		lastTokenUsageSeen:       true,
-		lastTokenUsageDigest:     [sha256.Size]byte{1, 2, 3},
+		model:                      "gpt-5.6-luna",
+		serviceTierProviderID:      "openai-priority",
+		cwd:                        "/workspace/project-a",
+		agentPath:                  "codex/agents/a",
+		firstUserSeen:              true,
+		sawUserTurnAfterFirst:      true,
+		mayReplayFirstUserPrompt:   false,
+		lastTokenUsageSeen:         true,
+		lastTokenUsageDigest:       [sha256.Size]byte{1, 2, 3},
+		lastTokenUsageRecordDigest: [sha256.Size]byte{4, 5, 6},
+		lastTokenUsageResponseID:   "response-1",
 		forkGate: codexForkGate{
 			active:          true,
 			parentSessionID: "019f0000-0000-7000-8000-000000000000",
