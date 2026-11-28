@@ -135,7 +135,7 @@ When the model changes, `nomic-embed-text`, `nomic-embed-text:latest`,
 `nomic-embed-text:v1.5`, `nomic-embed-text-v1.5`, and
 `nomic-ai/nomic-embed-text-v1.5` start from the Nomic defaults: `search_query: `
 before queries, `search_document: ` before documents, and the Nomic input
-limits. Switching to the same model keeps its saved prefixes and limits.
+limits.
 
 To use Kit's local server while Ollama stays running, keep your explicit Nomic
 recipe and add a named server:

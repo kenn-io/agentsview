@@ -79,7 +79,7 @@ func TestEmbeddingsSwitchHelp(t *testing.T) {
 	require.NoError(t, err)
 	for _, text := range []string{
 		"The same model keeps its recipe", "When the model changes",
-		"nomic-embed-text", "nomic-embed-text:latest", "nomic-embed-text:v1.5",
+		"nomic-embed-text:latest", "nomic-embed-text:v1.5",
 		"nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1.5",
 		"search_query: ", "search_document: ",
 	} {
