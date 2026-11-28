@@ -28,12 +28,6 @@ func codeModeOutput(output string) string {
 
 // codeModeCommand recognizes a single shell call whose output is displayed.
 func codeModeCommand(input string) (string, bool) {
-	var envelope struct {
-		Code string `json:"code"`
-	}
-	if json.Unmarshal([]byte(input), &envelope) == nil && envelope.Code != "" {
-		input = envelope.Code
-	}
 	if !strings.Contains(input, "tools.exec_command") {
 		return "", false
 	}

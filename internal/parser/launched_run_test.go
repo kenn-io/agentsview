@@ -36,7 +36,7 @@ func TestLaunchedRunID(t *testing.T) {
 		{"wrapped Codex banner", "codex exec hello", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\n" + startup, "codex:" + id},
 		{"wrapped Codex JSON", "codex exec --json hello", "Wall time: 1 seconds\nExit code: 0\nOutput:\n" + `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"code mode", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output);`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, "codex:" + id},
-		{"code mode encoded", `{"code":"const r = await tools.exec_command({cmd: 'claude -p --session-id ` + id + `'}); text(r.output);"}`, "", id},
+		{"code mode session ID", `const r = await tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); text(r.output);`, "", id},
 		{"code mode unrelated output", `const r = await tools.exec_command({cmd: "codex exec hello"}); text("unrelated");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
 		{"code mode uncalled function", `function f() { return tools.exec_command({cmd: "claude -p --session-id ` + id + `"}); } text("done");`, "", ""},
 		{"code mode another call", `const r = await tools.exec_command({cmd: "codex exec hello"}); text(r.output); text("other");`, "Script completed\nWall time 1 seconds\nOutput:\n" + startup, ""},
