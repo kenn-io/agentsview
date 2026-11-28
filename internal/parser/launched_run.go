@@ -53,11 +53,12 @@ func launchedFlagTakesValue(agent, flag string) bool {
 }
 
 var (
-	launchedUUID       = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
-	launchedOutputID   = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
-	launchedValidID    = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
-	launchedOutputHint = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
-	launchedExitCode   = regexp.MustCompile(`(?m)^(?:Process exited with code |Exit code: )(-?[0-9]+)\r?$`)
+	launchedUUID          = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+	launchedOutputID      = regexp.MustCompile(`(?im)\AOpenAI Codex v[^\r\n]*\r?\n--------\r?\n(?:[^\r\n]*\r?\n)*?session id:[ \t]*(` + launchedUUID + `)[ \t]*\r?\n--------(?:\r?\n|$)`)
+	launchedOutputBanners = regexp.MustCompile(strings.Replace(launchedOutputID.String(), `\A`, `^`, 1))
+	launchedValidID       = regexp.MustCompile(`(?i)^` + launchedUUID + `$`)
+	launchedOutputHint    = regexp.MustCompile(`(?i)session id:|session_id|thread_id`)
+	launchedExitCode      = regexp.MustCompile(`(?m)^(?:Process exited with code |Exit code: )(-?[0-9]+)\r?$`)
 )
 
 // IsLaunchedClaudeSessionID reports whether id can name a launched Claude session.
@@ -290,12 +291,15 @@ func ShellInputCommands(input string) ([]string, bool) {
 	return []string{payload.Cmd}, true
 }
 
-// launchedOutputIDs reads Codex's startup banner or the first JSON event.
+// launchedOutputIDs reads Codex startup banners and structured events.
 func launchedOutputIDs(text string) []string {
-	if match := launchedOutputID.FindStringSubmatch(text); len(match) != 0 {
-		return []string{"codex:" + strings.ToLower(match[1])}
-	}
 	var ids []string
+	if launchedOutputID.MatchString(text) {
+		for _, match := range launchedOutputBanners.FindAllStringSubmatch(text, -1) {
+			ids = append(ids, "codex:"+strings.ToLower(match[1]))
+		}
+		return ids
+	}
 	var events []jsontext.Value
 	lines := strings.Split(text, "\n")
 	if jsonv2.Unmarshal([]byte(text), &events) == nil {
@@ -313,7 +317,7 @@ func launchedOutputIDs(text string) []string {
 		if !strings.Contains(line, `_id"`) || jsonv2.Unmarshal([]byte(line), &event) != nil {
 			continue
 		}
-		if i == 0 && event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
+		if (i == 0 || len(ids) > 0 && strings.HasPrefix(ids[0], "codex:")) && event.Type == "thread.started" && launchedValidID.MatchString(event.ThreadID) {
 			ids = append(ids, "codex:"+strings.ToLower(event.ThreadID))
 		}
 		if (event.Type == "system" || event.Type == "result") && launchedValidID.MatchString(event.SessionID) {
