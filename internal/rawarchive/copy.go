@@ -2,7 +2,9 @@ package rawarchive
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,6 +54,9 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 	if err := rawcapture.SnapshotSQLite(ctx, path, filepath.Join(stage, "sessions.db"), info); err != nil {
 		return err
 	}
+	if err := validateCopyArchive(ctx, filepath.Join(stage, "sessions.db")); err != nil {
+		return err
+	}
 	database, err := db.OpenIsolatedWithArchiveContent(ctx, filepath.Join(stage, "sessions.db"), options.Settings.ArchiveContent)
 	if err != nil {
 		return err
@@ -92,7 +97,7 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 			err = db.ClearCopiedUsageRollups(ctx, target)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("copying usage cache %s: %w; check the cache or move it aside and retry", cache, err)
 		}
 		break
 	}
@@ -100,4 +105,20 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		return err
 	}
 	return atomicfile.RenameNoReplace(stage, destination)
+}
+
+// validateCopyArchive checks the archive's core tables before opening it for migration.
+func validateCopyArchive(ctx context.Context, path string) (retErr error) {
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, conn.Close()) }()
+	for _, query := range []string{"SELECT count(*) FROM (SELECT id, project FROM sessions LIMIT 0)", "SELECT count(*) FROM (SELECT session_id, role, content FROM messages LIMIT 0)"} {
+		var count int
+		if err := conn.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return fmt.Errorf("source is not an AgentsView archive: %w", err)
+		}
+	}
+	return nil
 }

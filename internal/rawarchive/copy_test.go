@@ -146,3 +146,60 @@ func TestCopyPrefersCurrentUsageCache(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, filepath.Base(caches[len(caches)-1])))
 	assert.NoFileExists(t, filepath.Join(dest, filepath.Base(caches[0])))
 }
+
+func TestCopyRejectsNonArchiveSQLite(t *testing.T) {
+	for _, kind := range []string{"empty", "unrelated"} {
+		t.Run(kind, func(t *testing.T) {
+			source := t.TempDir()
+			path := filepath.Join(source, "sessions.db")
+			if kind == "empty" {
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
+			} else {
+				foreign, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = foreign.ExecContext(t.Context(), "CREATE TABLE unrelated(id INTEGER)")
+				require.NoError(t, err)
+				require.NoError(t, foreign.Close())
+			}
+			parent := t.TempDir()
+			destination := filepath.Join(parent, "copy")
+			err := Copy(t.Context(), CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}})
+			require.Error(t, err)
+			assert.NoDirExists(t, destination)
+		})
+	}
+}
+
+func TestCopyExplainsUnreadableUsageCache(t *testing.T) {
+	for _, kind := range []string{"corrupt", "unrelated"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			source := t.TempDir()
+			path := filepath.Join(source, "sessions.db")
+			database, err := db.OpenIsolatedContext(ctx, path)
+			require.NoError(t, err)
+			id, err := database.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			caches := db.UsageCacheFiles(path, id)
+			cache := caches[len(caches)-1]
+			if kind == "corrupt" {
+				require.NoError(t, os.WriteFile(cache, []byte("corrupt cache"), 0o600))
+			} else {
+				foreign, err := sql.Open("sqlite3", cache)
+				require.NoError(t, err)
+				_, err = foreign.ExecContext(ctx, "CREATE TABLE unrelated(id INTEGER)")
+				require.NoError(t, err)
+				require.NoError(t, foreign.Close())
+			}
+			destination := filepath.Join(t.TempDir(), "copy")
+			err = Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}})
+			require.ErrorContains(t, err, cache)
+			assert.ErrorContains(t, err, "usage cache")
+			assert.ErrorContains(t, err, "move")
+			assert.NoDirExists(t, destination)
+			require.NoError(t, os.Rename(cache, cache+".bad"))
+			require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}}))
+		})
+	}
+}
