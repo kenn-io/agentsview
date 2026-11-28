@@ -60,9 +60,22 @@ it("opens a message link with a hidden target", async () => {
   vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
   onTestFinished(() => ui.showAllBlocks());
   const makeMessage = (ordinal: number, role: string): Message => ({
-    id: ordinal + 1, session_id: "session-1", ordinal, role, content: `msg ${ordinal}`, content_length: 5,
-    timestamp: "2026-01-01T00:00:00Z", has_thinking: false, thinking_text: "", has_tool_use: false,
-    model: "", context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false, is_system: false,
+    id: ordinal + 1,
+    session_id: "session-1",
+    ordinal,
+    role,
+    content: `msg ${ordinal}`,
+    content_length: 5,
+    timestamp: "2026-01-01T00:00:00Z",
+    has_thinking: false,
+    thinking_text: "",
+    has_tool_use: false,
+    model: "",
+    context_tokens: 0,
+    output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
+    is_system: false,
   });
   ui.setBlockVisible("assistant", false);
   sessions.activeSessionId = "session-1";
@@ -78,7 +91,12 @@ it("opens a message link with a hidden target", async () => {
   messages.sessionId = "session-1";
   messages.messages = [makeMessage(0, "user"), makeMessage(1, "assistant"), makeMessage(2, "user")];
   messages.loading = false;
-  await vi.waitFor(() => expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal }).toEqual({ revealed: 1, pending: false }));
+  await vi.waitFor(() =>
+    expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal }).toEqual({
+      revealed: 1,
+      pending: false,
+    }),
+  );
 });
 
 function stubAppDependencies() {

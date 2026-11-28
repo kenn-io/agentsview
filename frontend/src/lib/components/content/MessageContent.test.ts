@@ -156,19 +156,34 @@ beforeEach(() => {
 });
 
 it.each([
-  { name: "web", sessionId: "session-1", expected: () => `${window.location.origin}/sessions/session-1?msg=7` },
-  { name: "remote", sessionId: "session-1", expected: () => "https://example.org/archive/sessions/session-1?msg=7" },
-  { name: "desktop", sessionId: "codex:session-1", expected: () => "agentsview://sessions/codex%3Asession-1?msg=7" },
+  {
+    name: "web",
+    sessionId: "session-1",
+    expected: () => `${window.location.origin}/sessions/session-1?msg=7`,
+  },
+  {
+    name: "remote",
+    sessionId: "session-1",
+    expected: () => "https://example.org/archive/sessions/session-1?msg=7",
+  },
+  {
+    name: "desktop",
+    sessionId: "codex:session-1",
+    expected: () => "agentsview://sessions/codex%3Asession-1?msg=7",
+  },
   { name: "read-only", sessionId: "session-1", expected: undefined },
 ])("copies a link to the message on $name", async ({ name, sessionId, expected }) => {
-  if (name === "web") router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
+  if (name === "web")
+    router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
   if (name === "remote") {
     state.isDesktop = true;
     localStorage.setItem("agentsview-server-url", "https://example.org/archive");
   }
   if (name === "desktop") state.isDesktop = true;
   try {
-    await render(message({ session_id: sessionId, ordinal: 7 }), { allowMutations: name !== "read-only" });
+    await render(message({ session_id: sessionId, ordinal: 7 }), {
+      allowMutations: name !== "read-only",
+    });
     await click('[aria-label="Copy link to message"]');
     if (expected) expect(writeText).toHaveBeenCalledWith(expected());
     else expect(writeText).toHaveBeenCalledOnce();

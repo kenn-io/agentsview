@@ -88,7 +88,8 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     skipToolGrouping: !isVisible("tool"),
   });
   const messageVisible = (message: Message): boolean =>
-    message.ordinal === input.revealOrdinal || hasVisibleSegments(message, isTranscriptBlockVisible);
+    message.ordinal === input.revealOrdinal ||
+    hasVisibleSegments(message, isTranscriptBlockVisible);
   // An empty group keeps the members whose role is still shown, so hiding an
   // unrelated block type does not hide an empty prompt.
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>
@@ -140,8 +141,13 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     );
   }
 
-  if (input.revealOrdinal != null && !items.some((item) => item.ordinals.includes(input.revealOrdinal!))) {
-    const targetIndex = normalItems.findIndex((item) => item.ordinals.includes(input.revealOrdinal!));
+  if (
+    input.revealOrdinal != null &&
+    !items.some((item) => item.ordinals.includes(input.revealOrdinal!))
+  ) {
+    const targetIndex = normalItems.findIndex((item) =>
+      item.ordinals.includes(input.revealOrdinal!),
+    );
     const targetMessage = baseMessages.find((message) => message.ordinal === input.revealOrdinal);
     const target = targetMessage && buildDisplayItems([targetMessage])[0];
     if (targetIndex >= 0 && target) {

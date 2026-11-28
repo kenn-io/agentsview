@@ -45,7 +45,13 @@ describe("UIStore", () => {
       ui.revealedLinkOrdinal = 1;
       ui.selectOrdinal(1);
       expect(ui.revealedLinkOrdinal).toBe(1);
-      for (const change of [() => ui.setBlockVisible("assistant", false), () => ui.toggleBlock("thinking"), () => ui.showAllBlocks(), () => ui.setTranscriptMode("focused"), () => ui.selectOrdinal(2)]) {
+      for (const change of [
+        () => ui.setBlockVisible("assistant", false),
+        () => ui.toggleBlock("thinking"),
+        () => ui.showAllBlocks(),
+        () => ui.setTranscriptMode("focused"),
+        () => ui.selectOrdinal(2),
+      ]) {
         ui.clearScrollState();
         ui.revealedLinkOrdinal = 1;
         change();

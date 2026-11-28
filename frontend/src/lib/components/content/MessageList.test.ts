@@ -302,16 +302,37 @@ describe("MessageList follow cancellation", () => {
 
   it.each(["empty", "tool"])("lands a jump on a message inside a %s group", async (kind) => {
     ui.followLatest = false;
-    const empty = (ordinal: number) => ({ ...makeMessage(ordinal), content: "", content_length: 0 });
-    const tool = (ordinal: number) => ({
-      ...empty(ordinal), role: "assistant", has_tool_use: true,
-      tool_calls: [{ call_index: 0, tool_name: "Read", category: "Read", tool_use_id: String(ordinal), input_json: "{}" }],
+    const empty = (ordinal: number) => ({
+      ...makeMessage(ordinal),
+      content: "",
+      content_length: 0,
     });
-    messages.messages = kind === "empty" ? [makeMessage(10), empty(11), empty(12)] : [tool(11), tool(12)];
+    const tool = (ordinal: number) => ({
+      ...empty(ordinal),
+      role: "assistant",
+      has_tool_use: true,
+      tool_calls: [
+        {
+          call_index: 0,
+          tool_name: "Read",
+          category: "Read",
+          tool_use_id: String(ordinal),
+          input_json: "{}",
+        },
+      ],
+    });
+    messages.messages =
+      kind === "empty" ? [makeMessage(10), empty(11), empty(12)] : [tool(11), tool(12)];
     setVirtualRows(kind === "empty" ? 2 : 1);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      const top = this.matches('[data-message-ordinal="12"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const top = this.matches('[data-message-ordinal="12"]')
+        ? 260
+        : this.matches(".virtual-row")
+          ? 40
+          : 0;
       return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
     });
     component = mount(MessageList, { target: document.body });
@@ -677,7 +698,13 @@ describe("MessageList follow cancellation", () => {
 
   it("keeps hidden blocks hidden when the linked message is already visible", async () => {
     ui.setBlockVisible("thinking", false);
-    messages.messages = [{ ...makeMessage(1), content: "Visible.\n[Thinking]\nHidden plan\n[/Thinking]", has_thinking: true }];
+    messages.messages = [
+      {
+        ...makeMessage(1),
+        content: "Visible.\n[Thinking]\nHidden plan\n[/Thinking]",
+        has_thinking: true,
+      },
+    ];
     component = mount(MessageList, { target: document.body });
     await tick();
     ui.pendingLinkReveal = true;

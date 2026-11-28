@@ -184,7 +184,9 @@ it("builds a message link without current filters or sticky parameters", () => {
   setURL("/app/sessions?desktop=on&project=project-a&agent=claude");
   const store = new RouterStore();
   try {
-    expect(store.buildMessageHref("codex:session/a", 7)).toBe("/app/sessions/codex/session%2Fa?msg=7");
+    expect(store.buildMessageHref("codex:session/a", 7)).toBe(
+      "/app/sessions/codex/session%2Fa?msg=7",
+    );
   } finally {
     store.destroy();
     base.remove();

@@ -149,7 +149,10 @@ describe("ToolCallGroup", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const component = mount(ToolCallGroup, {
       target: document.body,
-      props: { messages: [makeToolMessage(1), makeToolMessage(2)], timestamp: "2026-07-11T12:00:00Z" },
+      props: {
+        messages: [makeToolMessage(1), makeToolMessage(2)],
+        timestamp: "2026-07-11T12:00:00Z",
+      },
     });
     await tick();
 
@@ -162,7 +165,9 @@ describe("ToolCallGroup", () => {
     await tick();
 
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/s1?msg=2`);
-    expect(document.querySelector('[data-message-ordinal="1"] [aria-label="Copy link to message"]')).not.toBeNull();
+    expect(
+      document.querySelector('[data-message-ordinal="1"] [aria-label="Copy link to message"]'),
+    ).not.toBeNull();
     unmount(component);
   });
 });

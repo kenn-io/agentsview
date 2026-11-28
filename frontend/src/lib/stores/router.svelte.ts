@@ -144,7 +144,12 @@ export class RouterStore {
     }
   }
 
-  #buildUrl(path: string, params: Record<string, string> = {}, basePath = getBasePath(), includeSticky = true): string {
+  #buildUrl(
+    path: string,
+    params: Record<string, string> = {},
+    basePath = getBasePath(),
+    includeSticky = true,
+  ): string {
     const merged = includeSticky ? { ...this.#stickyParams, ...params } : params;
     const qs = searchFromRouteParams(merged).toString();
     const full = basePath + path;
