@@ -83,7 +83,6 @@ func TestDetachedArchivePreservesSessionsOnRebuild(t *testing.T) {
 	session, err := database.GetSessionFull(ctx, "retained")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-
 }
 
 func TestRawSyncRejectsUnreadableArchive(t *testing.T) {
