@@ -14,9 +14,21 @@ import (
 )
 
 func setupImageText(ctx context.Context, cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
-	if !cfg.ImageText.Enabled || cfg.ArchiveContent.OmitsToolContent() || database.ArchiveContent().OmitsToolContent() {
+	if cfg.ArchiveContent.OmitsToolContent() || database.ArchiveContent().OmitsToolContent() {
 		if cfg.ImageText.Enabled {
 			log.Print("image_text: disabled because archive_content omits tool results; clearing image text")
+		}
+		return nil, database.ClearImageText(ctx)
+	}
+	if !cfg.ImageText.Enabled {
+		if !cfg.ImageTextConfigured {
+			detached, err := database.HostPathsDetached(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if detached {
+				return nil, nil
+			}
 		}
 		return nil, database.ClearImageText(ctx)
 	}

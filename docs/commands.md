@@ -300,8 +300,8 @@ and publication. Older releases refuse to open the detached copy.
 Raw archive and artifact vault data and external archive bindings are omitted;
 the report lists omitted vaults. Transcript text and tool output remain intact,
 so the copy is not a redacted dataset.
-Copied image text is cleared on first start. Configure OCR with a new endpoint
-to process images again.
+Copied image text remains searchable. Configure OCR with a new endpoint to
+process images again, or explicitly disable OCR to clear the text.
 
 Passing `--writers-stopped` records your attestation that source writers were
 stopped; it does not stop them for you. A rolling capture is not a final

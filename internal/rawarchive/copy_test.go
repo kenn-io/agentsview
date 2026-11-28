@@ -249,7 +249,7 @@ func TestCopySelectsUsageCaches(t *testing.T) {
 	database, err := db.OpenIsolatedContext(ctx, path)
 	require.NoError(t, err)
 	started := "2026-08-10T09:00:00Z"
-	require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "session", Agent: "claude", Project: "project", StartedAt: &started}))
+	require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "session", Agent: "claude", Project: "/work/api", StartedAt: &started}))
 	require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: "session", Role: "assistant", Timestamp: started, Model: "model-a", TokenUsage: []byte(`{"input_tokens":330,"output_tokens":100}`)}}))
 	filter := db.UsageFilter{Timezone: "UTC"}
 	want, err := database.GetDailyUsage(ctx, filter)
@@ -272,6 +272,11 @@ func TestCopySelectsUsageCaches(t *testing.T) {
 	require.NoError(t, copied.QueryRowContext(ctx, `SELECT sum(input_tokens), sum(output_tokens) FROM usage_facts`).Scan(&input, &output))
 	assert.Equal(t, 330, input)
 	assert.Equal(t, 100, output)
+	var stale int
+	require.NoError(t, copied.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_installs WHERE project = '/work/api'`).Scan(&stale))
+	assert.Zero(t, stale)
+	require.NoError(t, copied.QueryRowContext(ctx, `SELECT count(*) FROM usage_day_totals WHERE project = '/work/api'`).Scan(&stale))
+	assert.Zero(t, stale)
 	require.NoError(t, copied.Close())
 	assert.NoFileExists(t, filepath.Join(dest, filepath.Base(unrelated)))
 	copyDB, err := db.OpenIsolatedContext(ctx, filepath.Join(dest, "sessions.db"))

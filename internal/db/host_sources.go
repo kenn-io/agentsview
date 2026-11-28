@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -14,7 +16,12 @@ func CopiedProjectLabel(value string) string {
 	if value == "" || export.SafeProjectDisplayLabel(value) != "" {
 		return value
 	}
-	return fmt.Sprintf("copied-project-%x", sha256.Sum256([]byte(value)))
+	name := value[strings.LastIndexAny(strings.TrimRight(value, `/\`), `/\`)+1:]
+	name = strings.Trim(name, `/\`)
+	if name == "" || export.SafeProjectDisplayLabel(name) == "" {
+		name = "copied-project"
+	}
+	return fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(value)))
 }
 
 // ClearHostSources detaches a staged archive from its original host.
@@ -30,6 +37,7 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`UPDATE excluded_sessions SET file_path=NULL`,
 			`UPDATE commit_links SET repository=''`,
 			`UPDATE commit_trailers SET repository=''`,
+			`UPDATE cursor_usage_events SET user_id='', user_email='', account_user_id='', account_polled_at='', conversation_id=''`,
 			`DELETE FROM git_cache`, `DELETE FROM friction_issue_links`, `DELETE FROM friction_filing_state`,
 			`DELETE FROM codex_cloud_accounts`, `DELETE FROM cursor_account_polls`, `DELETE FROM artifact_imported_sessions`,
 			`DELETE FROM provider_freshness`, `DELETE FROM skipped_files`, `DELETE FROM source_failures`,
@@ -58,42 +66,51 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 		if err := writeUserVersion(ctx, tx, version); err != nil {
 			return err
 		}
-		for _, table := range []string{"sessions", "recall_entries", "insights", "session_deletion_changes", "commit_links", "commit_trailers"} {
-			if err := relabelCopiedProjects(ctx, tx, table); err != nil {
-				return err
-			}
-		}
-		return nil
+		return relabelCopiedProjects(ctx, tx)
 	})
 }
 
-func relabelCopiedProjects(ctx context.Context, tx *sql.Tx, table string) error {
-	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT project FROM "+table+" WHERE project IS NOT NULL AND project <> ''")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var values []string
-	for rows.Next() {
-		var value string
-		if err := rows.Scan(&value); err != nil {
+func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
+	tables := []string{"sessions", "recall_entries", "insights", "session_deletion_changes", "commit_links", "commit_trailers"}
+	labels := map[string]bool{}
+	for _, table := range tables {
+		rows, err := tx.QueryContext(ctx, "SELECT DISTINCT project FROM "+table+" WHERE project IS NOT NULL AND project <> ''")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				rows.Close()
+				return err
+			}
+			labels[value] = true
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	values := make([]string, 0, len(labels))
+	for value := range labels {
 		if CopiedProjectLabel(value) != value {
 			values = append(values, value)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
+	sort.Strings(values)
 	for _, value := range values {
-		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET project=? WHERE project=?", CopiedProjectLabel(value), value); err != nil {
-			return err
+		alias := CopiedProjectLabel(value)
+		for labels[alias] {
+			alias += "-"
+		}
+		labels[alias] = true
+		for _, table := range tables {
+			if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET project=? WHERE project=?", alias, value); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
