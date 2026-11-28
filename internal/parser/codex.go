@@ -1021,7 +1021,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 
 	output, raw := parseCodexFunctionOutput(payload, b.agent)
 	if input := b.launchedCalls[callID]; input != "" {
-		if id := launchedResultID(ctx, input, raw, payload.Get("status").Str == "errored" || launchedResultFailed(raw)); id != "" {
+		if id := launchedRunID(ctx, input, raw, payload.Get("status").Str == "errored" || launchedResultFailed(raw)); id != "" {
 			position, _ := b.toolCallPosition(callID)
 			b.sink.SetCallSubagentSessionID(callID, position, id)
 		}
@@ -1169,7 +1169,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 	ctx context.Context,
 ) error {
 	for callID, input := range b.launchedCalls {
-		if id := launchedRunID(ctx, input, ""); id != "" {
+		if id := launchedRunID(ctx, input, "", false); id != "" {
 			position, _ := b.toolCallPosition(callID)
 			b.sink.SetCallSubagentSessionID(callID, position, id)
 		}

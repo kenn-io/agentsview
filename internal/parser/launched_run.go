@@ -120,9 +120,6 @@ func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) 
 		if words[j] == "--" {
 			return true
 		}
-		if j == i-1 && agent == "claude" && (words[j] == "-p" || words[j] == "--print") {
-			return i == len(words)-1
-		}
 		if launchedFlagTakesValue(agent, words[j]) {
 			j++
 		}
@@ -151,14 +148,9 @@ func launchedArgsFixed(name string, args []*syntax.Word, words []string, literal
 	return true
 }
 
-// launchedRunID returns the one run ID a starting shell call shows.
-func launchedRunID(ctx context.Context, input, output string) string {
-	return launchedRunIDConfirmed(ctx, input, output, false)
-}
-
-// launchedRunIDConfirmed is launchedRunID that can also require the ID to come
-// from the call's output.
-func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOutput bool) string {
+// launchedRunID returns the one run ID a starting shell call shows. A failed
+// call links only an ID its own output shows.
+func launchedRunID(ctx context.Context, input, output string, failed bool) string {
 	if command, ok := codeModeCommand(input); ok {
 		input = command
 		output = codeModeOutput(output)
@@ -243,7 +235,7 @@ func launchedRunIDConfirmed(ctx context.Context, input, output string, requireOu
 		}
 	}
 	for id := range ids {
-		if len(ids) == 1 && (!requireOutput || fromOutput) {
+		if len(ids) == 1 && (!failed || fromOutput) {
 			return id
 		}
 	}
@@ -350,10 +342,6 @@ func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
-func launchedResultID(ctx context.Context, input, output string, failed bool) string {
-	return launchedRunIDConfirmed(ctx, input, output, failed)
-}
-
 func launchedResultFailed(output string) bool {
 	output = codeModeOutput(output)
 	var envelope struct {
@@ -403,7 +391,7 @@ func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, f
 		collectLaunchedResults(calls, outputs, failed, messages[i].ToolResults)
 	}
 	for id, call := range calls {
-		call.SubagentSessionID = launchedResultID(ctx, call.InputJSON, outputs[id], failed[id])
+		call.SubagentSessionID = launchedRunID(ctx, call.InputJSON, outputs[id], failed[id])
 	}
 	return ctx.Err()
 }
