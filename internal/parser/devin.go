@@ -532,8 +532,9 @@ func (e *devinMessageNodesError) Unwrap() error { return e.cause }
 func (e *devinMessageNodesError) Error() string {
 	msg := e.op + " devin message_nodes"
 	if dbErr, ok := errors.AsType[sqlite3.Error](e.cause); ok {
-		// Code uses SQLite's static result-code description.
-		return msg + ": " + dbErr.Code.Error()
+		// SQLite's message names schema objects but never the database
+		// path or bound values; the path comes only from openDevinDB's wrap.
+		return msg + ": " + dbErr.Error()
 	}
 	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, os.ErrPermission, os.ErrNotExist} {
 		if errors.Is(e.cause, cause) {
@@ -541,26 +542,6 @@ func (e *devinMessageNodesError) Error() string {
 		}
 	}
 	return msg
-}
-
-// SQLITE_ERROR covers both missing schema and unrelated SQL failures.
-// Inspect the schema only on this error path, without quoting driver text.
-func devinMessageNodesQueryError(ctx context.Context, db *sql.DB, cause error) error {
-	if dbErr, ok := errors.AsType[sqlite3.Error](cause); ok && dbErr.Code == sqlite3.ErrError {
-		var total, required int
-		err := db.QueryRowContext(ctx, `
-			SELECT count(*), count(*) FILTER (WHERE name COLLATE NOCASE IN
-			       ('row_id', 'node_id', 'parent_node_id', 'chat_message', 'created_at', 'session_id'))
-			  FROM pragma_table_xinfo('message_nodes')
-		`).Scan(&total, &required)
-		if err == nil && total == 0 {
-			return errors.New("no such table: message_nodes")
-		}
-		if err == nil && required < 6 {
-			return errors.New("no such column in devin message_nodes")
-		}
-	}
-	return &devinMessageNodesError{"querying", cause}
 }
 
 func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]devinMessageNodeRow, error) {
@@ -581,7 +562,7 @@ func listDevinMessageNodes(ctx context.Context, dbPath, rawSessionID string) ([]
 		 ORDER BY created_at ASC, row_id ASC
 	`, rawSessionID)
 	if err != nil {
-		return nil, devinMessageNodesQueryError(ctx, db, err)
+		return nil, &devinMessageNodesError{"querying", err}
 	}
 	defer rows.Close()
 
