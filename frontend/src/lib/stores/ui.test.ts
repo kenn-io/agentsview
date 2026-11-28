@@ -21,11 +21,31 @@ describe("UIStore", () => {
     ui.activeModal = null;
     ui.clearPublishTarget();
     ui.publishSecret = false;
+    ui.linkedMessage = null;
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
     ui.followLatest = false;
     ui.followLatestRequest = 0;
   });
+
+  afterEach(() => {
+    ui.showAllBlocks();
+    ui.setTranscriptMode("normal");
+  });
+
+  it.each(["selection", "filter", "mode", "follow"])(
+    "dismisses a linked reveal on %s",
+    (change) => {
+      ui.showAllBlocks();
+      ui.setTranscriptMode("normal");
+      ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+      if (change === "selection") ui.selectOrdinal(2);
+      if (change === "filter") ui.toggleBlock("thinking");
+      if (change === "mode") ui.setTranscriptMode("focused");
+      if (change === "follow") ui.setFollowLatest(true);
+      expect(ui.linkedMessage).toBeNull();
+    },
+  );
 
   describe("publishTarget", () => {
     it("clears the publish target when publish modal closes", async () => {

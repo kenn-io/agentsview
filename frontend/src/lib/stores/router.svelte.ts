@@ -187,6 +187,10 @@ export class RouterStore {
     return this.#buildUrl(sessionPath(id), this.#sessionEntryParams(params));
   }
 
+  buildMessageHref(id: string, ordinal: number): string {
+    return `${getBasePath()}${sessionPath(id)}?msg=${ordinal}`;
+  }
+
   navigate(route: Route, params: Record<string, string> = {}): boolean {
     const url = this.#buildUrl(`/${route}`, params);
     if (url === window.location.pathname + window.location.search) {

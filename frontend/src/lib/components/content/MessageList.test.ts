@@ -209,6 +209,7 @@ describe("MessageList follow cancellation", () => {
     messages.clear();
     sessions.activeSessionId = null;
     ui.followLatest = false;
+    ui.linkedMessage = null;
     readProgress.reset();
     document.body.innerHTML = "";
   });
@@ -300,14 +301,21 @@ describe("MessageList follow cancellation", () => {
     expect(ui.selectedOrdinal).toBe(12);
   });
 
-  it("lands a jump on the target card of an open empty row", async () => {
+  it.each(["empty-group", "tool-group"])("lands a jump on a member of a %s", async (kind) => {
     ui.followLatest = false;
-    const empty = (ordinal: number) => ({
+    const member = (ordinal: number) => ({
       ...makeMessage(ordinal),
       content: "",
       content_length: 0,
+      ...(kind === "tool-group"
+        ? {
+            role: "assistant",
+            has_tool_use: true,
+            tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+          }
+        : {}),
     });
-    messages.messages = [makeMessage(10), empty(11), empty(12)];
+    messages.messages = [makeMessage(10), member(11), member(12)];
     setVirtualRows(2);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -322,12 +330,8 @@ describe("MessageList follow cancellation", () => {
     });
     component = mount(MessageList, { target: document.body });
     await flushScrollUpdates();
-
     component.scrollToOrdinal(12);
-
-    await vi.waitFor(() => {
-      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
-    });
+    await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
   });
 
   it("refreshes Docbank when the same transcript is remounted", async () => {
@@ -1286,6 +1290,58 @@ describe("MessageList follow cancellation", () => {
       "Code block collapsed · latex · Expand",
     );
     expect(document.querySelector(".code-content")).toBeNull();
+  });
+
+  it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
+    ui.setBlockVisible("assistant", false);
+    ui.followLatest = false;
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
+    messages.messages = [makeMessage(0), linked, makeMessage(2), makeMessage(3)];
+    messages.messageCount = 4;
+    const { element } = realJumpScroll();
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    component.scrollToOrdinal(1);
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll(".virtual-row .text-content")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(rows).toEqual(["msg 0", "linked answer", "msg 2"]);
+    expect(element.scrollTop).toBe(100);
+  });
+
+  it("renders only the linked system message", async () => {
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [
+      makeMessage(0),
+      { ...makeMessage(1), role: "user", is_system: true, content: "linked system message" },
+      { ...makeMessage(2), role: "user", is_system: true, content: "other system message" },
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("linked system message");
+    expect(document.body.textContent).not.toContain("other system message");
+  });
+
+  it("selects the neighboring message when leaving a revealed target", async () => {
+    ui.setBlockVisible("assistant", false);
+    ui.linkedMessage = { sessionId: "s1", ordinal: 1 };
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    messages.messageCount = 3;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.body.textContent).toContain("msg 1");
+    document.querySelector<HTMLElement>('.virtual-row[data-index="2"] .role-label')!.click();
+    await flushScrollUpdates();
+    expect(ui.selectedOrdinal).toBe(2);
+    expect(document.body.textContent).not.toContain("msg 1");
   });
 
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {

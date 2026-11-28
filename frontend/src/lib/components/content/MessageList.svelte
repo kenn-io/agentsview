@@ -25,7 +25,7 @@
     isSystemMessage,
   } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
-  import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
+  import { inSessionSearch, linkedOrdinal } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
   import LoadError from "../shared/LoadError.svelte";
@@ -95,6 +95,8 @@
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
 
+  let revealOrdinal = $derived(linkedOrdinal(messages.sessionId));
+
   // Share transcript row visibility and searchable block filters with the index.
   let sessionScope = $derived(
     projectSessionScope({
@@ -106,6 +108,7 @@
         settings.sessionProviders,
         sessions.activeSession?.agent,
       ),
+      revealOrdinal,
     }),
   );
 
@@ -605,9 +608,9 @@
 
   // Distance from the top of a display row to the card of `ordinal` inside an
   // open empty row, so a jump lands on that card instead of the row's top.
-  function emptyMemberOffset(index: number, ordinal: number): number {
+  function getMemberOffset(index: number, ordinal: number): number {
     const item = itemAt(index);
-    if (!containerRef || item?.kind !== "empty-group") return 0;
+    if (!containerRef || (item?.kind !== "empty-group" && item?.kind !== "tool-group")) return 0;
     const row = containerRef.querySelector<HTMLElement>(`.virtual-row[data-index="${index}"]`);
     const card = row?.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`);
     if (!row || !card) return 0;
@@ -675,7 +678,7 @@
     instance.getTotalSize();
     const rowOffset = instance.getOffsetForIndex(index, "start")?.[0];
     if (rowOffset === undefined) return;
-    const memberOffset = emptyMemberOffset(index, jump.ordinal);
+    const memberOffset = getMemberOffset(index, jump.ordinal);
     const offset = rowOffset + memberOffset;
     const previousOffset = untrack(() => jump.offset);
     jump.offset = offset;
@@ -1102,6 +1105,7 @@
                 message={item.message}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
+                revealed={item.message.ordinal === sessionScope.revealedOrdinal}
               />
             {/if}
           </div>
@@ -1283,7 +1287,19 @@
     background: transparent !important;
   }
 
-  .layout-stream :global(.message-header) {
+  .layout-stream :global(.message-header),
+  .layout-skim :global(.message-header) {
+    display: flex;
+    float: right;
+    gap: 0;
+    min-height: 0;
+    margin: 0 0 0 8px;
+  }
+
+  .layout-stream :global(.message-header > :not(.pin-btn):not(.message-link-btn)),
+  .layout-skim :global(.message-header > :not(.pin-btn):not(.message-link-btn)),
+  .layout-stream :global(.message-header > .fork-btn),
+  .layout-skim :global(.message-header > .fork-btn) {
     display: none;
   }
 
@@ -1303,10 +1319,6 @@
 
   .layout-skim .virtual-row {
     padding: 0;
-  }
-
-  .layout-skim :global(.message-header) {
-    display: none;
   }
 
   /* Skim rows touch, so rounded corners would leave notches between

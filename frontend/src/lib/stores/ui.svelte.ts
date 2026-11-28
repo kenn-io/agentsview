@@ -334,6 +334,7 @@ class UIStore {
   publishSecret: boolean = $state(false);
   publishTarget: PublishTarget = $state(null);
   selectedOrdinal: number | null = $state(null);
+  linkedMessage: { sessionId: string; ordinal: number } | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
   /** The tool call a pending jump expects at its message; null when any message at the ordinal will do. */
@@ -548,6 +549,7 @@ class UIStore {
   }
 
   setBlockVisible(type: BlockType, visible: boolean) {
+    if (this.visibleBlocks.has(type) !== visible) this.linkedMessage = null;
     const next = new Set(this.visibleBlocks);
     if (visible) {
       next.add(type);
@@ -559,6 +561,7 @@ class UIStore {
   }
 
   toggleBlock(type: BlockType) {
+    this.linkedMessage = null;
     const next = new Set(this.visibleBlocks);
     if (next.has(type)) {
       next.delete(type);
@@ -570,6 +573,7 @@ class UIStore {
   }
 
   showAllBlocks() {
+    if (this.hasBlockFilters) this.linkedMessage = null;
     this.visibleBlocks = new Set(ALL_BLOCK_TYPES);
     this.persistBlockFilters();
   }
@@ -608,6 +612,7 @@ class UIStore {
   }
 
   setTranscriptMode(mode: TranscriptMode) {
+    if (this.transcriptMode !== mode) this.linkedMessage = null;
     this.transcriptMode = mode;
   }
 
@@ -636,14 +641,17 @@ class UIStore {
   }
 
   selectOrdinal(ordinal: number) {
+    if (this.linkedMessage?.ordinal !== ordinal) this.linkedMessage = null;
     this.selectedOrdinal = ordinal;
   }
 
   clearSelection() {
+    this.linkedMessage = null;
     this.selectedOrdinal = null;
   }
 
   clearScrollState() {
+    this.linkedMessage = null;
     this.selectedOrdinal = null;
     this.pendingScrollOrdinal = null;
     this.pendingScrollSession = null;
@@ -651,6 +659,12 @@ class UIStore {
   }
 
   scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
+    if (
+      this.linkedMessage &&
+      (this.linkedMessage.ordinal !== ordinal ||
+        (sessionId && this.linkedMessage.sessionId !== sessionId))
+    )
+      this.linkedMessage = null;
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
@@ -661,6 +675,7 @@ class UIStore {
   setFollowLatest(enabled: boolean) {
     this.followLatest = enabled;
     if (enabled) {
+      this.linkedMessage = null;
       this.followLatestRequest += 1;
       this.selectedOrdinal = null;
       this.pendingScrollOrdinal = null;

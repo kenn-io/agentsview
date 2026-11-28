@@ -54,6 +54,88 @@ function filtered(visible: BlockType[]) {
 }
 
 describe("session search scope", () => {
+  it("reveals a linked system message without revealing other system messages", () => {
+    const prompt = message(0, "prompt", { role: "user" });
+    const target = message(1, "linked system message", { is_system: true, role: "user" });
+    const other = message(2, "other system message", { is_system: true, role: "user" });
+    const answer = message(3, "answer");
+    const result = scope([prompt, target, other, answer], { revealOrdinal: 1 });
+    expect(result.revealedOrdinal).toBe(1);
+    expect(result.items.flatMap((item) => item.ordinals)).toContain(1);
+    expect(result.items.flatMap((item) => item.ordinals)).not.toContain(2);
+    expect(result.allowsBlock(target, "text")).toBe(true);
+    expect(result.allowsBlock(other, "text")).toBe(false);
+  });
+
+  it("reveals a linked answer when thinking keeps its row visible", () => {
+    const answer = message(1, "[Thinking]\nplan\n[/Thinking]\nlinked answer", {
+      has_thinking: true,
+    });
+    const result = scope([answer], { ...filtered(["thinking"]), revealOrdinal: 1 });
+    expect(result.revealedOrdinal).toBe(1);
+    expect(result.allowsBlock(answer, "text")).toBe(true);
+  });
+
+  it("keeps hidden thinking out of search for a linked visible tool group", () => {
+    const tool = (ordinal: number) =>
+      message(ordinal, "[Thinking]\nprivate thought\n[/Thinking]", {
+        has_thinking: true,
+        has_tool_use: true,
+        tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+      });
+    const linked = tool(1);
+    const other = tool(2);
+    const result = scope([linked, other], { ...filtered(["tool"]), revealOrdinal: 1 });
+    expect(result.items.map((item) => [item.kind, item.ordinals])).toEqual([
+      ["tool-group", [1, 2]],
+    ]);
+    expect(result.allowsBlock(linked, "tool-input")).toBe(true);
+    expect(result.allowsBlock(linked, "thinking")).toBe(false);
+  });
+
+  it("reveals a hidden linked message without displacing a focused answer", () => {
+    const prompt = message(0, "prompt", { role: "user" });
+    const answer = message(1, "answer");
+    const tool = message(2, "", {
+      has_tool_use: true,
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read" }],
+    });
+    const result = scope([prompt, answer, tool], {
+      ...filtered(["user", "assistant"]),
+      transcriptMode: "focused",
+      revealOrdinal: 2,
+    });
+    expect(result.messages).toEqual([prompt, answer, tool]);
+    expect(result.allowsBlock(tool, "tool-input")).toBe(true);
+  });
+
+  it.each(["normal", "focused"] as const)(
+    "keeps filtered blocks hidden for a linked row in %s mode",
+    (transcriptMode) => {
+      const prompt = message(0, "prompt", { role: "user" });
+      const linked = message(1, "[Thinking]\nprivate thought\n[/Thinking]\nanswer", {
+        has_thinking: true,
+      });
+      const final = message(2, "final answer");
+      const result = scope([prompt, linked, final], {
+        ...filtered(["user", "assistant"]),
+        transcriptMode,
+        revealOrdinal: 1,
+      });
+      expect(result.messages).toEqual([prompt, linked, final]);
+      expect(result.revealedOrdinal).toBeUndefined();
+      expect(result.allowsBlock(linked, "thinking")).toBe(false);
+    },
+  );
+
+  it("searches the text of a linked answer its role filter hides", () => {
+    const prompt = message(0, "prompt", { role: "user" });
+    const answer = message(1, "needle answer");
+    const result = scope([prompt, answer], { ...filtered(["user"]), revealOrdinal: 1 });
+    expect(result.messages).toEqual([prompt, answer]);
+    expect(result.allowsBlock(answer, "text")).toBe(true);
+  });
+
   it("keeps visible prose in a mixed message and drops its hidden tool blocks", () => {
     const mixed = message(1, "needle prose\n\n[Bash]\necho needle", { has_tool_use: true });
     const result = scope([mixed], filtered(["user", "assistant"]));

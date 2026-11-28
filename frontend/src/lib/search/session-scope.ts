@@ -25,11 +25,15 @@ export interface SessionScopeInput {
   hasBlockFilters?: boolean;
   /** Provider rule that keeps an answer before its trailing tool calls. */
   keepAnswerBeforeTrailingTools?: boolean;
+  /** Linked message to keep in the transcript even when filters hide it. */
+  revealOrdinal?: number;
 }
 
 export interface SessionScope {
   /** Display items the current transcript mode and filters render. */
   items: DisplayItem[];
+  /** Ordinal of a row added because the link target was hidden. */
+  revealedOrdinal?: number;
   /** Display items normal mode renders under the same block filters. */
   normalItems: DisplayItem[];
   /** Messages reachable through `items`, in transcript order and deduplicated. */
@@ -139,6 +143,32 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     );
   }
 
+  // A linked message the filters hide gets its own unfiltered row, so the link
+  // still lands on it. A tool-only message becomes a tool group, which renders
+  // its calls whatever the tool filter says.
+  const revealed =
+    input.revealOrdinal === undefined
+      ? undefined
+      : input.messages.find((message) => message.ordinal === input.revealOrdinal);
+  const revealBlocks =
+    !!revealed &&
+    (!normalItems.some((item) => item.ordinals.includes(revealed.ordinal)) ||
+      !isVisible(revealed.role === "user" ? "user" : "assistant"));
+  let revealedItem: DisplayItem | undefined;
+  if (revealed && !items.some((item) => item.ordinals.includes(revealed.ordinal))) {
+    revealedItem = buildDisplayItems([revealed])[0]!;
+    const at = items.findIndex((item) => item.ordinals[0]! > revealed.ordinal);
+    items =
+      at < 0 ? [...items, revealedItem] : [...items.slice(0, at), revealedItem, ...items.slice(at)];
+  }
+  // The linked message's own row renders every block; a tool group renders its calls.
+  const linkedItem = revealed && items.find((item) => item.ordinals.includes(revealed.ordinal));
+  const revealedVisible = (message: Message, type: BlockType): boolean =>
+    revealBlocks &&
+    message === revealed &&
+    ((linkedItem?.kind === "message" && linkedItem.message === revealed) ||
+      (type === "tool" && linkedItem?.kind === "tool-group"));
+
   const messages: Message[] = [];
   const included = new Set<Message>();
   for (const item of items) {
@@ -152,6 +182,7 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
 
   return {
     items,
+    revealedOrdinal: revealBlocks ? revealed?.ordinal : undefined,
     normalItems,
     messages,
     // Skill expansions are never searchable, whether they render on their own
@@ -159,6 +190,6 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     allowsBlock: (message, kind) =>
       !isSkillInvocationMessage(message) &&
       included.has(message) &&
-      kindVisible(isVisible, message.role, kind),
+      kindVisible((type) => isVisible(type) || revealedVisible(message, type), message.role, kind),
   };
 }

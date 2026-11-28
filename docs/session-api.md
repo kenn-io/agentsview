@@ -577,7 +577,9 @@ Contract:
   ID must be a single path segment with reserved characters percent-encoded.
   Anything else is logged to the desktop log and ignored.
 - Pass an optional `?msg=<ordinal>` or `?msg=last` query to scroll to that
-  message. The app drops other query parameters.
+  message. The app drops other query parameters. An ordinal identifies a
+  position, so a transcript rewrite can make an existing link open a different
+  message.
 - If the app is already running, it focuses its window and navigates to the
   session. Otherwise, it launches and opens the session once its backend is
   ready. On Windows and Linux, a second launch forwards its URL to the running

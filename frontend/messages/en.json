@@ -291,6 +291,7 @@
   "message_content_role_teammate": "Teammate",
   "message_content_role_user": "User",
   "message_content_copy_message": "Copy message",
+  "message_content_copy_link": "Copy link to message",
   "message_content_copied_message": "Copied message",
   "message_content_copied": "Copied!",
   "message_content_code_collapsed_with_language": "Code block collapsed · {language} · Expand",

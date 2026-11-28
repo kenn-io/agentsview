@@ -145,21 +145,25 @@
       }
     | undefined = $state(undefined);
 
-  // Load active session's messages when selection changes.
-  // Only track activeSessionId and activeSessionLoadVersion (bumped
-  // when a not-found session recovers, so the same id reloads) —
-  // untrack the rest to prevent reactive loops from
-  // messages.loading / messages.messages.
+  // Reload messages when the route, selection, recovery version, or remote live availability changes.
+  // Untrack message state to prevent reactive loops.
   let lastMessageLoadSessionId: string | null = null;
+  let lastMessageLoadRoute: typeof router.route | null = null;
+  let lastMessageLoadVersion: number | null = null;
+  let lastMessageLoadLiveAllowed: boolean | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
     const liveAllowed = remoteLiveAllowed;
-    void sessions.activeSessionLoadVersion;
+    const loadVersion = sessions.activeSessionLoadVersion;
     let current = true;
     untrack(() => {
       const idChanged = id !== lastMessageLoadSessionId;
+      const liveOnly = !idChanged && route === lastMessageLoadRoute && loadVersion === lastMessageLoadVersion && liveAllowed !== lastMessageLoadLiveAllowed;
       lastMessageLoadSessionId = id;
+      lastMessageLoadRoute = route;
+      lastMessageLoadVersion = loadVersion;
+      lastMessageLoadLiveAllowed = liveAllowed;
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
@@ -184,7 +188,7 @@
         (ui.pendingScrollSession === null ||
           ui.pendingScrollSession === id ||
           (!idChanged && ui.pendingScrollSession === router.sessionId));
-      if (!pendingMatchesSession) {
+      if (!pendingMatchesSession && !liveOnly) {
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
         ui.pendingScrollSession = null;
@@ -692,28 +696,29 @@
     });
   });
 
+  let linkedMsgParam = $derived(router.params["msg"] ?? null);
+  let linkedCallParam = $derived(router.params["call"]);
+  let linkedToolUseId = $derived(router.params["tool_use_id"]);
+  let linkedRevision = $derived(router.params["rev"]);
+  let linkedFingerprint = $derived(router.params["fp"]);
+
   // Deep-link: apply the ?msg param. Kept separate from the
   // hydration effect above so scroll intent is not re-applied
   // every time hydration state changes.
   $effect(() => {
     const sid = router.sessionId;
-    const msgParam = router.params["msg"] ?? null;
-    const call = parseScrollCall(
-      router.params["call"],
-      router.params["tool_use_id"],
-      router.params["rev"],
-      router.params["fp"],
-    );
+    const msgParam = linkedMsgParam;
+    const call = parseScrollCall(linkedCallParam, linkedToolUseId, linkedRevision, linkedFingerprint);
     untrack(() => {
+      ui.linkedMessage = null;
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
-      } else {
-        const ordinal = parseInt(msgParam, 10);
-        if (Number.isFinite(ordinal)) {
-          ui.scrollToOrdinal(ordinal, sid, call);
-        }
+      } else if (/^\d+$/.test(msgParam)) {
+        const ordinal = Number(msgParam);
+        ui.linkedMessage = { sessionId: sid, ordinal };
+        ui.scrollToOrdinal(ordinal, sid, call);
       }
     });
   });
