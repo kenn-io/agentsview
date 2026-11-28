@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,40 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestToolSubstringReadOnlyScansWhenIndexModuleUnavailable(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	t.Cleanup(func() { _ = d.Close() })
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json,result_content)
+ SELECT id,session_id,'Read','Read','needle input','needle result' FROM messages WHERE session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,tool_use_id,source,status,content,content_length,event_index)
+ VALUES('s',0,'','stdout','success','needle event',12,0)`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	// Model a build without FTS5 by replacing the module name in the stored schema.
+	raw, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	for _, stmt := range []string{
+		"PRAGMA writable_schema=ON",
+		`UPDATE sqlite_master SET sql=replace(sql, 'USING fts5(', 'USING fts5_absent(') WHERE name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')`,
+		"PRAGMA writable_schema=OFF",
+	} {
+		_, err = raw.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, raw.Close())
+	reader, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	hits := substringHits(t, reader, ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input", "tool_result"}, Limit: 10})
+	assert.Len(t, hits, 3)
+}
 
 type substringHit struct {
 	Location string

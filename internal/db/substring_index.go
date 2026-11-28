@@ -121,7 +121,12 @@ func hasToolSubstringIndex(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) bool {
 	var ready bool
-	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?)", toolSubstringStateKey, toolSubstringReady).Scan(&ready) == nil && ready
+	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND CAST(value AS TEXT)=?)", toolSubstringStateKey, toolSubstringReady).Scan(&ready); err != nil || !ready {
+		return false
+	}
+	var input, result, event sql.NullInt64
+	err := q.QueryRowContext(ctx, "SELECT (SELECT 1 FROM tool_input_trigram_fts LIMIT 1), (SELECT 1 FROM tool_result_trigram_fts LIMIT 1), (SELECT 1 FROM tool_event_trigram_fts LIMIT 1)").Scan(&input, &result, &event)
+	return err == nil
 }
 
 // prepareToolSubstringIndex creates missing tables and resumes incomplete builds.
