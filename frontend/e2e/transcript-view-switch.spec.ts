@@ -78,6 +78,7 @@ test("switching content and layout with the View menu open keeps the transcript 
   await page.locator(".session-breadcrumb .view-trigger").click();
   const pick = (name: string) =>
     page.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).click();
+  const layoutGroup = page.getByRole("group", { name: "Layout" });
 
   await pick("Only your prompts and final answers");
   await expectHealthy(
@@ -95,7 +96,7 @@ test("switching content and layout with the View menu open keeps the transcript 
   );
 
   for (const layout of ["Compact", "Skim", "Stream", "Default"]) {
-    await pick(layout);
+    await layoutGroup.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
     await expectHealthy(page, () => true, layout);
   }
 

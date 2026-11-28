@@ -34,6 +34,7 @@ describe("TranscriptViewMenu", () => {
   beforeEach(() => {
     setLocale("en");
     ui.setLayout("default");
+    ui.setReadingWidth("default");
     ui.setTranscriptMode("normal");
     ui.showAllBlocks();
     component = mount(TranscriptViewMenu, { target: document.body });
@@ -44,6 +45,7 @@ describe("TranscriptViewMenu", () => {
     component = undefined;
     document.body.innerHTML = "";
     ui.setLayout("default");
+    ui.setReadingWidth("default");
     ui.setTranscriptMode("normal");
     ui.showAllBlocks();
   });
@@ -83,6 +85,22 @@ describe("TranscriptViewMenu", () => {
     await tick();
     expect(ui.transcriptMode).toBe("focused");
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  });
+
+  it("shows and changes the reading width", async () => {
+    ui.setReadingWidth("full");
+    await open();
+    const group = document.querySelector('[role="group"][aria-label="Reading width"]')!;
+    const choices = Array.from(group.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
+      "Default",
+      "Wider",
+      "Full",
+    ]);
+    expect(choices[2]!.getAttribute("aria-checked")).toBe("true");
+    choices[1]!.click();
+    await tick();
+    expect(ui.readingWidth).toBe("wider");
   });
 
   it("toggles a block type without closing the menu", async () => {
