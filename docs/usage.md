@@ -1200,6 +1200,9 @@ in-flight work.
 These actions let you resume where you left off without manually navigating to
 the project directory.
 
+Choose **Copy link to message** in a message's controls to copy a link that
+opens that message.
+
 ### The agentsview:// URL scheme
 
 The desktop app registers the `agentsview://` URL scheme so other tools can open

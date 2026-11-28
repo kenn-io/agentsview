@@ -17,6 +17,6 @@
   });
 </script>
 
-<CopyButton revealOnHover text={url}
+<CopyButton class="message-link-btn" revealOnHover text={url}
   ariaLabel={m.message_content_copy_link()} copiedAriaLabel={m.message_content_copied()}
   title={m.message_content_copy_link()} copiedTitle={m.message_content_copied()} />

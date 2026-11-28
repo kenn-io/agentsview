@@ -1287,7 +1287,19 @@
     background: transparent !important;
   }
 
-  .layout-stream :global(.message-header) {
+  .layout-stream :global(.message-header),
+  .layout-skim :global(.message-header) {
+    display: flex;
+    float: right;
+    gap: 0;
+    min-height: 0;
+    margin: 0 0 0 8px;
+  }
+
+  .layout-stream :global(.message-header > :not(.pin-btn):not(.message-link-btn)),
+  .layout-skim :global(.message-header > :not(.pin-btn):not(.message-link-btn)),
+  .layout-stream :global(.message-header > .fork-btn),
+  .layout-skim :global(.message-header > .fork-btn) {
     display: none;
   }
 
@@ -1307,10 +1319,6 @@
 
   .layout-skim .virtual-row {
     padding: 0;
-  }
-
-  .layout-skim :global(.message-header) {
-    display: none;
   }
 
   /* Skim rows touch, so rounded corners would leave notches between
