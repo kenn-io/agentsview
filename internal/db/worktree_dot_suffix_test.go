@@ -30,6 +30,7 @@ func TestResolveRepoDotSuffix(t *testing.T) {
 		{"UNC prefix stays on share", "//host/share/../other.dev", "//host/share/other.dev/sample-app.dev", "sample_app"},
 		{"UNC cwd cannot match sibling share", "//host/other.dev", "//host/share/../other.dev/sample-app.dev", ""},
 		{"POSIX root", "/", "/sample-app.dev", "sample_app"},
+		{"POSIX colon directory", "/code", "/:/../code/sample-app.dev", "sample_app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project, ok := ResolveWorktreeProjectFromMappings([]WorktreeProjectMapping{

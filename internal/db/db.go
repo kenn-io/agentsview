@@ -1656,7 +1656,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return d, nil
 }
 
-// OpenOption configures a writable archive before any startup migrations run.
+// OpenOption configures writable archive initialization and startup migrations.
 type OpenOption func(*openOptions)
 
 type openOptions struct {
@@ -1664,6 +1664,7 @@ type openOptions struct {
 	deferRepositoryProjectRepair bool
 	deferMessageFTSRepair        bool
 	configuredWorktrees          *configuredWorktreeMappings
+	adoptArchiveOwnership        func(context.Context, *DB) error
 }
 
 func open(
@@ -1746,6 +1747,11 @@ func open(
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
 	}
 
+	if options.adoptArchiveOwnership != nil {
+		if err := options.adoptArchiveOwnership(ctx, d); err != nil {
+			return closeOnError(err)
+		}
+	}
 	if !options.deferRepositoryProjectRepair {
 		if err := d.migrateRepositoryProjects(ctx, progress); err != nil {
 			return closeOnError(fmt.Errorf("repairing repository project names: %w", err))

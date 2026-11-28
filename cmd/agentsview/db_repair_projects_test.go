@@ -129,26 +129,39 @@ func TestDBRepairProjectsPreviewAndApply(t *testing.T) {
 
 func TestRepositoryProjectUpgradeUsesConfiguredWorktreeMappings(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		upgrade func(*testing.T, config.Config)
+		name          string
+		recordedOwner bool
+		upgrade       func(*testing.T, config.Config)
 	}{
-		{"ordinary_open", func(t *testing.T, cfg config.Config) {
+		{"ordinary_open", true, func(t *testing.T, cfg config.Config) {
 			t.Helper()
 			database, err := openDB(t.Context(), cfg)
 			require.NoError(t, err)
 			require.NoError(t, database.Close())
 		}},
-		{"startup_worker", func(t *testing.T, cfg config.Config) {
+		{"startup_worker", true, func(t *testing.T, cfg config.Config) {
 			t.Helper()
 			database, lock, err := openWorkerWriteDB(t.Context(), cfg, true, nil)
 			require.NoError(t, err)
 			closeWriteDB(database, lock)
 		}},
-		{"adopt_machine", func(t *testing.T, _ config.Config) {
+		{"adopt_machine", false, func(t *testing.T, cfg config.Config) {
 			t.Helper()
+			ctx := t.Context()
 			cmd := newDBAdoptMachineCommand()
-			cmd.SetContext(t.Context())
-			_, err := executeCommand(cmd, "former-machine")
+			cmd.SetContext(ctx)
+			_, err := executeCommand(cmd, "former-machine", "unknown-machine")
+			require.ErrorContains(t, err, "not recorded")
+			reader, err := db.OpenReadOnly(ctx, cfg.DBPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = reader.Close() })
+			assert.False(t, repositoryProjectRepairCompleted(t, reader), "a failed adoption must not consume the migration")
+			assertRepositorySessionProject(t, reader, "peer", "app")
+			require.NoError(t, reader.Close())
+
+			cmd = newDBAdoptMachineCommand()
+			cmd.SetContext(ctx)
+			_, err = executeCommand(cmd, "former-machine")
 			require.NoError(t, err)
 		}},
 	} {
@@ -158,16 +171,26 @@ func TestRepositoryProjectUpgradeUsesConfiguredWorktreeMappings(t *testing.T) {
 			database, err := db.Open(ctx, cfg.DBPath)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
+			if tc.recordedOwner {
+				require.NoError(t, database.SetSyncState(ctx, "artifact_local_machine_name", "former-machine"))
+			}
 			_, err = database.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
-				Machine: cfg.InstallationID, PathPrefix: "/stored", Project: "app", Enabled: true,
+				Machine: "former-machine", PathPrefix: "/stored", Project: "app", Enabled: true,
 			})
 			require.NoError(t, err)
-			for _, s := range []db.Session{
-				{ID: "stored-rule", Agent: "codex", Machine: cfg.InstallationID, Cwd: "/stored/app.dev", Project: "app"},
-				{ID: "config-rule", Agent: "codex", Machine: cfg.InstallationID, Cwd: "/workspace/app.dev", Project: "app"},
-				{ID: "former-owner", Agent: "codex", Machine: "former-machine", Cwd: "/unmapped/app.dev", Project: "app"},
-			} {
-				seedLegacyRepositoryProject(t, database, s, "https://example.com/team/other.git")
+			sessions := []struct {
+				id, machine, cwd, wantMachine, wantProject string
+			}{
+				{"stored-rule", "former-machine", "/stored/app.dev", cfg.InstallationID, "app"},
+				{"config-rule", cfg.InstallationID, "/workspace/app.dev", cfg.InstallationID, "app"},
+				{"former-owner", "former-machine", "/workspace/app.dev", cfg.InstallationID, "app"},
+				{"local-sentinel", "local", "/workspace/app.dev", cfg.InstallationID, "app"},
+				{"peer", "peer", "/workspace/app.dev", "peer", "other"},
+			}
+			for _, s := range sessions {
+				seedLegacyRepositoryProject(t, database, db.Session{
+					ID: s.id, Agent: "codex", Machine: s.machine, Cwd: s.cwd, Project: "app",
+				}, "https://example.com/team/other.git")
 			}
 			clearRepositoryProjectRepairMarker(t, database)
 			require.NoError(t, database.Close())
@@ -179,14 +202,19 @@ func TestRepositoryProjectUpgradeUsesConfiguredWorktreeMappings(t *testing.T) {
 			reader, err := db.OpenReadOnly(ctx, cfg.DBPath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, reader.Close()) })
-			assertRepositorySessionProject(t, reader, "stored-rule", "app")
-			assertRepositorySessionProject(t, reader, "config-rule", "app")
-			assertRepositorySessionProject(t, reader, "former-owner", "other")
+			for _, s := range sessions {
+				got, err := reader.GetSessionFull(ctx, s.id)
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				assert.Equal(t, s.wantMachine, got.Machine, s.id)
+				assert.Equal(t, s.wantProject, got.Project, s.id)
+			}
 			assert.True(t, repositoryProjectRepairCompleted(t, reader))
 			rules, err := reader.ListAllWorktreeProjectMappings(ctx)
 			require.NoError(t, err)
 			require.Len(t, rules, 1)
 			assert.Equal(t, "/stored", rules[0].PathPrefix)
+			assert.Equal(t, cfg.InstallationID, rules[0].Machine)
 		})
 	}
 }

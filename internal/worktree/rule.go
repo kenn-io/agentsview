@@ -62,7 +62,8 @@ func NormalizePath(value string) string {
 	}
 	// Keep the volume outside path.Clean: only its rooted suffix can
 	// consume "..", so a parent reference can never leave that volume.
-	if len(value) >= 3 && value[1] == ':' && value[2] == '/' {
+	drive := value[0] | 0x20 // Match ASCII drive letters in either case.
+	if len(value) >= 3 && drive >= 'a' && drive <= 'z' && value[1] == ':' && value[2] == '/' {
 		return value[:2] + path.Clean(value[2:])
 	}
 	if unc, ok := strings.CutPrefix(value, "//"); ok {

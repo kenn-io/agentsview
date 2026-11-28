@@ -1929,25 +1929,27 @@ func openDBWithOpener(
 		return nil, err
 	}
 	applyClassifierConfig(cfg)
-	database, err := open(ctx, cfg.DBPath, cfg.ArchiveContent, progress,
-		db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings))
+	options := []db.OpenOption{db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings)}
+	if cfg.InstallationID != "" {
+		options = append(options, db.WithArchiveOwnership(func(ctx context.Context, database *db.DB) error {
+			unowned, err := database.EnsureInstallationIdentity(ctx, cfg.InstallationID)
+			if err != nil {
+				return fmt.Errorf("adopting installation identity: %w", err)
+			}
+			if len(unowned) > 0 {
+				log.Printf("archive has sessions under machine keys %q with no recorded local owner; "+
+					"they stay separate until you run `agentsview db adopt-machine` with the keys you own",
+					unowned)
+			}
+			return nil
+		}))
+	}
+	database, err := open(ctx, cfg.DBPath, cfg.ArchiveContent, progress, options...)
 	if err != nil {
 		return nil, err
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
 	database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
-	if cfg.InstallationID != "" {
-		unowned, err := database.EnsureInstallationIdentity(ctx, cfg.InstallationID)
-		if err != nil {
-			database.Close()
-			return nil, fmt.Errorf("adopting installation identity: %w", err)
-		}
-		if len(unowned) > 0 {
-			log.Printf("archive has sessions under machine keys %q with no recorded local owner; "+
-				"they stay separate until you run `agentsview db adopt-machine` with the keys you own",
-				unowned)
-		}
-	}
 	if cfg.InstallationID != "" && cfg.LocalMachineName != "" {
 		if err := database.SetSyncState(ctx, db.MachineLabelKeyPrefix+cfg.InstallationID, cfg.LocalMachineName); err != nil {
 			database.Close()
