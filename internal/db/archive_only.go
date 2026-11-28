@@ -33,6 +33,14 @@ func (db *DB) IsArchiveOnly(ctx context.Context) (bool, error) {
 	return enabled, err
 }
 
+// HostPathsDetached reports whether the archive was copied without host sources.
+func (db *DB) HostPathsDetached(ctx context.Context) (bool, error) {
+	var detached bool
+	err := db.getReader().QueryRow(ctx, `SELECT EXISTS (
+ SELECT 1 FROM archive_metadata WHERE key = 'host_paths_detached' AND value = '1')`).Scan(&detached)
+	return detached, err
+}
+
 func (db *DB) RequireSourceSync(ctx context.Context) error {
 	enabled, err := db.IsArchiveOnly(ctx)
 	if err != nil {

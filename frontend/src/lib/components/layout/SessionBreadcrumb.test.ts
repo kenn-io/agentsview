@@ -365,6 +365,7 @@ beforeEach(() => {
     .mockResolvedValue(makeToolSequences());
   messages.clear();
   sessionTiming.reset();
+  sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
   getTiming.mockReset();
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
@@ -402,6 +403,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
+  sync.serverVersion = null;
   for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
@@ -1026,6 +1028,44 @@ describe("SessionBreadcrumb", () => {
 
     unmount(component);
     messages.clear();
+  });
+
+  it.each([
+    ["a copied archive", { host_paths_detached: true }],
+    ["unresolved version metadata", null],
+  ])("omits the open/resume menu and desktop link for %s", async (_label, version) => {
+    sync.serverVersion = version as typeof sync.serverVersion;
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "/tmp/project" });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("codex", {
+          id: "codex:copied-session",
+          file_path: "/tmp/project/session.jsonl",
+        }),
+        onBack: () => {},
+      },
+    });
+    await flushPromises();
+    await tick();
+
+    expect(document.querySelector(".resume-btn")).toBeNull();
+    expect(document.querySelector('[data-testid="codex-desktop-link"]')).toBeNull();
+    await unmount(component);
+  });
+
+  it("keeps the open/resume menu and desktop link for an ordinary archive", async () => {
+    sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("codex", { id: "codex:archived" }), onBack: () => {} },
+    });
+    await flushPromises();
+    document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+    await tick();
+
+    expect(document.querySelector('[data-testid="codex-desktop-link"]')).toBeTruthy();
+    await unmount(component);
   });
 
   it("offers a Codex Desktop deep link for a local terminal-created session", async () => {

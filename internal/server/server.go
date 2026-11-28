@@ -55,6 +55,7 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
 	ArchiveOnly                bool   `json:"archive_only,omitempty"`
+	HostPathsDetached          bool   `json:"host_paths_detached,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	FrictionAvailable          bool   `json:"friction_available"`

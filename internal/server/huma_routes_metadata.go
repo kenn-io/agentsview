@@ -201,6 +201,14 @@ func (s *Server) humaListAgents(
 	return &jsonOutput[agentsResponse]{Body: agentsResponse{Agents: agents}}, nil
 }
 
+func setArchiveState(ctx context.Context, database *db.DB, version *VersionInfo) (err error) {
+	if version.ArchiveOnly, err = database.IsArchiveOnly(ctx); err != nil {
+		return err
+	}
+	version.HostPathsDetached, err = database.HostPathsDetached(ctx)
+	return err
+}
+
 func (s *Server) humaGetVersion(
 	ctx context.Context,
 	_ *emptyInput,
@@ -208,9 +216,7 @@ func (s *Server) humaGetVersion(
 	version := s.version
 	version.DocbankEnabled = s.cfg.Integrations.Docbank.Enabled()
 	if database, ok := s.db.(*db.DB); ok {
-		var err error
-		version.ArchiveOnly, err = database.IsArchiveOnly(ctx)
-		if err != nil {
+		if err := setArchiveState(ctx, database, &version); err != nil {
 			return nil, serverError(err)
 		}
 	}

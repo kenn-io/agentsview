@@ -112,6 +112,12 @@ class SyncStore {
     return this.serverVersion?.archive_only === true;
   }
 
+  // False until version metadata arrives, so a copied archive never
+  // offers host actions while it loads.
+  get hostSessionActionsAvailable(): boolean {
+    return this.serverVersion !== null && this.serverVersion.host_paths_detached !== true;
+  }
+
   private watchEventSource: LiveSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollVisibilityHandler: (() => void) | null = null;

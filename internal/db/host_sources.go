@@ -53,6 +53,7 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 			`DELETE FROM raw_archive_sessions`, `DELETE FROM raw_archive_root_aliases`,
 			`DELETE FROM raw_archive_sources`, `DELETE FROM raw_archive_files`,
 			`DELETE FROM raw_archive_roots`, `DELETE FROM raw_archive_devices`,
+			`INSERT INTO archive_metadata(key,value) VALUES('host_paths_detached','1') ON CONFLICT(key) DO UPDATE SET value='1'`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return err
