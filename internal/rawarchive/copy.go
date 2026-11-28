@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -80,8 +81,7 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		return err
 	}
 	caches := db.UsageCacheFiles(path, databaseID)
-	for i := len(caches) - 1; i >= 0; i-- {
-		cache := caches[i]
+	for _, cache := range slices.Backward(caches) {
 		info, err := os.Lstat(cache)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
