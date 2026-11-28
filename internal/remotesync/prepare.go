@@ -530,8 +530,13 @@ func (hs RemoteSync) prepare(
 	bootstrap := errors.Is(mirrorStatErr, os.ErrNotExist)
 	diff := newMirrorDiff(mirrorRoot)
 	defer func() { err = errors.Join(err, diff.close()) }()
+	snapshotTargets := sqliteSnapshotTargets(dirScoped)
+	var sqliteEntries []ManifestEntry
 	manifestStarted := time.Now()
 	supported, err := hs.Source.Manifest(ctx, dirScoped, func(entry ManifestEntry) error {
+		if _, ok := snapshotTargets[filepath.Clean(entry.Path)]; ok {
+			sqliteEntries = append(sqliteEntries, entry)
+		}
 		err := diff.add(entry)
 		if _, remote := errors.AsType[*manifestOrderError](err); err == nil || remote {
 			return err
@@ -558,6 +563,7 @@ func (hs RemoteSync) prepare(
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, delta.Close()) }()
+	delta.sqliteEntries = sqliteEntries
 	prepared.root = mirrorRoot
 	prepared.mirrorImport, err = hs.prepareMirror(ctx, splitTargets{
 		dirScoped:  dirScoped,
@@ -1204,6 +1210,9 @@ func (hs RemoteSync) prepareMirror(
 		if err := RemoveMirrorTypeConflicts(mirrorRoot, fetch); err != nil {
 			return nil, err
 		}
+		// Changed SQLite databases go over sqlite3_rsync (changed pages only);
+		// the rest, and any database it could not refresh, use the archive.
+		fetch = hs.rsyncSQLiteSnapshots(ctx, targets.dirScoped, fetch, Manifest{Files: delta.sqliteEntries}, mirrorRoot)
 		if len(fetch) > 0 {
 			full := len(fetch) == delta.Total
 			err := hs.downloadIntoMirror(

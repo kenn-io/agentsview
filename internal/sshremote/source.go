@@ -46,6 +46,11 @@ type Source struct {
 	ensureErr     error
 }
 
+// SQLiteRsyncOrigin names remotePath on this host as a sqlite3_rsync origin.
+func (s *Source) SQLiteRsyncOrigin(remotePath string) string {
+	return s.provisioner.Runner.Destination + ":" + remotePath
+}
+
 // NewSource returns a Source for one sync run.
 func NewSource(p Provisioner) *Source { return &Source{provisioner: p} }
 
