@@ -403,7 +403,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.restoreAllMocks();
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockRestore();
   for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");

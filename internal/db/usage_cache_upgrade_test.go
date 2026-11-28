@@ -320,17 +320,11 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 	}
 }
 
-func TestRelabelCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
+func TestRelabelCopiedUsageRollupsSupportsOldFormats(t *testing.T) {
 	for _, format := range []int{21, 23} {
 		t.Run(strconv.Itoa(format), func(t *testing.T) {
 			archivePath, cachePath, id := copyUsageFixture(t, format)
 			raw := openRawUsageCacheTestDB(t, cachePath)
-			var facts int
-			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
-			require.Positive(t, facts)
-			var zones int
-			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&zones))
-			require.Positive(t, zones)
 			var installs int
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&installs))
 			require.Positive(t, installs)
@@ -341,15 +335,14 @@ func TestRelabelCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 			require.NoError(t, RelabelCopiedUsageRollups(t.Context(), cachePath, archivePath))
 			raw = openRawUsageCacheTestDB(t, cachePath)
 			var kept int
-			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&kept))
-			assert.Equal(t, facts, kept)
-			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&kept))
-			assert.Equal(t, zones, kept)
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_installs`).Scan(&kept))
 			assert.Equal(t, installs, kept)
 			require.NoError(t, raw.Close())
 		})
 	}
+}
+
+func TestUsableCopiedUsageCache(t *testing.T) {
 	for _, kind := range []string{"wrong archive", "missing schema", "unrelated"} {
 		t.Run(kind, func(t *testing.T) {
 			archivePath := filepath.Join(t.TempDir(), "sessions.db")

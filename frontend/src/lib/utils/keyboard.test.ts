@@ -57,7 +57,6 @@ describe("registerShortcuts", () => {
     for (const id of starred.ids) {
       starred.unstar(id);
     }
-    sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
     vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
     navigateMessage = vi.fn();
     navigateUserPrompt = vi.fn();

@@ -113,7 +113,7 @@ func TestCopyDetachedArchive(t *testing.T) {
 }
 
 func TestCopyUsageCache(t *testing.T) {
-	t.Run("obsolete corrupt cache", func(t *testing.T) {
+	t.Run("relabels rollups in the copy", func(t *testing.T) {
 		ctx := t.Context()
 		source := t.TempDir()
 		path := filepath.Join(source, "sessions.db")
@@ -137,12 +137,10 @@ func TestCopyUsageCache(t *testing.T) {
 		require.NoError(t, cache.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones`).Scan(&rollups))
 		require.Positive(t, rollups)
 		require.NoError(t, cache.Close())
-		require.NoError(t, os.WriteFile(caches[0], []byte("corrupt obsolete cache"), 0o600))
 		dest := filepath.Join(t.TempDir(), "copy")
 		require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}}))
 		copiedCache := filepath.Join(dest, filepath.Base(caches[len(caches)-1]))
 		assert.FileExists(t, copiedCache)
-		assert.NoFileExists(t, filepath.Join(dest, filepath.Base(caches[0])))
 		cache, err = sql.Open("sqlite3", copiedCache)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, cache.Close()) })

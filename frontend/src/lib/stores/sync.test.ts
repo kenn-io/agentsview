@@ -107,26 +107,37 @@ describe("remote API version", () => {
   });
 
   it.each([
-    { remote: true, apiVersion: 27, allowed: false, detached: undefined, hostAllowed: true },
-    { remote: true, apiVersion: 28, allowed: true, detached: false, hostAllowed: true },
-    { remote: false, apiVersion: 27, allowed: true, detached: true, hostAllowed: false },
+    { remote: true, apiVersion: 27, allowed: false },
+    { remote: true, apiVersion: 28, allowed: true },
+    { remote: false, apiVersion: 27, allowed: true },
   ])(
     "gates session updates for remote=$remote API $apiVersion",
-    async ({ remote, apiVersion, allowed, detached, hostAllowed }) => {
-      sync.serverVersion = null;
-      expect(sync.hostSessionActionsAvailable).toBe(false);
+    async ({ remote, apiVersion, allowed }) => {
       api.isRemoteConnection.mockReturnValue(remote);
       api.getVersion.mockResolvedValue({
         api_version: apiVersion,
         version: "test",
         commit: "test",
-        host_paths_detached: detached,
       });
       await sync.loadVersion();
       expect(sync.remoteLiveAllowed).toBe(allowed);
-      expect(sync.hostSessionActionsAvailable).toBe(hostAllowed);
     },
   );
+});
+
+describe("host session actions", () => {
+  afterEach(() => {
+    sync.serverVersion = null;
+  });
+
+  it.each([
+    { version: null, allowed: false },
+    { version: {}, allowed: true },
+    { version: { host_paths_detached: true }, allowed: false },
+  ])("allows actions for version $version: $allowed", ({ version, allowed }) => {
+    sync.serverVersion = version as typeof sync.serverVersion;
+    expect(sync.hostSessionActionsAvailable).toBe(allowed);
+  });
 });
 
 describe("hidden status polling", () => {
