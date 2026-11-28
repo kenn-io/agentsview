@@ -378,6 +378,10 @@ test-scoped-upgrade-frontend:
 test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview ./internal/cursorusage -run '^(TestCursorAccount|TestCursorSync|TestExportReportingCursorAccount|TestListDailyUsageUsers|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID|TestAccountUsageAgentMigrationPreservesCursorRows|TestOpenReadOnlyDBRejectsStaleArchive)' -count=1
 
+.PHONY: test-archive-copy
+test-archive-copy: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/rawarchive ./internal/db -run '^(TestCopyDetachedArchive|TestCodexCloudCopiesMatchBetweenDayAndDigest)$$' -count=1
+
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
 PERF_SIM_FLAGS ?=
