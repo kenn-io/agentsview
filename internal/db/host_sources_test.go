@@ -2,7 +2,7 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,7 +102,7 @@ func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	for i, project := range []string{"/first/api", "/second/api", `C:\work\api`, "/work/solo", "api", CopiedProjectLabel("/first/api")} {
-		require.NoError(t, d.UpsertSession(ctx, Session{ID: fmt.Sprint(i), Agent: "claude", Project: project}))
+		require.NoError(t, d.UpsertSession(ctx, Session{ID: strconv.Itoa(i), Agent: "claude", Project: project}))
 	}
 	require.NoError(t, d.ClearHostSources(ctx))
 	rows, err := d.Reader().Query(ctx, `SELECT project FROM sessions ORDER BY id`)

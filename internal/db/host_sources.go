@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -74,23 +75,7 @@ func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
 	tables := []string{"sessions", "recall_entries", "insights", "session_deletion_changes", "commit_links", "commit_trailers"}
 	labels := map[string]bool{}
 	for _, table := range tables {
-		rows, err := tx.QueryContext(ctx, "SELECT DISTINCT project FROM "+table+" WHERE project IS NOT NULL AND project <> ''")
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var value string
-			if err := rows.Scan(&value); err != nil {
-				rows.Close()
-				return err
-			}
-			labels[value] = true
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
+		if err := collectCopiedProjectLabels(ctx, tx, table, labels); err != nil {
 			return err
 		}
 	}
@@ -114,4 +99,20 @@ func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func collectCopiedProjectLabels(ctx context.Context, tx *sql.Tx, table string, labels map[string]bool) (retErr error) {
+	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT project FROM "+table+" WHERE project IS NOT NULL AND project <> ''")
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return err
+		}
+		labels[value] = true
+	}
+	return rows.Err()
 }
