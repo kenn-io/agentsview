@@ -29,7 +29,6 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dest, "assets", strings.TrimPrefix(ref, "asset://")))
 	require.NoError(t, err)
 	assert.Equal(t, "canonical image", string(got))
-
 }
 
 func TestCopyDetachedArchive(t *testing.T) {
@@ -98,7 +97,7 @@ func TestCopyDetachedArchive(t *testing.T) {
 			err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
 			require.Error(t, err)
 			if kind == "empty" || kind == "unrelated" {
-				assert.ErrorContains(t, err, "source is not an AgentsView archive")
+				require.ErrorContains(t, err, "source is not an AgentsView archive")
 			}
 			entries, err := os.ReadDir(parent)
 			require.NoError(t, err)
@@ -151,8 +150,8 @@ func TestCopyExplainsUnreadableUsageCache(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "copy")
 	err = Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}})
 	require.ErrorContains(t, err, cache)
-	assert.ErrorContains(t, err, "usage cache")
-	assert.ErrorContains(t, err, "move")
+	require.ErrorContains(t, err, "usage cache")
+	require.ErrorContains(t, err, "move")
 	assert.NoDirExists(t, destination)
 	require.NoError(t, os.Rename(cache, cache+".bad"))
 	require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}}))

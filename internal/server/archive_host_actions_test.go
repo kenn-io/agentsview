@@ -2,8 +2,7 @@ package server
 
 import (
 	"net/http"
-	"path/filepath"
-	"runtime"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -14,10 +13,8 @@ import (
 
 func TestDetachedArchiveDirectoryAndResumeRequests(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	bin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
+	bin, err := exec.LookPath("go")
+	require.NoError(t, err)
 	openerCacheMu.Lock()
 	previous, previousTime := openerCache, openerCacheAt
 	openerCache = []Opener{{ID: "test-opener", Kind: "editor", Bin: bin}}
