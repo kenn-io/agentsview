@@ -692,18 +692,19 @@
     });
   });
 
+  let linkedMsgParam = $derived(router.params["msg"] ?? null);
+  let linkedCallParam = $derived(router.params["call"]);
+  let linkedToolUseId = $derived(router.params["tool_use_id"]);
+  let linkedRevision = $derived(router.params["rev"]);
+  let linkedFingerprint = $derived(router.params["fp"]);
+
   // Deep-link: apply the ?msg param. Kept separate from the
   // hydration effect above so scroll intent is not re-applied
   // every time hydration state changes.
   $effect(() => {
     const sid = router.sessionId;
-    const msgParam = router.params["msg"] ?? null;
-    const call = parseScrollCall(
-      router.params["call"],
-      router.params["tool_use_id"],
-      router.params["rev"],
-      router.params["fp"],
-    );
+    const msgParam = linkedMsgParam;
+    const call = parseScrollCall(linkedCallParam, linkedToolUseId, linkedRevision, linkedFingerprint);
     untrack(() => {
       ui.linkedMessage = null;
       if (!sid || !msgParam) return;

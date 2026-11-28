@@ -105,6 +105,16 @@ it("opens a copied message link with its target hidden by saved filters", async 
   expect(ui.isBlockVisible("thinking")).toBe(false);
   expect(ui.transcriptMode).toBe("focused");
   expect(router.params.msg).toBe("1");
+  ui.toggleBlock("assistant");
+  expect(ui.linkedMessage).toBeNull();
+  const scroll = vi.spyOn(ui, "scrollToOrdinal");
+  router.replaceParams({ ...router.params, project: "other" });
+  await flushEffects();
+  expect(ui.linkedMessage).toBeNull();
+  expect(scroll).not.toHaveBeenCalled();
+  router.replaceParams({ ...router.params, call: "0", tool_use_id: "call-1" });
+  await flushEffects();
+  expect(scroll).toHaveBeenCalledWith(1, "session-1", { index: 0, toolUseId: "call-1" });
 });
 
 it("ignores a malformed message ordinal", async () => {
