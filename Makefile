@@ -365,7 +365,7 @@ test: pricing-snapshot ensure-embed-dir
 
 .PHONY: test-archive-copy
 test-archive-copy: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/rawarchive ./internal/db ./internal/server ./cmd/agentsview -run '^(TestCopyPreservesAssetReferences|TestCopyDetachedArchive|TestCopyOmitsRecoveryVaults|TestCopyRefusesIncompleteSources|TestCopyExcludesUnreadableUsageCache|TestCopySelectsUsageCaches|TestClearHostSources|TestCopyProjectLabels|TestDetachedVersionSurvivesRebuildMetadataCopy|TestDetachedArchiveCommitRepositories|TestDetachedArchiveRejectsHostActions|TestDetachedArchivePreservesSessionsOnRebuild)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/rawarchive ./internal/db ./internal/server ./cmd/agentsview -run '^(TestCopyPreservesAssetReferences|TestCopyDetachedArchive|TestCopyOmitsRecoveryVaults|TestCopyRefusesIncompleteSources|TestCopyExcludesUnreadableUsageCache|TestCopySelectsUsageCaches|TestUsageCacheUpgradeReleasedFacts|TestClearHostSources|TestCopyProjectLabels|TestDetachedVersionSurvivesRebuildMetadataCopy|TestDetachedArchiveCommitRepositories|TestDetachedArchiveRejectsHostActions|TestDetachedArchivePreservesSessionsOnRebuild)$$' -count=1
 
 # Keep this focused target separate: `make test` also runs perfsim's
 # unrelated TestActiveAppendGrowth case.
