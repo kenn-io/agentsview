@@ -97,6 +97,19 @@ func launchedRunArgs(agent string, words []string) (ids map[string]bool, jsonEve
 	return ids, jsonEvents, resumed || agent == "codex" && len(positional) > 1 && positional[1] == "resume"
 }
 
+// quotedSubstitution reports a word that is one double-quoted $(...) and nothing else.
+func quotedSubstitution(word *syntax.Word) bool {
+	if len(word.Parts) != 1 {
+		return false
+	}
+	quoted, ok := word.Parts[0].(*syntax.DblQuoted)
+	if !ok || quoted.Dollar || len(quoted.Parts) != 1 {
+		return false
+	}
+	_, ok = quoted.Parts[0].(*syntax.CmdSubst)
+	return ok
+}
+
 // launchedRunID returns the one run ID a starting shell call shows.
 func launchedRunID(ctx context.Context, input, output string) string {
 	if command, ok := codeModeCommand(input); ok {
@@ -161,7 +174,8 @@ func launchedRunID(ctx context.Context, input, output string) string {
 					continue
 				}
 				// Only a quoted argument after -- cannot change option roles.
-				if !quotedValue(args[i]) || i == 0 || words[i-1] != "--" {
+				// A quoted command substitution stays one argument and is not run here.
+				if !quotedSubstitution(args[i]) && (!quotedValue(args[i]) || i == 0 || words[i-1] != "--") {
 					unsafeOutput = true
 					return false
 				}
@@ -294,6 +308,18 @@ func hasLaunchedOutputID(text string) bool {
 	return launchedOutputHint.MatchString(text) && len(launchedOutputIDs(launchedRunOutput(codeModeOutput(text)))) > 0
 }
 
+// collectLaunchedResults keeps output from the calls' results. A failed result
+// drops its call, so a launch that never started links to no session.
+func collectLaunchedResults(calls map[string]*ParsedToolCall, outputs map[string]string, results []ParsedToolResult) {
+	for _, result := range results {
+		if result.Status == "errored" {
+			delete(calls, result.ToolUseID)
+		} else if calls[result.ToolUseID] != nil {
+			outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
+		}
+	}
+}
+
 // annotateClaudeLaunchedRuns associates a Bash call with its own results.
 // Other agents that reuse Claude's transcript format skip it.
 func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, foreign bool) error {
@@ -311,13 +337,7 @@ func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, f
 				calls[call.ToolUseID] = call
 			}
 		}
-		for _, result := range messages[i].ToolResults {
-			if result.Status == "errored" {
-				delete(calls, result.ToolUseID)
-			} else if calls[result.ToolUseID] != nil {
-				outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
-			}
-		}
+		collectLaunchedResults(calls, outputs, messages[i].ToolResults)
 	}
 	for id, call := range calls {
 		call.SubagentSessionID = launchedRunID(ctx, call.InputJSON, outputs[id])
