@@ -24,6 +24,7 @@ func TestLaunchedRunID(t *testing.T) {
 		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
 		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", id},
+		{"trailing command substitution prompt", `claude -p --session-id ` + id + ` "$(cat p)"`, "", id},
 		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"quoted substitution after option value delimiter", `claude --model -- "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"quoted substitution as option value", `claude -p --model "$(cat model)" --session-id ` + id, "", id},
@@ -84,6 +85,21 @@ func TestAnnotateClaudeLaunchedRunFailedResultWithStartup(t *testing.T) {
 	}
 	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
 	assert.Equal(t, "codex:"+id, messages[0].ToolCalls[0].SubagentSessionID)
+}
+
+func TestFailedLaunchedRunRequiresMatchingOutputID(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	const other = "abcdefab-1234-1234-1234-123456789abc"
+	input := `{"command":"claude -p --session-id ` + id + `"}`
+	output := "OpenAI Codex v0.1.0\n--------\nsession id: " + other + "\n--------\n"
+	messages := []ParsedMessage{
+		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: input}}},
+		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(output)}}},
+	}
+	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
+	assert.Empty(t, launchedResultID(t.Context(), input, output, true))
+	assert.Equal(t, id, launchedResultID(t.Context(), `claude -p --output-format json --session-id `+id, `{"type":"system","session_id":"`+id+`"}`, true))
 }
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {

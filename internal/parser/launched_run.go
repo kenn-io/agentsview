@@ -6,6 +6,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -126,7 +127,7 @@ func fixedSubstitutionRole(agent string, words []string, literal []bool, i int) 
 			j++
 		}
 	}
-	return false
+	return i == len(words)-1
 }
 
 // launchedRunID returns the one run ID a starting shell call shows.
@@ -327,10 +328,11 @@ func hasLaunchedOutputID(text string) bool {
 }
 
 func launchedResultID(ctx context.Context, input, output string, failed bool) string {
-	if failed && !hasLaunchedOutputID(output) {
+	id := launchedRunID(ctx, input, output)
+	if failed && !slices.Contains(launchedOutputIDs(launchedRunOutput(codeModeOutput(output))), id) {
 		return ""
 	}
-	return launchedRunID(ctx, input, output)
+	return id
 }
 
 func launchedResultFailed(output string) bool {
@@ -353,11 +355,10 @@ func launchedResultFailed(output string) bool {
 }
 
 // collectLaunchedResults keeps output from the calls' results.
-func collectLaunchedResults(calls map[string]*ParsedToolCall, outputs map[string]string, results []ParsedToolResult) {
+func collectLaunchedResults(calls map[string]*ParsedToolCall, outputs map[string]string, failed map[string]bool, results []ParsedToolResult) {
 	for _, result := range results {
-		if result.Status == "errored" && !hasLaunchedOutputID(outputs[result.ToolUseID]+DecodeContent(result.ContentRaw)) {
-			delete(calls, result.ToolUseID)
-		} else if calls[result.ToolUseID] != nil {
+		if calls[result.ToolUseID] != nil {
+			failed[result.ToolUseID] = failed[result.ToolUseID] || result.Status == "errored"
 			outputs[result.ToolUseID] += DecodeContent(result.ContentRaw) + "\n"
 		}
 	}
@@ -370,7 +371,7 @@ func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, f
 		return nil
 	}
 	calls := make(map[string]*ParsedToolCall)
-	outputs := make(map[string]string)
+	outputs, failed := make(map[string]string), make(map[string]bool)
 	for i := range messages {
 		if err := contextErrEvery(ctx, i); err != nil {
 			return err
@@ -380,10 +381,10 @@ func annotateClaudeLaunchedRuns(ctx context.Context, messages []ParsedMessage, f
 				calls[call.ToolUseID] = call
 			}
 		}
-		collectLaunchedResults(calls, outputs, messages[i].ToolResults)
+		collectLaunchedResults(calls, outputs, failed, messages[i].ToolResults)
 	}
 	for id, call := range calls {
-		call.SubagentSessionID = launchedRunID(ctx, call.InputJSON, outputs[id])
+		call.SubagentSessionID = launchedResultID(ctx, call.InputJSON, outputs[id], failed[id])
 	}
 	return ctx.Err()
 }
