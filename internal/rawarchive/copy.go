@@ -94,9 +94,6 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("usage cache %s must be a regular file", cache)
-		}
 		usable, err := db.UsableCopiedUsageCache(ctx, cache, databaseID)
 		if err != nil {
 			return err
