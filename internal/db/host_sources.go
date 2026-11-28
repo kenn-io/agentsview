@@ -67,22 +67,23 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 	})
 }
 
-func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) error {
+func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) (retErr error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, file_path FROM sessions WHERE agent = ? AND file_path IS NOT NULL`, string(parser.AgentCodexCloud))
 	if err != nil {
 		return err
 	}
+	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
 	accounts := map[string]string{}
 	for rows.Next() {
 		var id, path string
 		if err := rows.Scan(&id, &path); err != nil {
-			return errors.Join(err, rows.Close())
+			return err
 		}
 		if account := parser.CodexCloudAccountFromPath(path); account != "" {
 			accounts[id] = account
 		}
 	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+	if err := rows.Err(); err != nil {
 		return err
 	}
 	for id, account := range accounts {
