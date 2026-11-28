@@ -43,6 +43,13 @@ func (db *DB) ListMachineIdentityCandidates(ctx context.Context) ([]MachineIdent
 	return candidates, rows.Err()
 }
 
+// WithArchiveOwnership runs machine adoption after schema upgrades but before
+// repository project repair evaluates the sessions' machine-scoped rules.
+// It is only for writable opens of the local archive.
+func WithArchiveOwnership(adopt func(context.Context, *DB) error) OpenOption {
+	return func(opts *openOptions) { opts.adoptArchiveOwnership = adopt }
+}
+
 // EnsureInstallationIdentity adopts the archive's recorded local owner once.
 // Archives that predate recorded ownership keep their named machines in place;
 // the returned keys are left for an explicit AdoptMachineIdentity decision.

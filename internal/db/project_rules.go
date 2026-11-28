@@ -66,11 +66,13 @@ func (db *DB) ListProjectRules(ctx context.Context, machine string) (ProjectRule
 		rules[i] = ProjectRule{
 			WorktreeProjectMapping: m,
 			SourceArchiveID:        archiveID,
-			GovernedSessions: sessionsByRule[GovernedRuleKey{
+		}
+		if m.Enabled {
+			rules[i].GovernedSessions = sessionsByRule[GovernedRuleKey{
 				SourceArchiveID: archiveID,
 				Machine:         m.Machine,
 				PathPrefix:      m.PathPrefix,
-			}],
+			}]
 		}
 	}
 
@@ -106,8 +108,9 @@ func (db *DB) projectRulesGovernedCounts(
 		return nil, err
 	}
 
+	effective := db.mergeConfiguredWorktreeMappings(machine, mappings)
 	eval := EvaluateGovernedSessions(
-		[]ArchiveMappings{{SourceArchiveID: archiveID, Mappings: mappings}},
+		[]ArchiveMappings{{SourceArchiveID: archiveID, Mappings: effective}},
 		candidates,
 	)
 	return eval.SessionsByRule, nil

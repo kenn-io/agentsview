@@ -760,7 +760,7 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 		return fmt.Errorf("beginning project identity observation upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+	if err := db.upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection, false,
 	); err != nil {
 		return err
@@ -864,7 +864,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 		}
 	}
 	if obs.Project != "" {
-		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+		if err := db.upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 			ctx, tx, obs, snapshotProject, result.inserted, true, s.RecordedProject,
 		); err != nil {
 			return sessionUpsertResult{}, err
@@ -885,17 +885,17 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	return result, nil
 }
 
-func upsertProjectIdentityObservationTxContext(
+func (db *DB) upsertProjectIdentityObservationTxContext(
 	ctx context.Context,
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
 ) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+	return db.upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		ctx, tx, obs, obs.Project, false, false, false,
 	)
 }
 
-func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+func (db *DB) upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	ctx context.Context,
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
@@ -909,7 +909,7 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		return err
 	}
 	if !recordedProject {
-		normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
+		normalized, err = db.attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
 		if err != nil {
 			return err
 		}
@@ -1083,7 +1083,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			return 0, err
 		}
 	}
-	if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
+	if _, err := db.repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

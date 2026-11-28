@@ -1013,6 +1013,8 @@ type DB struct {
 	assetsDir        string
 	// archiveContent indexes archiveContentRanks; see SetArchiveContent.
 	archiveContent atomic.Int32
+	// The immutable configuration snapshot is separate from archive rules.
+	configuredWorktrees atomic.Pointer[configuredWorktreeMappings]
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance   atomic.Pointer[map[string]ArchiveSessionProvenance]
 	messageFTSRepairPending    atomic.Bool
@@ -1507,7 +1509,7 @@ func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
 // If the schema is current but the data version is stale, the database
 // is also preserved and marked for a re-sync on the next cycle.
 func Open(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, openOptions{backgroundMaintenance: true}, config.ArchiveContentFull, nil)
+	return OpenWithArchiveContent(ctx, path, config.ArchiveContentFull)
 }
 
 // OpenWithArchiveContent opens an archive under a storage policy. The policy
@@ -1538,14 +1540,16 @@ func (progress OpenProgressFunc) report(detail string) {
 // OpenWithProgress opens an archive under a storage policy and reports schema,
 // index, and migration work. A nil callback disables progress reporting.
 func OpenWithProgress(
-	ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc,
+	ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc, opts ...OpenOption,
 ) (*DB, error) {
-	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
+	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress, opts...)
 }
 
 // OpenDaemonWithProgress defers search index repair until the daemon listens.
-func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
-	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
+func OpenDaemonWithProgress(
+	ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc, opts ...OpenOption,
+) (*DB, error) {
+	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress, opts...)
 }
 
 // OpenIsolated opens an archive without starting long-running database
@@ -1575,9 +1579,9 @@ func OpenIsolatedWithArchiveContent(
 // scope or consume changes before RepairRepositoryProjects reports them.
 // The caller must hold exclusive archive ownership and close the returned DB.
 func OpenForRepositoryProjectRepair(
-	ctx context.Context, path string, policy config.ArchiveContent,
+	ctx context.Context, path string, policy config.ArchiveContent, opts ...OpenOption,
 ) (*DB, error) {
-	return open(ctx, path, openOptions{deferRepositoryProjectRepair: true}, policy, nil)
+	return open(ctx, path, openOptions{deferRepositoryProjectRepair: true}, policy, nil, opts...)
 }
 
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
@@ -1595,7 +1599,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if !info.Mode().IsRegular() || info.Size() != 0 {
 		return nil, errors.New("fresh database file must be an empty regular file")
 	}
-	d, err := openAndInit(ctx, path, false, false, false, nil)
+	d, err := openAndInit(ctx, path, false, openOptions{}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1659,17 +1663,25 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return d, nil
 }
 
+// OpenOption configures writable archive initialization and startup migrations.
+type OpenOption func(*openOptions)
+
 type openOptions struct {
 	backgroundMaintenance        bool
 	deferRepositoryProjectRepair bool
 	deferMessageFTSRepair        bool
+	configuredWorktrees          *configuredWorktreeMappings
+	adoptArchiveOwnership        func(context.Context, *DB) error
 }
 
 func open(
 	ctx context.Context, path string,
 	options openOptions, policy config.ArchiveContent,
-	progress OpenProgressFunc,
+	progress OpenProgressFunc, opts ...OpenOption,
 ) (*DB, error) {
+	for _, opt := range opts {
+		opt(&options)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1698,7 +1710,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, options.deferMessageFTSRepair, progress)
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, options, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -1742,6 +1754,11 @@ func open(
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
 	}
 
+	if options.adoptArchiveOwnership != nil {
+		if err := options.adoptArchiveOwnership(ctx, d); err != nil {
+			return closeOnError(err)
+		}
+	}
 	if !options.deferRepositoryProjectRepair {
 		if err := d.migrateRepositoryProjects(ctx, progress); err != nil {
 			return closeOnError(fmt.Errorf("repairing repository project names: %w", err))
@@ -5444,7 +5461,8 @@ func (db *DB) Vacuum(ctx context.Context) error {
 func openAndInit(
 	ctx context.Context,
 	path string,
-	schemaRepairNeeded, backgroundMaintenance, deferMessageFTSRepair bool,
+	schemaRepairNeeded bool,
+	options openOptions,
 	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
@@ -5466,6 +5484,7 @@ func openAndInit(
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
+	db.configuredWorktrees.Store(options.configuredWorktrees)
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
@@ -5510,11 +5529,11 @@ func openAndInit(
 		)
 	}
 
-	if err := db.init(ctx, progress, deferMessageFTSRepair); err != nil {
+	if err := db.init(ctx, progress, options.deferMessageFTSRepair); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
-	if backgroundMaintenance {
+	if options.backgroundMaintenance {
 		db.startWALCheckpointLoop()
 	}
 	return db, nil

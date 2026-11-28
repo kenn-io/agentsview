@@ -280,6 +280,9 @@ describe("WorktreeMappingRules", () => {
     });
     const typeahead = screen.getByRole("button", { name: /^Select machine:/ });
     expect(typeahead.textContent).toContain("local-host");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply mappings" }).disabled).toBe(
+      true,
+    );
   });
 
   it("preselects the machine named by the machine prop", async () => {
@@ -390,6 +393,80 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
     expect(settingsService.postApiV1SettingsWorktreeMappingsApply).toHaveBeenCalledWith({
       machine: "remote-host",
+    });
+  });
+
+  it("applies mappings for the selected machine even without any stored mappings", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("local-host"));
+    settingsService.postApiV1SettingsWorktreeMappingsApply.mockResolvedValue({
+      machine: "local-host",
+      updated_sessions: 1,
+      matched_sessions: 1,
+    });
+
+    component = mountRules({ machine: "local-host" });
+    await flush();
+
+    const apply = screen.getByRole<HTMLButtonElement>("button", { name: "Apply mappings" });
+    expect(apply.disabled).toBe(false);
+    await fireEvent.click(apply);
+
+    expect(settingsService.postApiV1SettingsWorktreeMappingsApply).toHaveBeenCalledWith({
+      machine: "local-host",
+    });
+    expect(screen.getByText("No worktree mappings stored in the archive.")).toBeTruthy();
+    expect(document.querySelector("table")).toBeNull();
+  });
+
+  it("does not offer Apply on a read-only store with no stored mappings", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host"));
+
+    component = mountRules({ readOnly: true });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: "Apply mappings" })).toBeNull();
+  });
+
+  it("keeps Apply disabled when rules fail to load for the selected machine", async () => {
+    dataService.getApiV1DataProjectRules
+      .mockResolvedValueOnce(response("local-host"))
+      .mockRejectedValueOnce(new Error("rules load failed"));
+
+    component = mountRules({ onMachineChange: undefined });
+    await flush();
+
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
+    await flush();
+
+    expect(screen.getByText("rules load failed")).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply mappings" }).disabled).toBe(
+      true,
+    );
+    expect(settingsService.postApiV1SettingsWorktreeMappingsApply).not.toHaveBeenCalled();
+  });
+
+  it("saves a dot-suffix rule without the previous explicit project", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host"));
+    settingsService.postApiV1SettingsWorktreeMappings.mockResolvedValue({});
+    component = mountRules();
+    await flush();
+
+    await fireEvent.input(screen.getByRole("textbox", { name: "Project" }), {
+      target: { value: "unused-project" },
+    });
+    await fireEvent.click(screen.getByRole("radio", { name: "repo.suffix" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: "Parent directory" }), {
+      target: { value: "/code" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
+
+    expect(settingsService.postApiV1SettingsWorktreeMappings).toHaveBeenCalledWith({
+      machine: "remote-host",
+      path_prefix: "/code",
+      layout: "repo_dot_suffix",
+      project: "",
+      enabled: true,
     });
   });
 
@@ -599,8 +676,8 @@ describe("WorktreeMappingRules", () => {
     expect(document.body.textContent).toContain("branch-label");
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog").textContent).toContain("source files still exist");
-    expect(screen.getByRole("dialog").textContent).toContain("Sessions without source files");
+    expect(screen.getByRole("dialog").textContent).toContain("saved project identity");
+    expect(screen.getByRole("dialog").textContent).toContain("With no recovery evidence");
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({

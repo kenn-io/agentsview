@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/mattn/go-sqlite3"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/worktree"
 )
 
 var (
@@ -19,8 +20,9 @@ var (
 )
 
 const (
-	WorktreeMappingLayoutExplicit         = "explicit"
-	WorktreeMappingLayoutRepoDotWorktrees = "repo_dot_worktrees"
+	WorktreeMappingLayoutExplicit         = worktree.LayoutExplicit
+	WorktreeMappingLayoutRepoDotWorktrees = worktree.LayoutRepoDotWorktrees
+	WorktreeMappingLayoutRepoDotSuffix    = worktree.LayoutRepoDotSuffix
 )
 
 type WorktreeProjectMapping struct {
@@ -51,71 +53,29 @@ func normalizeWorktreeMapping(
 		return WorktreeProjectMapping{}, fmt.Errorf("%w: machine is required", ErrWorktreeMappingInvalid)
 	}
 
-	pathPrefix = normalizedMappingPath(pathPrefix)
-	if pathPrefix == "" || pathPrefix == "." {
-		return WorktreeProjectMapping{}, fmt.Errorf("%w: path_prefix is required", ErrWorktreeMappingInvalid)
-	}
-
-	layout = strings.TrimSpace(layout)
-	if layout == "" {
-		layout = WorktreeMappingLayoutExplicit
-	}
-	switch layout {
-	case WorktreeMappingLayoutExplicit, WorktreeMappingLayoutRepoDotWorktrees:
-	default:
-		return WorktreeProjectMapping{}, fmt.Errorf(
-			"%w: layout must be %s or %s",
-			ErrWorktreeMappingInvalid,
-			WorktreeMappingLayoutExplicit,
-			WorktreeMappingLayoutRepoDotWorktrees,
-		)
-	}
-
-	project = strings.TrimSpace(project)
-	if layout == WorktreeMappingLayoutExplicit {
-		if project == "" {
-			return WorktreeProjectMapping{}, fmt.Errorf(
-				"%w: project is required",
-				ErrWorktreeMappingInvalid,
-			)
-		}
-		project = parser.NormalizeName(project)
-	} else {
+	// Existing CRUD clients may send an unused project for a dynamic layout.
+	if isDynamicWorktreeLayout(strings.TrimSpace(layout)) {
 		project = ""
 	}
-
+	rule, err := (worktree.Rule{PathPrefix: pathPrefix, Layout: layout, Project: project}).Normalize()
+	if err != nil {
+		return WorktreeProjectMapping{}, fmt.Errorf("%w: %w", ErrWorktreeMappingInvalid, err)
+	}
 	return WorktreeProjectMapping{
 		Machine:    machine,
-		PathPrefix: pathPrefix,
-		Layout:     layout,
-		Project:    parser.NormalizeName(project),
+		PathPrefix: rule.PathPrefix,
+		Layout:     rule.Layout,
+		Project:    rule.Project,
 	}, nil
 }
 
+func isDynamicWorktreeLayout(layout string) bool {
+	return layout == WorktreeMappingLayoutRepoDotWorktrees ||
+		layout == WorktreeMappingLayoutRepoDotSuffix
+}
+
 func normalizedMappingPath(value string) string {
-	value = strings.TrimSpace(strings.ReplaceAll(value, `\`, "/"))
-	if value == "" {
-		return ""
-	}
-	if strings.HasPrefix(value, "//") && !strings.HasPrefix(value, "///") {
-		rest := path.Clean(strings.TrimPrefix(value, "//"))
-		parts := strings.Split(rest, "/")
-		if len(parts) >= 2 && parts[0] != "" && parts[0] != "." &&
-			parts[0] != ".." && parts[1] != "" && parts[1] != "." &&
-			parts[1] != ".." {
-			normalized := "//" + rest
-			if len(parts) == 2 {
-				return normalized + "/"
-			}
-			return normalized
-		}
-	}
-	driveAbsolute := len(value) >= 3 && value[1] == ':' && value[2] == '/'
-	normalized := path.Clean(value)
-	if driveAbsolute && normalized == value[:2] {
-		return normalized + "/"
-	}
-	return normalized
+	return worktree.NormalizePath(value)
 }
 
 func worktreePathMatches(prefix string, cwd string) bool {
@@ -393,8 +353,8 @@ func (db *DB) ListWorktreeProjectMappingMachines(
 }
 
 // ListActiveWorktreeProjectMappingMachines returns the distinct machines with
-// at least one enabled mapping. Resync uses this narrower set so applying
-// persistent rules does not scan machines that have no active rules.
+// at least one effective mapping. Resync uses this narrower set to avoid
+// scanning machines that have no active archive or config rules.
 func (db *DB) ListActiveWorktreeProjectMappingMachines(
 	ctx context.Context,
 ) ([]string, error) {
@@ -419,6 +379,10 @@ func (db *DB) ListActiveWorktreeProjectMappingMachines(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating active worktree mapping machines: %w", err)
 	}
+	if configured := db.configuredWorktrees.Load(); configured != nil && !slices.Contains(machines, configured.machine) {
+		machines = append(machines, configured.machine)
+		slices.Sort(machines)
+	}
 	return machines, nil
 }
 
@@ -438,9 +402,8 @@ func (db *DB) ResolveWorktreeProjectMapping(
 	return project, ok, nil
 }
 
-// ListActiveWorktreeProjectMappings returns enabled mappings
-// for a machine in resolution order, with the longest path
-// prefixes first.
+// ListActiveWorktreeProjectMappings returns effective enabled archive and
+// config rules for a machine with the longest path prefixes first.
 func (db *DB) ListActiveWorktreeProjectMappings(
 	ctx context.Context,
 	machine string,
@@ -568,31 +531,26 @@ func (db *DB) activeWorktreeProjectMappings(
 	ctx context.Context,
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
+	machine = strings.TrimSpace(machine)
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE machine = ? AND enabled = 1
 		ORDER BY length(path_prefix) DESC, path_prefix`,
-		strings.TrimSpace(machine),
+		machine,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying active worktree mappings: %w", err)
 	}
-	defer rows.Close()
-
-	mappings := []WorktreeProjectMapping{}
-	for rows.Next() {
-		m, err := scanWorktreeMapping(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scanning active worktree mapping: %w", err)
-		}
-		mappings = append(mappings, m)
+	mappings, err := scanWorktreeMappings(rows)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating active worktree mappings: %w", err)
+	if machine == "" {
+		return mappings, nil
 	}
-	return mappings, nil
+	return db.mergeConfiguredWorktreeMappings(machine, mappings), nil
 }
 
 func resolveWorktreeProjectFromMapping(
@@ -606,49 +564,41 @@ func resolveWorktreeProjectFromMapping(
 			return currentProject, false
 		}
 		return mapping.Project, true
-	case WorktreeMappingLayoutRepoDotWorktrees:
-		project, _, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
-		if !ok {
-			return currentProject, false
+	case WorktreeMappingLayoutRepoDotWorktrees, WorktreeMappingLayoutRepoDotSuffix:
+		if project := resolveDynamicWorktreeProject(mapping, cwd); project != "" {
+			return project, true
 		}
-		return project, true
-	default:
-		return currentProject, false
 	}
+	return currentProject, false
 }
 
-// resolveRepoDotWorktrees resolves a cwd under a repo_dot_worktrees mapping to
-// its project name and the repo.worktrees directory shared by all branches.
-func resolveRepoDotWorktrees(
-	pathPrefix string,
-	cwd string,
-) (string, string, bool) {
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" {
-		return "", "", false
-	}
-	pathPrefix = normalizedMappingPath(pathPrefix)
+// The caller has already checked the directory boundary. The prefix itself
+// has no first segment to inspect.
+func resolveDynamicWorktreeProject(mapping WorktreeProjectMapping, cwd string) string {
+	prefix := normalizedMappingPath(mapping.PathPrefix)
 	cwd = normalizedMappingPath(cwd)
-	if !worktreePathMatches(pathPrefix, cwd) || cwd == pathPrefix {
-		return "", "", false
+	rel, belowPrefix := strings.CutPrefix(cwd, strings.TrimSuffix(prefix, "/")+"/")
+	if !belowPrefix || rel == "" {
+		return ""
 	}
-	rel := strings.TrimPrefix(cwd, strings.TrimSuffix(pathPrefix, "/")+"/")
-	if rel == cwd || rel == "" {
-		return "", "", false
+	first, _, hasChild := strings.Cut(rel, "/")
+	var repo string
+	if mapping.Layout == WorktreeMappingLayoutRepoDotWorktrees {
+		// The .worktrees directory itself isn't a checkout.
+		var ok bool
+		repo, ok = strings.CutSuffix(first, ".worktrees")
+		if !ok || !hasChild {
+			return ""
+		}
+		repo = strings.TrimSpace(repo)
+	} else {
+		var suffix string
+		repo, suffix, _ = strings.Cut(first, ".")
+		if suffix == "" {
+			return ""
+		}
 	}
-	idx := strings.IndexRune(rel, '/')
-	if idx < 0 {
-		return "", "", false
-	}
-	first := rel[:idx]
-	if !strings.HasSuffix(first, ".worktrees") {
-		return "", "", false
-	}
-	repo := strings.TrimSpace(strings.TrimSuffix(first, ".worktrees"))
-	if repo == "" {
-		return "", "", false
-	}
-	return parser.NormalizeName(repo), path.Join(pathPrefix, first), true
+	return parser.NormalizeName(repo)
 }
 
 type worktreeMappingSessionRow struct {
@@ -669,7 +619,7 @@ type worktreeMappingSessionUpdate struct {
 	nextProject    string
 }
 
-func loadActiveWorktreeMappingsTx(
+func (db *DB) loadActiveWorktreeMappingsTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	machine string,
@@ -685,10 +635,14 @@ func loadActiveWorktreeMappingsTx(
 	if err != nil {
 		return nil, fmt.Errorf("querying active worktree mappings: %w", err)
 	}
-	return scanWorktreeMappings(rows)
+	mappings, err := scanWorktreeMappings(rows)
+	if err != nil || machine == "" {
+		return mappings, err
+	}
+	return db.mergeConfiguredWorktreeMappings(machine, mappings), nil
 }
 
-func loadActiveWorktreeMappingsByMachineTx(
+func (db *DB) loadActiveWorktreeMappingsByMachineTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	machines map[string]bool,
@@ -716,6 +670,10 @@ func loadActiveWorktreeMappingsByMachineTx(
 				mapping,
 			)
 		}
+	}
+	if configured := db.configuredWorktrees.Load(); configured != nil && machines[configured.machine] {
+		machine := configured.machine
+		mappingsByMachine[machine] = db.mergeConfiguredWorktreeMappings(machine, mappingsByMachine[machine])
 	}
 	return mappingsByMachine, nil
 }
@@ -892,11 +850,14 @@ func (db *DB) applyWorktreeProjectMappings(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
+	mappings, err := db.loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
 		return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
 			"loading active worktree mappings: %w", err,
 		)
+	}
+	if len(mappings) == 0 {
+		return ApplyWorktreeProjectMappingsResult{}, nil
 	}
 
 	evaluation, err := evaluateWorktreeMappingsTx(
@@ -983,7 +944,7 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
+	mappings, err := db.loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
 		return false, fmt.Errorf("loading active worktree mappings: %w", err)
 	}
@@ -1120,7 +1081,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 		return ApplyWorktreeProjectMappingsResult{}, nil
 	}
 
-	mappingsByMachine, err := loadActiveWorktreeMappingsByMachineTx(
+	mappingsByMachine, err := db.loadActiveWorktreeMappingsByMachineTx(
 		ctx, tx, machines,
 	)
 	if err != nil {

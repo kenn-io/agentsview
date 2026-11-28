@@ -302,6 +302,7 @@ func runSyncWorkerResyncBuild(
 		return fmt.Errorf("resync-build: open read-only archive: %w", err)
 	}
 	defer origRO.Close()
+	origRO.SetConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings)
 
 	engine := sync.NewEngine(ctx, origRO, workerEngineConfig(cfg))
 	defer engine.Close()

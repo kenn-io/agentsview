@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/worktree"
 )
 
 func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
@@ -101,51 +102,62 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 }
 
 func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
-	te := setup(t)
-	root := t.TempDir()
-	layoutPrefix := filepath.Join(root, "service")
-	layoutRoot := filepath.Join(layoutPrefix, "service.worktrees")
+	for _, layout := range []string{db.WorktreeMappingLayoutRepoDotWorktrees, db.WorktreeMappingLayoutRepoDotSuffix} {
+		t.Run(layout, func(t *testing.T) {
+			te := setup(t)
+			root := filepath.ToSlash(t.TempDir())
+			layoutPrefix := root + "/stored"
+			te.db.SetConfiguredWorktreeMappings("test", []worktree.Rule{
+				{PathPrefix: root, Layout: worktree.LayoutRepoDotSuffix},
+			})
 
-	created := postWorktreeMapping(t, te, map[string]any{
-		"path_prefix": layoutPrefix,
-		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
-	})
-	require.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, created.Layout)
-	require.Empty(t, created.Project)
-	require.True(t, created.Enabled, "created mapping should default enabled")
+			created := postWorktreeMapping(t, te, map[string]any{
+				"path_prefix": layoutPrefix,
+				"layout":      layout,
+			})
+			assert.Equal(t, layout, created.Layout)
+			assert.Empty(t, created.Project)
+			assert.True(t, created.Enabled, "created mapping should default enabled")
 
-	var list struct {
-		Machine  string                      `json:"machine"`
-		Mappings []db.WorktreeProjectMapping `json:"mappings"`
+			var list struct {
+				Machine  string                      `json:"machine"`
+				Mappings []db.WorktreeProjectMapping `json:"mappings"`
+			}
+			w := te.get(t, "/api/v1/settings/worktree-mappings")
+			assertStatus(t, w, http.StatusOK)
+			decodeInto(t, w, &list)
+			assert.Equal(t, "test", list.Machine)
+			require.Len(t, list.Mappings, 1, "config rules are not CRUD resources")
+			assert.Equal(t, created, list.Mappings[0])
+
+			updated := putWorktreeMapping(t, te, created.ID, map[string]any{
+				"path_prefix": layoutPrefix,
+				"layout":      layout,
+				"enabled":     false,
+			})
+			assert.False(t, updated.Enabled)
+			assert.Equal(t, layout, updated.Layout)
+			assert.Empty(t, updated.Project)
+
+			for _, invalidLayout := range []string{"bogus", db.WorktreeMappingLayoutExplicit} {
+				w = postRawWorktreeMapping(t, te, map[string]any{
+					"path_prefix": root + "/invalid",
+					"layout":      invalidLayout,
+				})
+				assertStatus(t, w, http.StatusBadRequest)
+			}
+
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+				ID: "configured", Machine: "test", Agent: "claude",
+				Project: "branch", Cwd: root + "/sample-app.dev/subdir",
+			}))
+			assertStatus(t, te.post(t, "/api/v1/settings/worktree-mappings/apply", `{"machine":"test"}`), http.StatusOK)
+			session, err := te.db.GetSession(t.Context(), "configured")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "sample_app", session.Project)
+		})
 	}
-	w := te.get(t, "/api/v1/settings/worktree-mappings")
-	assertStatus(t, w, http.StatusOK)
-	decodeInto(t, w, &list)
-	require.Equal(t, "test", list.Machine)
-	require.Len(t, list.Mappings, 1)
-	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, list.Mappings[0].Layout)
-	assert.Empty(t, list.Mappings[0].Project)
-
-	updated := putWorktreeMapping(t, te, created.ID, map[string]any{
-		"path_prefix": layoutPrefix,
-		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
-		"enabled":     false,
-	})
-	assert.False(t, updated.Enabled, "updated mapping should be disabled")
-	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, updated.Layout)
-	assert.Empty(t, updated.Project)
-
-	w = postRawWorktreeMapping(t, te, map[string]any{
-		"path_prefix": layoutRoot,
-		"layout":      "bogus",
-	})
-	assertStatus(t, w, http.StatusBadRequest)
-
-	w = postRawWorktreeMapping(t, te, map[string]any{
-		"path_prefix": layoutRoot,
-		"layout":      db.WorktreeMappingLayoutExplicit,
-	})
-	assertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestWorktreeMappingsAPIApply(t *testing.T) {
@@ -192,6 +204,46 @@ func TestWorktreeMappingsAPIApply(t *testing.T) {
 	case event := <-events:
 		require.FailNowf(t, "test failed", "unchanged mapping apply published unexpected event: %q", event.Scope)
 	default:
+	}
+}
+
+func TestWorktreeMappingsAPIApplyWithoutStoredRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, project string
+		rules         []worktree.Rule
+		count         int
+	}{
+		{"no_rules", "branch", nil, 0},
+		{"config_only", "app", []worktree.Rule{
+			{PathPrefix: "/workspace", Layout: worktree.LayoutRepoDotSuffix},
+		}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			te := setup(t)
+			te.db.SetConfiguredWorktreeMappings("test", tc.rules)
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+				ID: "session", Machine: "test", Agent: "claude",
+				Project: "branch", Cwd: "/workspace/app.dev",
+			}))
+
+			w := te.get(t, "/api/v1/data/project-rules?machine=test")
+			assertStatus(t, w, http.StatusOK)
+			assert.Empty(t, decode[db.ProjectRules](t, w).Rules)
+
+			w = te.post(t, "/api/v1/settings/worktree-mappings/apply", `{"machine":"test"}`)
+			assertStatus(t, w, http.StatusOK)
+			assert.Equal(t, db.ApplyWorktreeProjectMappingsResult{
+				MatchedSessions: tc.count, UpdatedSessions: tc.count,
+			}, decode[db.ApplyWorktreeProjectMappingsResult](t, w))
+			session, err := te.db.GetSession(t.Context(), "session")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, tc.project, session.Project)
+
+			stored, err := te.db.ListAllWorktreeProjectMappings(t.Context())
+			require.NoError(t, err)
+			assert.Empty(t, stored)
+		})
 	}
 }
 

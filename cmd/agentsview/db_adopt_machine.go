@@ -52,15 +52,11 @@ func newDBAdoptMachineCommand() *cobra.Command {
 			}
 			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 				applyClassifierConfig(cfg)
-				database, err := db.Open(ctx, cfg.DBPath)
-				if err != nil {
-					return nil, err
-				}
-				if err := database.AdoptMachineIdentity(ctx, cfg.InstallationID, machines); err != nil {
-					database.Close()
-					return nil, err
-				}
-				return database, nil
+				return db.OpenWithProgress(ctx, cfg.DBPath, config.ArchiveContentFull, nil,
+					db.WithConfiguredWorktreeMappings(cfg.InstallationID, cfg.WorktreeMappings),
+					db.WithArchiveOwnership(func(ctx context.Context, database *db.DB) error {
+						return database.AdoptMachineIdentity(ctx, cfg.InstallationID, machines)
+					}))
 			})
 			if err != nil {
 				return err

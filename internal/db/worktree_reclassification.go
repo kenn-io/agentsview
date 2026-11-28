@@ -107,7 +107,7 @@ func (db *DB) PreviewWorktreeReclassification(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	preview, err := previewWorktreeReclassificationTx(ctx, tx, normalized)
+	preview, err := db.previewWorktreeReclassificationTx(ctx, tx, normalized)
 	if err != nil {
 		return WorktreeReclassificationPreview{}, err
 	}
@@ -151,11 +151,9 @@ func (db *DB) ApplyWorktreeReclassification(
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
 	}
 	collision := exactWorktreeMapping(stored, normalized.PathPrefix)
-	effective := overlayWorktreeMapping(stored, normalized, collision)
-	evaluation, err := evaluateWorktreeMappingsTx(
-		ctx, tx, normalized.Machine, enabledWorktreeMappings(effective),
-		&normalized, "",
-	)
+	draftMappings := overlayWorktreeMapping(stored, normalized, collision)
+	effective := db.mergeConfiguredWorktreeMappings(normalized.Machine, enabledWorktreeMappings(draftMappings))
+	evaluation, err := evaluateWorktreeMappingsTx(ctx, tx, normalized.Machine, effective, &normalized, "")
 	if err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
 	}
@@ -225,7 +223,7 @@ func normalizeWorktreeReclassificationDraft(
 	return normalized, nil
 }
 
-func previewWorktreeReclassificationTx(
+func (db *DB) previewWorktreeReclassificationTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	draft WorktreeProjectMapping,
@@ -235,10 +233,9 @@ func previewWorktreeReclassificationTx(
 		return WorktreeReclassificationPreview{}, err
 	}
 	collision := exactWorktreeMapping(stored, draft.PathPrefix)
-	effective := overlayWorktreeMapping(stored, draft, collision)
-	evaluation, err := evaluateWorktreeMappingsTx(
-		ctx, tx, draft.Machine, enabledWorktreeMappings(effective), &draft, "",
-	)
+	draftMappings := overlayWorktreeMapping(stored, draft, collision)
+	effective := db.mergeConfiguredWorktreeMappings(draft.Machine, enabledWorktreeMappings(draftMappings))
+	evaluation, err := evaluateWorktreeMappingsTx(ctx, tx, draft.Machine, effective, &draft, "")
 	if err != nil {
 		return WorktreeReclassificationPreview{}, err
 	}

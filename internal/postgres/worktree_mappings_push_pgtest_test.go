@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/worktree"
 )
 
 // TestPushReplicatesWorktreeMappings verifies that a push publishes a
@@ -41,6 +42,40 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 	).Scan(&project, &enabled), "read back mirrored mapping")
 	assert.Equal(t, "sample", project)
 	assert.True(t, enabled)
+}
+
+func TestPushPublishesConfiguredWorktreeProjectNotRule(t *testing.T) {
+	t.Parallel()
+	pusher, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
+	local.SetConfiguredWorktreeMappings("workstation", []worktree.Rule{
+		{PathPrefix: "/code", Layout: worktree.LayoutRepoDotSuffix},
+	})
+	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: "workstation", PathPrefix: "/other",
+		Layout: db.WorktreeMappingLayoutRepoDotSuffix, Enabled: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: "configured", Project: "branch", Machine: "workstation",
+		Cwd: "/code/sample-app.dev", Agent: "claude",
+	}))
+	result, err := local.ApplyWorktreeProjectMappings(ctx, "workstation")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UpdatedSessions)
+
+	_, err = pusher.Push(ctx, false, nil)
+	require.NoError(t, err)
+	var project string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id = 'configured'`).Scan(&project))
+	assert.Equal(t, "sample_app", project)
+
+	var count int
+	var layout string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT count(*), min(layout) FROM source_worktree_project_mappings`,
+	).Scan(&count, &layout))
+	assert.Equal(t, 1, count, "only the archive rule reaches the replica")
+	assert.Equal(t, db.WorktreeMappingLayoutRepoDotSuffix, layout)
 }
 
 // TestPushMappingDeleteTombstones verifies that deleting a local mapping and

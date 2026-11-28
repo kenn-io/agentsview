@@ -218,6 +218,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 	newDB.SetToolResultImages(e.toolResultImages)
 	newDB.SetAssetsDir(e.db.AssetsDir())
+	newDB.UseConfiguredWorktreeMappingsFrom(origDB)
 	if err := newDB.CopyArchiveIdentityFrom(ctx, origPath); err != nil {
 		log.Printf("resync: preserve archive identity: %v", err)
 		newDB.Close()

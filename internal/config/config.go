@@ -33,6 +33,7 @@ import (
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
+	"go.kenn.io/agentsview/internal/worktree"
 	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
 	"go.kenn.io/kit/embedlocal"
@@ -1219,6 +1220,9 @@ type Config struct {
 	// slice; unconfigured agents use nil.
 	AgentDirs map[parser.AgentType][]string `json:"-" toml:"-"`
 
+	// WorktreeMappings contains validated local project rules from config.toml.
+	WorktreeMappings []worktree.Rule `json:"-" toml:"worktree_mappings,omitempty"`
+
 	// SessionSources contains resolved structured sources. SourceMachines maps
 	// each effective configured root to its machine label for sync.
 	SessionSources []SessionSource                        `json:"-" toml:"-"`
@@ -2088,6 +2092,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
+		WorktreeMappings               []worktree.Rule        `toml:"worktree_mappings"`
 		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
 	meta, err := toml.Decode(data, &file)
@@ -2095,9 +2100,19 @@ func (c *Config) applyConfigTOML(data string) error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 	for _, key := range meta.Undecoded() {
-		if len(key) > 0 && key[0] == "archive_sources" {
-			return fmt.Errorf("unknown archive source setting %s", key.String())
+		if len(key) == 0 {
+			continue
 		}
+		switch key[0] {
+		case "archive_sources":
+			return fmt.Errorf("unknown archive source setting %s", key.String())
+		case "worktree_mappings":
+			return fmt.Errorf("unknown worktree mapping setting %s", key.String())
+		}
+	}
+	c.WorktreeMappings, err = normalizeWorktreeMappings(file.WorktreeMappings)
+	if err != nil {
+		return err
 	}
 	c.ArchiveSources = file.ArchiveSources
 	if err := c.ValidateArchiveSources(); err != nil {

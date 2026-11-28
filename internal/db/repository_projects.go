@@ -44,7 +44,7 @@ func (db *DB) migrateRepositoryProjects(ctx context.Context, progress OpenProgre
 			return err
 		}
 		progress.report("Repairing repository project names")
-		if _, err := repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
+		if _, err := db.repairRepositoryProjectsTx(ctx, tx, "", true); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO stats (key, value)
@@ -57,13 +57,14 @@ func (db *DB) migrateRepositoryProjects(ctx context.Context, progress OpenProgre
 // Cache within a transaction, never across writes or archives. A saved choice
 // prevents later imports or pruning from changing an established name.
 type repositoryProjectResolver struct {
+	db       *DB
 	tx       *sql.Tx
 	hasNames bool
 	names    map[string]repositoryProjectName
 	mappings map[string][]WorktreeProjectMapping
 }
 
-func newRepositoryProjectResolver(ctx context.Context, tx *sql.Tx) (*repositoryProjectResolver, error) {
+func (db *DB) newRepositoryProjectResolver(ctx context.Context, tx *sql.Tx) (*repositoryProjectResolver, error) {
 	var hasNames bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'repository_project_names'
@@ -71,7 +72,7 @@ func newRepositoryProjectResolver(ctx context.Context, tx *sql.Tx) (*repositoryP
 		return nil, err
 	}
 	return &repositoryProjectResolver{
-		tx: tx, hasNames: hasNames,
+		db: db, tx: tx, hasNames: hasNames,
 		names: map[string]repositoryProjectName{}, mappings: map[string][]WorktreeProjectMapping{},
 	}, nil
 }
@@ -210,7 +211,7 @@ func (r *repositoryProjectResolver) resolve(ctx context.Context, c repositoryPro
 	mappings, ok := r.mappings[c.machine]
 	if !ok {
 		var err error
-		mappings, err = loadActiveWorktreeMappingsTx(ctx, r.tx, c.machine)
+		mappings, err = r.db.loadActiveWorktreeMappingsTx(ctx, r.tx, c.machine)
 		if err != nil {
 			return repositoryProjectName{}, false, err
 		}
@@ -241,7 +242,7 @@ func (r *repositoryProjectResolver) apply(ctx context.Context, c repositoryProje
 // Resolve the effective label before publishing aggregate evidence. Snapshot
 // reconciliation must see both the final session project and the new remote
 // observation, especially when repairing older root-only evidence.
-func attributeRepositoryObservationTx(ctx context.Context, tx *sql.Tx, obs export.ProjectIdentityObservation, sourceProject string) (export.ProjectIdentityObservation, error) {
+func (db *DB) attributeRepositoryObservationTx(ctx context.Context, tx *sql.Tx, obs export.ProjectIdentityObservation, sourceProject string) (export.ProjectIdentityObservation, error) {
 	if !obs.SourceRecorded || obs.SessionID == "" || obs.Project != sourceProject ||
 		obs.WorktreeRelationship != export.WorktreeUnknown {
 		return obs, nil
@@ -263,7 +264,7 @@ func attributeRepositoryObservationTx(ctx context.Context, tx *sql.Tx, obs expor
 	if err != nil {
 		return obs, err
 	}
-	r, err := newRepositoryProjectResolver(ctx, tx)
+	r, err := db.newRepositoryProjectResolver(ctx, tx)
 	if err != nil {
 		return obs, err
 	}
@@ -279,7 +280,7 @@ func attributeRepositoryObservationTx(ctx context.Context, tx *sql.Tx, obs expor
 }
 
 // Restore automatic attribution after clearing an explicit assignment.
-func applyRecordedRepositoryProjectTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func (db *DB) applyRecordedRepositoryProjectTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
 	if sessionID == "" {
 		return nil
 	}
@@ -287,7 +288,7 @@ func applyRecordedRepositoryProjectTx(ctx context.Context, tx *sql.Tx, sessionID
 	if err != nil || len(candidates) == 0 {
 		return err
 	}
-	r, err := newRepositoryProjectResolver(ctx, tx)
+	r, err := db.newRepositoryProjectResolver(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -319,7 +320,7 @@ func (db *DB) PreviewRepositoryProjects(ctx context.Context, project string) (Re
 		return RepositoryProjectRepair{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	return repairRepositoryProjectsTx(ctx, tx, project, false)
+	return db.repairRepositoryProjectsTx(ctx, tx, project, false)
 }
 
 // RepairRepositoryProjects changes project metadata atomically, keeping
@@ -335,7 +336,7 @@ func (db *DB) RepairRepositoryProjects(ctx context.Context, project string) (Rep
 		return RepositoryProjectRepair{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	report, err := repairRepositoryProjectsTx(ctx, tx, project, true)
+	report, err := db.repairRepositoryProjectsTx(ctx, tx, project, true)
 	if err != nil {
 		return RepositoryProjectRepair{}, fmt.Errorf("repairing repository projects: %w", err)
 	}
@@ -345,13 +346,13 @@ func (db *DB) RepairRepositoryProjects(ctx context.Context, project string) (Rep
 	return report, nil
 }
 
-func repairRepositoryProjectsTx(ctx context.Context, tx *sql.Tx, project string, apply bool) (RepositoryProjectRepair, error) {
+func (db *DB) repairRepositoryProjectsTx(ctx context.Context, tx *sql.Tx, project string, apply bool) (RepositoryProjectRepair, error) {
 	report := RepositoryProjectRepair{Changes: []RepositoryProjectChange{}}
 	candidates, err := repositoryProjectCandidates(ctx, tx, "", project)
 	if err != nil {
 		return report, err
 	}
-	r, err := newRepositoryProjectResolver(ctx, tx)
+	r, err := db.newRepositoryProjectResolver(ctx, tx)
 	if err != nil {
 		return report, err
 	}

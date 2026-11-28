@@ -779,7 +779,7 @@ func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, wr
 		return err
 	}
 	queries := contextTransaction{ctx: ctx, tx: tx}
-	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
+	if err := db.writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
 		return err
 	}
 	if write.DataVersion > 0 {

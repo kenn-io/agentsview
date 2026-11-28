@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/worktree"
 )
 
 func TestRepositoryProjectUpgradeOnOpen(t *testing.T) {
@@ -193,13 +194,15 @@ func TestRepositoryProjectAttribution(t *testing.T) {
 
 func TestRepositoryProjectAttributionPreservesFolderRules(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		enabled bool
-		project string
-		repairs int
+		name       string
+		enabled    bool
+		configured bool
+		project    string
+		repairs    int
 	}{
-		{"enabled", true, "pr123", 0},
-		{"disabled", false, "sample", 1},
+		{"enabled archive rule", true, false, "pr123", 0},
+		{"disabled archive rule", false, false, "sample", 1},
+		{"configured rule", false, true, "pr123", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -210,9 +213,15 @@ func TestRepositoryProjectAttributionPreservesFolderRules(t *testing.T) {
 				Project: "pr123", Enabled: tc.enabled,
 			})
 			require.NoError(t, err)
+			if tc.configured {
+				d.SetConfiguredWorktreeMappings("remote", []worktree.Rule{
+					{PathPrefix: "/workspace", Layout: worktree.LayoutExplicit, Project: "pr123"},
+				})
+			}
 			require.NoError(t, d.UpsertSessionWithProjectIdentity(ctx, s, obs, s.Project))
 			got, err := d.GetSessionFull(ctx, s.ID)
 			require.NoError(t, err)
+			require.NotNil(t, got)
 			assert.Equal(t, tc.project, got.Project, "only enabled rules take priority during import")
 
 			// Repeat through repair with the label retained by older importers.

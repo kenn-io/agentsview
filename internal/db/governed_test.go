@@ -66,8 +66,8 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 
 	t.Run("unresolved repo_dot_worktrees is not governed", func(t *testing.T) {
 		// cwd sits directly under the prefix at "<repo>.worktrees" with no
-		// branch segment beneath it, so worktreePathMatches passes but
-		// resolveRepoDotWorktrees fails (idx < 0 in the branch lookup).
+		// child segment beneath it, so the prefix matches but the layout
+		// cannot resolve a project.
 		got := EvaluateGovernedSessions(
 			[]ArchiveMappings{{Mappings: []WorktreeProjectMapping{
 				repoDotWorktreesMapping("ws", "/work/service"),

@@ -93,6 +93,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 	defer func() { retErr = errors.Join(retErr, scratch.Close()) }()
 	scratch.SetToolResultImages(a.database.ToolResultImages())
 	scratch.SetAssetsDir(a.database.AssetsDir())
+	scratch.UseConfiguredWorktreeMappingsFrom(a.database)
 	suppressed := make(map[string]bool)
 	policies := make(map[string]map[string]db.RawArchiveSuppression)
 	for i, source := range selected {

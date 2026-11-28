@@ -46,6 +46,7 @@
 
   const explicitLayout = "explicit";
   const repoDotWorktreesLayout = "repo_dot_worktrees";
+  const repoDotSuffixLayout = "repo_dot_suffix";
 
   let {
     readOnly = false,
@@ -67,6 +68,7 @@
   let machines: string[] = $state([]);
   let mappings: DbProjectRule[] = $state([]);
   let loading = $state(true);
+  let mappingsLoaded = $state(false);
   let saving = $state(false);
   let applying = $state(false);
   let error = $state("");
@@ -83,7 +85,7 @@
   let confirmation: Confirmation | null = $state(null);
   const sort = new TableSort<DbProjectRule>({
     prefix: row => row.path_prefix,
-    project: row => row.project || derivedLayoutLabel(row),
+    project: row => row.project || derivedLayoutLabel(row.layout),
     original: row => row.original_project || null,
     enabled: row => row.enabled ? m.worktree_on() : m.worktree_off(),
     updated: { value: row => new Date(row.updated_at), firstDirection: "desc" },
@@ -105,17 +107,16 @@
       meta: sessions.machineLabel(name) !== name ? name : undefined,
     })),
   );
-  const layoutOptions = $derived([
-    { value: explicitLayout, label: m.worktree_layout_explicit({}) },
-    {
-      value: repoDotWorktreesLayout,
-      label: m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" }),
-    },
-  ]);
-  const isRepoDotWorktrees = $derived(layout === repoDotWorktreesLayout);
+  const layoutOptions = $derived(
+    [explicitLayout, repoDotWorktreesLayout, repoDotSuffixLayout].map((value) => ({
+      value,
+      label: derivedLayoutLabel(value),
+    })),
+  );
+  const isDynamicLayout = $derived(layout !== explicitLayout);
+  const canApply = $derived(!readOnly && mappingsLoaded && machine !== "" && !applying);
   const canSave = $derived(
-    pathPrefix.trim() !== "" &&
-      (layout === repoDotWorktreesLayout || project.trim() !== ""),
+    pathPrefix.trim() !== "" && (isDynamicLayout || project.trim() !== ""),
   );
 
   $effect(() => {
@@ -137,6 +138,7 @@
     if (disposed) return;
     const signal = mappingsRead.begin();
     loading = true;
+    mappingsLoaded = false;
     error = "";
     try {
       const res = await DataService.getApiV1DataProjectRules({
@@ -148,6 +150,7 @@
       machines = Array.from(new Set([res.machine, ...(res.machines ?? [])]))
         .filter(Boolean);
       mappings = res.rules ?? [];
+      mappingsLoaded = true;
     } catch (err) {
       if (isAbortError(err) || !mappingsRead.isCurrent(signal)) return;
       error = err instanceof Error ? err.message : m.worktree_failed_load();
@@ -213,11 +216,11 @@
       machine,
       path_prefix: pathPrefix.trim(),
       layout,
-      project: project.trim(),
+      project: isDynamicLayout ? "" : project.trim(),
       enabled,
     } satisfies WorktreeMappingRequest;
     if (!input.path_prefix) return null;
-    if (layout !== repoDotWorktreesLayout && !input.project) return null;
+    if (!isDynamicLayout && !input.project) return null;
     return input;
   }
 
@@ -297,6 +300,7 @@
   }
 
   async function applyMappings() {
+    if (!canApply) return;
     const initiatingMachine = machine;
     const generation = machineGeneration;
     applying = true;
@@ -319,10 +323,15 @@
     }
   }
 
-  function derivedLayoutLabel(mapping: DbProjectRule): string {
-    return mapping.layout === repoDotWorktreesLayout
-      ? m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" })
-      : m.worktree_layout_explicit({});
+  function derivedLayoutLabel(value: string): string {
+    switch (value) {
+      case repoDotWorktreesLayout:
+        return m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" });
+      case repoDotSuffixLayout:
+        return m.worktree_layout_repo_dot_suffix({ repo: "repo", suffix: "suffix" });
+      default:
+        return m.worktree_layout_explicit({});
+    }
   }
 
   function fmtUpdated(ts: string): string {
@@ -363,8 +372,8 @@
   {:else if error && machine === ""}
     <div class="error-text">{error}</div>
   {:else}
-    <!-- Applying acts on every rule listed for the machine, so it sits with
-         the machine picker above the list rather than with the form. -->
+    <!-- Apply uses the selected machine's effective rules, including config
+         rules that are not shown in the archive list. -->
     <div class="list-toolbar">
       <div class="machine-field">
         <span class="label">{m.worktree_machine()}</span>
@@ -381,7 +390,7 @@
       {#if !readOnly}
         <Button
           label={applying ? m.worktree_applying() : m.worktree_apply_mappings()}
-          disabled={applying || loading || mappings.length === 0}
+          disabled={!canApply}
           onclick={applyMappings}
         />
       {/if}
@@ -436,7 +445,7 @@
                     {:else if mapping.project}
                       <span>{mapping.project}</span>
                     {:else}
-                      <span class="derived-label">{derivedLayoutLabel(mapping)}</span>
+                      <span class="derived-label">{derivedLayoutLabel(mapping.layout)}</span>
                     {/if}
                   </td>
                   <td>{mapping.original_project || "—"}</td>
@@ -490,14 +499,14 @@
         </div>
         <div class="field-row">
           <label class="field">
-            <span>{isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
+            <span>{isDynamicLayout ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
             <TextInput
               bind:value={pathPrefix}
               block
-              ariaLabel={isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}
-              placeholder={isRepoDotWorktrees ? "/Users/me" : "/Users/me/project.worktrees"}
+              ariaLabel={isDynamicLayout ? m.worktree_parent_directory() : m.worktree_path_prefix()}
+              placeholder={isDynamicLayout ? "/Users/me" : "/Users/me/project.worktrees"}
             />
-            {#if isRepoDotWorktrees}
+            {#if layout === repoDotWorktreesLayout}
               <div class="hint">{m.worktree_parent_directory_hint()}</div>
             {/if}
           </label>
@@ -508,10 +517,16 @@
               block
               ariaLabel={m.worktree_project()}
               placeholder="project-name"
-              disabled={isRepoDotWorktrees}
+              disabled={isDynamicLayout}
             />
             <div class="hint">
-              {isRepoDotWorktrees ? m.worktree_project_derived() : m.worktree_project_required()}
+              {#if layout === repoDotSuffixLayout}
+                {m.worktree_project_derived_dot_suffix()}
+              {:else if layout === repoDotWorktreesLayout}
+                {m.worktree_project_derived()}
+              {:else}
+                {m.worktree_project_required()}
+              {/if}
             </div>
           </label>
         </div>
