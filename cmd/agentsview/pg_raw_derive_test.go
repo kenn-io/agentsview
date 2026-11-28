@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -104,7 +105,7 @@ func TestMain(m *testing.M) {
 			// Restart fixtures exercise real syncs, which share a lock with
 			// pricing refresh. Serve fixed catalogs so a slow external fetch
 			// cannot hold that lock past the fixture's HTTP deadline.
-			http.DefaultTransport = pricingCatalogTransport{fallback: http.DefaultTransport}
+			catalog.Transport = pricingCatalogTransport{}
 		}
 		main()
 		return
