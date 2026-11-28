@@ -294,7 +294,7 @@ func musePersonalProviderCapabilities() Capabilities {
 	source.CompositeFingerprint = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	source.MultiFileStatHash = CapabilitySupported
-	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true, PartialDiscovery: true, BatchFingerprintCache: true}}
+	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Relationships: CapabilitySupported, Subagents: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true, PartialDiscovery: true, BatchFingerprintCache: true}}
 }
 
 func (s musePersonalSourceSet) sourceRef(root string, match singleFileMatch) SourceRef {

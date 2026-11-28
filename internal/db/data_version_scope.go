@@ -81,6 +81,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	190:                         {}, // Retained tool calls are indexed on open.
 	191:                         {}, // Native title reconciliation backfills Antigravity CLI titles without reparsing.
 	192:                         {parser.AgentCodex},
+	193:                         {parser.AgentMusePersonal},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

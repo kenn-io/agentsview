@@ -220,11 +220,18 @@ func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
 		s.IsAutomated = true
 		s.UserMessageCount = 1
 	})
+	insertSession(t, d, "legacy-muse", "project-a", func(s *Session) {
+		s.Agent = "muse-personal"
+		s.SessionKind = parser.SessionKindMuseBackground
+		s.UserMessageCount = 2
+	})
 	_, err := d.getWriter().Exec(ctx, `UPDATE sessions SET relationship_type = 'subagent', parser_relationship_type = 'subagent', is_automated = 1 WHERE id = 'legacy-panel'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0, local_modified_at = '2000-01-01T00:00:00Z' WHERE id = 'legacy-roborev'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 1 WHERE id = 'prompt-automated'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0 WHERE id = 'legacy-muse'`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(ctx, `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
 	require.NoError(t, err)
@@ -246,6 +253,11 @@ func TestBackfillReconcilesUsageOnlyParentlessWorkers(t *testing.T) {
 	assert.True(t, roborev.IsAutomated, "roborev entrypoint classifies without retained prompt text")
 	require.NotNil(t, roborev.LocalModifiedAt)
 	assert.NotEqual(t, "2000-01-01T00:00:00Z", *roborev.LocalModifiedAt)
+
+	muse, err := reopened.GetSession(ctx, "legacy-muse")
+	require.NoError(t, err)
+	require.NotNil(t, muse)
+	assert.True(t, muse.IsAutomated, "muse-background kind classifies without retained prompt text")
 
 	promptOnly, err := reopened.GetSession(ctx, "prompt-automated")
 	require.NoError(t, err)

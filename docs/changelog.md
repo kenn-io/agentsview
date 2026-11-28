@@ -19,6 +19,19 @@ The latest release is
 
 **Bug fixes**
 
+- Muse Personal scheduled jobs and upkeep runs now count as automated, so they
+  no longer crowd session lists and counts by default. Turn on **Include
+  automated** to see them. Delegated runs and subagent runs count as Subagents,
+  like other headless workers, and stay searchable. Subagent runs nest under the
+  session that requested them; delegated runs record no parent and appear as
+  sidebar roots. Conversations with your Muse, including voice calls, stay
+  visible. AgentsView reads the run type Muse records on the first user message,
+  so no `[automated]` patterns are needed. Restart or run `agentsview sync` to
+  reclassify local Muse Personal sessions whose transcripts are still on disk.
+  Hosted operators run a parser rollout with a fresh run ID and repeat it until
+  the output contains `complete=true`; see [Reparse and
+  rollback](/docs/hosted-raw-sync/#reparse-and-rollback).
+
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
   Integrations must reconcile event keys and poll times across reports.

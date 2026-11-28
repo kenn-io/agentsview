@@ -63,21 +63,30 @@ the same day and timezone. Usage rows that recur across related sessions are
 deduplicated before totaling, following the same rule the Usage page applies.
 
 Subagents include native child sessions, externally linked runs, and
-non-automated parentless `claude -p`, `codex exec`, or Grok headless runs.
-Claude Code `sdk-cli` workers qualify when their first real normalized prompt
-records `turnOrigin=sdk`, and a human origin wins over conflicting markers. A
-queued first prompt, missing or unknown origin, SDK library entrypoints, or an
-explicit provider kind blocks this inference. Human SDK conversations stay
-Interactive unless their prompts match an automation pattern. Real subagents
-keep the Subagents category even when scripted or their parent disappears:
-sessions with a parent, native subagent identities, Grok runs that their
-summary marks as subagents, and runs that a spawning session or launcher link
-ever gave a parent. A spawned run stays a subagent after its spawner is
-deleted; removing its launcher link with no spawn record left returns it to
-its own category. Other parentless headless runs whose prompts match built-in
-or user `[automated]` patterns, or sessions tagged with `roborev` metadata
-(Codex `thread_source=roborev` or Claude `entrypoint=roborev`), count as
-Automated; prompt matching requires one or fewer real user messages.
+non-automated parentless `claude -p`, `codex exec`, or Grok headless runs. Muse
+Personal delegated runs and subagent runs are Subagents too. Delegated runs are
+`runtime.browser_input`, or plain `runtime` whose first user message has
+`Carry out this assignment end to end, then report the result.` or
+`## Task and updates` as its whole first line; they record no parent. A subagent
+run is plain `runtime` whose first user message has the
+`[Subagent Context] You are running as a subagent (depth N/M); ...` banner as
+its whole first line; it links to the session named by its
+`- Requester agent id:` field and stays parentless when that field is missing or
+ambiguous. Claude Code `sdk-cli` workers qualify when their first real
+normalized prompt records `turnOrigin=sdk`, and a human origin wins over
+conflicting markers. A queued first prompt, missing or unknown origin, SDK
+library entrypoints, or an explicit provider kind blocks this inference. Human
+SDK conversations stay Interactive unless their prompts match an automation
+pattern. Real subagents keep the Subagents category even when scripted or their
+parent disappears: sessions with a parent, native subagent identities, Grok runs
+that their summary marks as subagents, and runs that a spawning session or
+launcher link ever gave a parent. A spawned run stays a subagent after its
+spawner is deleted; removing its launcher link with no spawn record left returns
+it to its own category. Other parentless headless runs whose prompts match
+built-in or user `[automated]` patterns, sessions tagged with `roborev` metadata
+(Codex `thread_source=roborev` or Claude `entrypoint=roborev`), or Muse Personal
+scheduled and upkeep runs count as Automated; prompt matching requires one or
+fewer real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and
