@@ -222,10 +222,11 @@ test("the View trigger shows its full label and keeps its width across layouts a
   const widths = new Set<number>();
   // Layout and mode picks keep the menu open, so one open covers them all.
   await trigger.click();
+  const layoutGroup = page.getByRole("group", { name: "Layout" });
   for (const mode of ["All messages and tool calls", "Only your prompts and final answers"]) {
     await page.getByRole("menuitemradio", { name: new RegExp(`^${mode}`) }).click();
     for (const layout of ["Default", "Compact", "Stream", "Skim"]) {
-      await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
+      await layoutGroup.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();
       await expect(label).toContainText(layout);
       // The label is drawn in full: nothing clipped behind an ellipsis.
       const clip = await label.evaluate((el) => el.scrollWidth - el.clientWidth);
