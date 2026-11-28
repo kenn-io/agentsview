@@ -186,6 +186,21 @@ describe("MessageContent", () => {
     }
   });
 
+  it("copies a browser link under the configured base path", async () => {
+    const base = document.createElement("base");
+    base.href = "/app/";
+    document.head.appendChild(base);
+    try {
+      await render(message({ session_id: "session-1", ordinal: 7 }));
+      await click('[aria-label="Copy link to message"]');
+      expect(copyMock).toHaveBeenCalledWith(
+        `${window.location.origin}/app/sessions/session-1?msg=7`,
+      );
+    } finally {
+      base.remove();
+    }
+  });
+
   it("copies a local desktop deep link", async () => {
     state.isDesktop = true;
     await render(message({ session_id: "codex:session-1", ordinal: 7 }));

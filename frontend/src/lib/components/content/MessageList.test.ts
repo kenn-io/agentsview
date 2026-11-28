@@ -1310,6 +1310,41 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".thinking-header")).toBeNull();
   });
 
+  it("selects a neighbouring message when the revealed link target disappears", async () => {
+    ui.followLatest = false;
+    ui.setBlockVisible("thinking", false);
+    window.history.replaceState(null, "", "/sessions/s1?msg=1&project=project-a");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    onTestFinished(() => {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const thought = {
+      ...makeMessage(1),
+      content: "[Thinking]\nplan\n[/Thinking]",
+      has_thinking: true,
+      thinking_text: "plan",
+    };
+    messages.messages = [makeMessage(0), thought, makeMessage(2)];
+    messages.messageCount = 3;
+    ui.selectedOrdinal = 1;
+    setVirtualRows(3);
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+    expect(document.querySelector(".thinking-header")).not.toBeNull();
+    document.querySelector<HTMLElement>('.virtual-row[data-index="2"] .role-label')!.click();
+    await tick();
+    expect(ui.selectedOrdinal).toBe(2);
+    expect(document.querySelector(".thinking-header")).toBeNull();
+    expect(
+      [...document.querySelectorAll(".virtual-row .text-content")].map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["msg 0", "msg 2"]);
+    expect(new URLSearchParams(window.location.search).get("project")).toBe("project-a");
+    expect(new URLSearchParams(window.location.search).has("msg")).toBe(false);
+  });
+
   it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
     ui.setBlockVisible("assistant", false);
     window.history.replaceState(null, "", "/sessions/s1?msg=1");

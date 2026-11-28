@@ -548,8 +548,8 @@ class UIStore {
     return this.visibleBlocks.has(type);
   }
 
-  setBlockVisible(type: BlockType, visible: boolean) {
-    if (this.visibleBlocks.has(type) !== visible) router.clearMessageTarget();
+  setBlockVisible(type: BlockType, visible: boolean, preserveLink = false) {
+    if (!preserveLink && this.visibleBlocks.has(type) !== visible) router.clearMessageTarget();
     const next = new Set(this.visibleBlocks);
     if (visible) {
       next.add(type);
@@ -611,8 +611,8 @@ class UIStore {
     this.readingWidth = width;
   }
 
-  setTranscriptMode(mode: TranscriptMode) {
-    if (this.transcriptMode !== mode) router.clearMessageTarget();
+  setTranscriptMode(mode: TranscriptMode, preserveLink = false) {
+    if (!preserveLink && this.transcriptMode !== mode) router.clearMessageTarget();
     this.transcriptMode = mode;
   }
 

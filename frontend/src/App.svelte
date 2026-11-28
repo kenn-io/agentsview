@@ -263,7 +263,7 @@
             normalItems,
           )
         ) {
-          ui.setTranscriptMode("normal");
+          ui.setTranscriptMode("normal", true);
           return; // effect re-runs with normal transcript mode
         }
 
@@ -289,7 +289,7 @@
             (s) => s.type === "thinking",
           );
           if (hasThinkingSegment) {
-            ui.setBlockVisible("thinking", true);
+            ui.setBlockVisible("thinking", true, true);
             return; // effect re-runs with thinking visible
           }
         }
