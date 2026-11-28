@@ -1941,7 +1941,7 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 }
 
 func TestMusePersonalRunCategoryUpgradeReparsesInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(193, 194)
+	scope := db.ScopedDataVersionProviders(192, 193)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentMusePersonal}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
