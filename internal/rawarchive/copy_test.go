@@ -92,7 +92,11 @@ func TestCopyDetachedArchive(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, foreign.Close())
 			case "existing destination":
+				database, err := db.OpenIsolatedContext(ctx, path)
+				require.NoError(t, err)
+				require.NoError(t, database.Close())
 				require.NoError(t, os.Mkdir(dest, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dest, "sentinel"), []byte("keep"), 0o600))
 			}
 			err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
 			require.Error(t, err)
@@ -104,8 +108,14 @@ func TestCopyDetachedArchive(t *testing.T) {
 			if kind == "existing destination" {
 				require.Len(t, entries, 1)
 				assert.Equal(t, "copy", entries[0].Name())
+				contents, err := os.ReadFile(filepath.Join(dest, "sentinel"))
+				require.NoError(t, err)
+				assert.Equal(t, "keep", string(contents))
 				entries, err = os.ReadDir(dest)
 				require.NoError(t, err)
+				require.Len(t, entries, 1)
+				assert.Equal(t, "sentinel", entries[0].Name())
+				return
 			}
 			assert.Empty(t, entries)
 		})

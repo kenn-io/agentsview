@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // CopiedProjectLabel replaces labels that expose a host path with stable aliases.
@@ -29,6 +30,9 @@ func CopiedProjectLabel(value string) string {
 // ClearHostSources detaches a staged archive from its original host.
 func (db *DB) ClearHostSources(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
+		if err := retainCodexCloudAccounts(ctx, tx); err != nil {
+			return err
+		}
 		for _, statement := range []string{
 			`UPDATE sessions SET file_path=NULL, file_size=NULL, file_mtime=NULL, file_inode=NULL, file_device=NULL, file_hash=NULL, cwd=''`,
 			`UPDATE recall_entries SET cwd=''`,
@@ -61,6 +65,32 @@ func (db *DB) ClearHostSources(ctx context.Context) error {
 		}
 		return relabelCopiedProjects(ctx, tx)
 	})
+}
+
+func retainCodexCloudAccounts(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id, file_path FROM sessions WHERE agent = ? AND file_path IS NOT NULL`, string(parser.AgentCodexCloud))
+	if err != nil {
+		return err
+	}
+	accounts := map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if account := parser.CodexCloudAccountFromPath(path); account != "" {
+			accounts[id] = account
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for id, account := range accounts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_cloud_accounts(session_id, account_key) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET account_key=excluded.account_key`, id, account); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func relabelCopiedProjects(ctx context.Context, tx *sql.Tx) error {
