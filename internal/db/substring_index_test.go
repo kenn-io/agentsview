@@ -1,8 +1,10 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,6 +18,33 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestToolSubstringSynchronousBuildReportsProgress(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	seedSearchSession(t, d, "s", "project", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT id,session_id,'Read','Read','needle' FROM messages WHERE session_id='s'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, "DROP TABLE tool_input_trigram_fts")
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+	var details []string
+	d, err = OpenWithProgress(ctx, path, config.ArchiveContentFull, func(progress OpenProgress) {
+		details = append(details, progress.Detail)
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assert.Contains(t, details, "Building tool search index")
+	assert.Contains(t, output.String(), "building SQLite tool search index")
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needle", Sources: []string{"tool_input"}, Limit: 10}), 1)
+}
 
 func TestToolSubstringReadOnlyScansWhenIndexModuleUnavailable(t *testing.T) {
 	ctx := t.Context()

@@ -3656,6 +3656,8 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, def
 		if deferMessageFTSRepair {
 			db.toolSubstringRepairPending.Store(true)
 		} else {
+			progress.report("Building tool search index")
+			log.Print("building SQLite tool search index; scanning tool text")
 			for {
 				done, err := buildToolSubstringBatch(ctx, w)
 				if err != nil {
