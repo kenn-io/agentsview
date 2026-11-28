@@ -78,9 +78,6 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		return err
 	}
 	for _, cache := range db.UsageCacheFiles(path, databaseID) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		info, err := os.Lstat(cache)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -110,8 +107,5 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := atomicfile.RenameNoReplace(stage, destination); err != nil {
-		return err
-	}
-	return nil
+	return atomicfile.RenameNoReplace(stage, destination)
 }

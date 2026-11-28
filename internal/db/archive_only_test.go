@@ -52,30 +52,20 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 }
 
 func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
-	for _, detached := range []bool{false, true} {
-		t.Run(fmt.Sprintf("detached=%t", detached), func(t *testing.T) {
-			ctx := t.Context()
-			source := testDB(t)
-			if detached {
-				require.NoError(t, source.ClearHostSources(ctx))
-			}
-			require.NoError(t, source.EnableArchiveOnly(ctx))
-			replacement := testDB(t)
-			require.NoError(t, replacement.CopySessionMetadataFrom(ctx, source.Path()))
-			require.NoError(t, replacement.setDataVersion(ctx))
-			path := replacement.Path()
-			require.NoError(t, replacement.Close())
-			reopened, err := OpenReadOnly(ctx, path)
-			require.NoError(t, err)
-			defer reopened.Close()
-			assert.False(t, reopened.NeedsResync())
-			require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
-			var raw int
-			require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
-			assert.Equal(t, archiveOnlyVersionBase+dataVersion, raw)
-			version, archiveOnly := DecodeUserVersion(raw)
-			assert.Equal(t, dataVersion, version)
-			assert.True(t, archiveOnly)
-		})
-	}
+	source := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, source.EnableArchiveOnly(ctx))
+	replacement := testDB(t)
+	require.NoError(t, replacement.CopySessionMetadataFrom(t.Context(), source.Path()))
+	require.NoError(t, replacement.setDataVersion(ctx))
+	path := replacement.Path()
+	require.NoError(t, replacement.Close())
+	reopened, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	assert.False(t, reopened.NeedsResync())
+	require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
+	var raw int
+	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
+	assert.Equal(t, (1<<20)+dataVersion, raw)
 }

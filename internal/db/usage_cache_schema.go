@@ -508,44 +508,16 @@ func UsageCacheFiles(archivePath, databaseID string) []string {
 	return paths
 }
 
-// ClearCopiedUsageRollups removes host project labels from a copied cache.
+// ClearCopiedUsageRollups drops a copied cache's rollups, which hold host project
+// labels, so the copy rebuilds them from its facts under the aliased labels.
 func ClearCopiedUsageRollups(ctx context.Context, path string) (retErr error) {
-	probe := probeUsageCache(ctx, path)
-	if probe.Err != nil {
-		return probe.Err
-	}
-	if !probe.Recognized || probe.FormatVersion < usageCacheUpgradeFrom || probe.FormatVersion > usageCacheFormatVersion || probe.RetirementProtocolVersion > usageCacheRetirementProtocolVersion {
-		return errors.New("unsupported usage cache")
-	}
 	database, err := openUsageCacheDatabase(ctx, path)
 	if err != nil {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, database.Close()) }()
-	hasPaths, err := copiedUsageRollupsHavePaths(ctx, database)
-	if err != nil || !hasPaths {
-		return err
-	}
 	_, err = database.ExecContext(ctx, `DELETE FROM usage_rollup_timezones`)
 	return err
-}
-
-func copiedUsageRollupsHavePaths(ctx context.Context, database *sql.DB) (found bool, retErr error) {
-	rows, err := database.QueryContext(ctx, `SELECT project FROM usage_rollup_installs UNION ALL SELECT project FROM usage_day_totals`)
-	if err != nil {
-		return false, err
-	}
-	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
-	for rows.Next() {
-		var project string
-		if err := rows.Scan(&project); err != nil {
-			return false, err
-		}
-		if CopiedProjectLabel(project) != project {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
 }
 
 func (m *usageCacheManager) Generation(
