@@ -1288,6 +1288,36 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".code-content")).toBeNull();
   });
 
+  it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
+    ui.setBlockVisible("assistant", false);
+    window.history.replaceState(null, "", "/sessions/s1?msg=1");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    onTestFinished(() => {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    ui.followLatest = false;
+    const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
+    messages.messages = [makeMessage(0), linked, makeMessage(2), makeMessage(3)];
+    messages.messageCount = 4;
+    const { element } = realJumpScroll();
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    component.scrollToOrdinal(1);
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll(".virtual-row .text-content")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(rows).toEqual(["msg 0", "linked answer", "msg 2"]);
+    expect(element.scrollTop).toBe(100);
+    expect(ui.isBlockVisible("assistant")).toBe(false);
+    expect(JSON.parse(localStorage.getItem("agentsview-block-filters")!).hidden).toEqual([
+      "assistant",
+    ]);
+  });
+
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {
     messages.messages = [
       { ...makeMessage(0), role: "assistant" },
