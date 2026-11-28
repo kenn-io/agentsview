@@ -79,21 +79,24 @@ describe("session search scope", () => {
     expect(result.allowsBlock(tool, "tool-input")).toBe(true);
   });
 
-  it.each(["normal", "focused"] as const)("keeps filtered blocks hidden for a linked row in %s mode", (transcriptMode) => {
-    const prompt = message(0, "prompt", { role: "user" });
-    const linked = message(1, "[Thinking]\nprivate thought\n[/Thinking]\nanswer", {
-      has_thinking: true,
-    });
-    const final = message(2, "final answer");
-    const result = scope([prompt, linked, final], {
-      ...filtered(["user", "assistant"]),
-      transcriptMode,
-      revealOrdinal: 1,
-    });
-    expect(result.messages).toEqual([prompt, linked, final]);
-    expect(result.revealedOrdinal).toBeUndefined();
-    expect(result.allowsBlock(linked, "thinking")).toBe(false);
-  });
+  it.each(["normal", "focused"] as const)(
+    "keeps filtered blocks hidden for a linked row in %s mode",
+    (transcriptMode) => {
+      const prompt = message(0, "prompt", { role: "user" });
+      const linked = message(1, "[Thinking]\nprivate thought\n[/Thinking]\nanswer", {
+        has_thinking: true,
+      });
+      const final = message(2, "final answer");
+      const result = scope([prompt, linked, final], {
+        ...filtered(["user", "assistant"]),
+        transcriptMode,
+        revealOrdinal: 1,
+      });
+      expect(result.messages).toEqual([prompt, linked, final]);
+      expect(result.revealedOrdinal).toBeUndefined();
+      expect(result.allowsBlock(linked, "thinking")).toBe(false);
+    },
+  );
 
   it("searches the text of a linked answer its role filter hides", () => {
     const prompt = message(0, "prompt", { role: "user" });
