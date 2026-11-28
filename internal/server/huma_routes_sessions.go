@@ -1011,6 +1011,9 @@ func (s *Server) humaOpenSession(
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
+	if err := s.requireHostSessionActions(ctx); err != nil {
+		return nil, err
+	}
 	projectDir := resolveSessionDir(session)
 	if projectDir == "" {
 		return nil, apiError(http.StatusBadRequest, "session has no project directory")

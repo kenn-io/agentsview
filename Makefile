@@ -363,7 +363,7 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
-ARCHIVE_COPY_TESTS ?= ^(TestCopyPreservesAssetReferences|TestCopyDetachedArchive|TestCopyOmitsRecoveryVaults|TestCopyRefusesIncompleteSources|TestCopyUsageCache|TestUsageCacheUpgradeReleasedFacts|TestCopiedProjectLabelsAreRecognizableAndDistinct|TestDetachedArchiveImageTextConfiguration|TestClearHostSources|TestClearHostSourcesRelabelsManyProjectsPromptly|TestDetachedCodexCloudCopiesKeepReportingDeduplication|TestArchiveOnlySurvivesRebuildMetadataCopy|TestDetachedArchiveCommitRepositories|TestDetachedArchiveRejectsHostActions|TestDetachedArchivePreservesSessionsOnRebuild)$$
+ARCHIVE_COPY_TESTS ?= ^(TestCopyPreservesAssetReferences|TestCopyDetachedArchive|TestCopyOmitsRecoveryVaults|TestCopyRefusesIncompleteSources|TestCopyUsageCache|TestUsageCacheUpgradeReleasedFacts|TestCopiedProjectLabelsAreRecognizableAndDistinct|TestDetachedArchiveImageTextConfiguration|TestClearHostSources|TestClearHostSourcesRelabelsManyProjectsPromptly|TestDetachedCodexCloudCopiesKeepReportingDeduplication|TestArchiveOnlySurvivesRebuildMetadataCopy|TestDetachedArchiveCommitRepositories|TestDetachedArchiveRejectsHostActions|TestDetachedArchiveRejectsOpenAfterProjectAssignment|TestDetachedArchivePreservesSessionsOnRebuild)$$
 .PHONY: test-archive-copy
 test-archive-copy: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/rawarchive ./internal/db ./internal/server ./cmd/agentsview -run '$(ARCHIVE_COPY_TESTS)' -count=1

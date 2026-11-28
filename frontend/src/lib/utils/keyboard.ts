@@ -238,6 +238,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         }
       },
       c: () => {
+        if (!sync.hostSessionActionsAvailable) return;
         const session = sessions.activeSession;
         if (session && supportsResume(session.agent)) {
           // Copy a runnable resume command. Cursor needs the backend cwd
@@ -246,6 +247,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
             command_only: true,
           } satisfies ResumeRequest)
             .then((resp) => {
+              if (!sync.hostSessionActionsAvailable) return;
               const cmd =
                 formatResumeResponseCommand(session.agent, resp) ||
                 buildResumeCommand(session.agent, session.id, {
@@ -254,6 +256,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
               if (cmd) void copyToClipboard(cmd);
             })
             .catch(() => {
+              if (!sync.hostSessionActionsAvailable) return;
               const cmd = buildResumeCommand(session.agent, session.id, {
                 model: activeResumeModel(session.id),
               });

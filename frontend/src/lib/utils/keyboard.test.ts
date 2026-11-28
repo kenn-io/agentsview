@@ -50,6 +50,7 @@ describe("registerShortcuts", () => {
 
   beforeEach(() => {
     ui.activeModal = null;
+    sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
     ui.selectedOrdinal = null;
     sessions.activeSessionId = null;
     sessions.sessions = [];
@@ -65,6 +66,7 @@ describe("registerShortcuts", () => {
 
   afterEach(() => {
     cleanup();
+    sync.serverVersion = null;
     detachSessionList?.();
     document.body.innerHTML = "";
     vi.restoreAllMocks();
@@ -86,6 +88,61 @@ describe("registerShortcuts", () => {
       sync.serverVersion = null;
     }
   });
+
+  it("does not copy a resume command in a detached archive", async () => {
+    sync.serverVersion = { host_paths_detached: true } as NonNullable<typeof sync.serverVersion>;
+    sessions.sessions = [
+      { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+    ];
+    sessions.activeSessionId = "claude:copied";
+    const resume = vi
+      .spyOn(SessionsService, "postApiV1SessionsByIdResume")
+      .mockRejectedValue(new Error("detached"));
+    try {
+      fireKey("c");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(resume).not.toHaveBeenCalled();
+      expect(copyToClipboard).not.toHaveBeenCalled();
+    } finally {
+      sync.serverVersion = null;
+    }
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "does not copy when a pending resume request %ss after detachment",
+    async (outcome) => {
+      sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
+      sessions.sessions = [
+        { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+      ];
+      sessions.activeSessionId = "claude:copied";
+      let resolve!: (
+        value: Awaited<ReturnType<typeof SessionsService.postApiV1SessionsByIdResume>>,
+      ) => void;
+      let reject!: (reason: Error) => void;
+      vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockReturnValue(
+        new Promise((ok, fail) => {
+          resolve = ok;
+          reject = fail;
+        }),
+      );
+      try {
+        fireKey("c");
+        sync.serverVersion = { host_paths_detached: true } as NonNullable<
+          typeof sync.serverVersion
+        >;
+        if (outcome === "resolve")
+          resolve({ launched: false, command: "claude --resume copied", cwd: "" });
+        else reject(new Error("detached"));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(copyToClipboard).not.toHaveBeenCalled();
+      } finally {
+        sync.serverVersion = null;
+      }
+    },
+  );
 
   describe("remote c copy", () => {
     it.each([

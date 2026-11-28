@@ -365,4 +365,5 @@ func TestDetachedCodexCloudCopiesKeepReportingDeduplication(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, after.Hours[10].Machines, origin)
 	assert.Equal(t, before.Hours[10].Machines[origin].Usage.Totals, after.Hours[10].Machines[origin].Usage.Totals)
+	assert.Zero(t, after.Hours[10].Machines[testLocalInstallation].Usage.Totals.OutputTokens)
 }
