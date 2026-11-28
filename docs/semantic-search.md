@@ -131,6 +131,11 @@ recipe and the default server's explicit timeout, batch, concurrency, and retry
 settings; a new model starts from its defaults. The new server uses the key
 supplied to the command. Recall is rebuilt when its embedding index is enabled.
 
+When the model changes, `nomic-embed-text`, names beginning with
+`nomic-embed-text:` or `nomic-embed-text-v`, and those names prefixed with
+`nomic-ai/` get the Nomic defaults, including `search_query: ` for queries and
+`search_document: ` for documents.
+
 To use Kit's local server while Ollama stays running, keep your explicit Nomic
 recipe and add a named server:
 
