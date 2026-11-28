@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-27
+last_edited: 2026-11-28
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -76,6 +76,12 @@ The latest release is
   every scheduled remote sync after that re-downloaded and re-parsed each
   remote's full history. After an upgrade, each remote now rebuilds once from
   its local mirror.
+
+- Codex sessions that Codex imported from Claude Code now show their first real
+  prompt as the title. Before, a session that opened with a slash command such
+  as `/model` showed raw `<command-name>` text in the session lists and in Top
+  Sessions. The transcript is unchanged. The next sync reparses Codex, TraeX,
+  Augure Code, and Open Interpreter sessions in place.
 
 ## 0.48.0
 

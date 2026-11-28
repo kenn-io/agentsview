@@ -497,7 +497,8 @@ func (e *Engine) reconcileCodexFork(ctx context.Context, c ingest.Candidate, sta
 	retainCodexForkContexts(state)
 	c.Session.FirstMessage = nil
 	for _, m := range c.Messages {
-		if m.Role == "user" && !m.IsSystem && m.SourceSubtype != parser.SourceSubtypeToolResult && strings.TrimSpace(m.Content) != "" {
+		if m.Role == "user" && !m.IsSystem && m.SourceSubtype != parser.SourceSubtypeToolResult && strings.TrimSpace(m.Content) != "" &&
+			!parser.IsSkippableCodexPreview(m.Content) {
 			c.Session.FirstMessage = new(stringutil.TruncateRunes(strings.TrimSpace(strings.ReplaceAll(m.Content, "\n", " ")), 300, "..."))
 			break
 		}
