@@ -94,6 +94,30 @@ func TestCodexLaunchesClaudeOnRemoteMachine(t *testing.T) {
 	assert.Equal(t, "remote~"+childID, children[0].ID)
 }
 
+func TestFailedCodexLaunchDoesNotAdoptExistingClaudeSession(t *testing.T) {
+	const launcherID = "019eb791-cf7d-75c1-8439-9ed74c122c80"
+	const childID = "12345678-1234-1234-1234-123456789abc"
+	root := t.TempDir()
+	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
+	require.NoError(t, os.MkdirAll(filepath.Join(claudeRoot, "project"), 0o700))
+	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
+	child := `{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Review"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, "project", childID+".jsonl"), []byte(child), 0o600))
+	content := testjsonl.CodexSessionMetaJSON(launcherID, "/workspace/project", "cli", "2026-10-01T10:00:00Z") + "\n" +
+		testjsonl.CodexMsgJSON("user", "Review", "2026-10-01T10:00:00Z") + "\n" +
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call-1", map[string]any{"cmd": "claude -p --session-id " + childID}, "2026-10-01T10:00:01Z") + "\n" +
+		testjsonl.CodexFunctionCallOutputJSON("call-1", "Chunk ID: abc\nWall time: 1 seconds\nProcess exited with code 1\nOutput:\nSession ID is already in use", "2026-10-01T10:00:02Z") + "\n"
+	rollout := filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-"+launcherID+".jsonl")
+	require.NoError(t, os.WriteFile(rollout, []byte(content), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot}}, Machine: "local"})
+	t.Cleanup(func() { engine.Close() })
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	children, err := database.GetChildSessions(t.Context(), "codex:"+launcherID)
+	require.NoError(t, err)
+	assert.Empty(t, children)
+}
+
 func TestLaunchedRunScopedReparse(t *testing.T) {
 	ctx := t.Context()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122c80"

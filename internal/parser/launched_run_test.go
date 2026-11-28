@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -68,6 +69,17 @@ func TestAnnotateClaudeLaunchedRunFailedResult(t *testing.T) {
 	}
 	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
 	assert.Empty(t, messages[0].ToolCalls[0].SubagentSessionID)
+}
+
+func TestAnnotateClaudeLaunchedRunFailedResultWithStartup(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	startup := "OpenAI Codex v0.1.0\n--------\nsession id: " + id + "\n--------\nuser\nhello\n"
+	messages := []ParsedMessage{
+		{ToolCalls: []ParsedToolCall{{Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"codex exec hello"}`}}},
+		{ToolResults: []ParsedToolResult{{ToolUseID: "call", Status: "errored", ContentRaw: strconv.Quote(startup)}}},
+	}
+	require.NoError(t, annotateClaudeLaunchedRuns(t.Context(), messages, false))
+	assert.Equal(t, "codex:"+id, messages[0].ToolCalls[0].SubagentSessionID)
 }
 
 func TestHasLaunchedOutputIDArray(t *testing.T) {
