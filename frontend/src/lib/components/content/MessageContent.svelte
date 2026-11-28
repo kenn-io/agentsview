@@ -396,7 +396,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
   .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
-  .message:hover :global(.kit-copy-btn) { opacity: 1; }
+  .message:hover :global(.kit-copy-btn), .message:hover :global(.message-link-btn) { opacity: 1; }
   .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: none; border-radius: var(--radius-sm, 4px); background: transparent;

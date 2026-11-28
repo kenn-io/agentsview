@@ -158,7 +158,7 @@
   .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
   .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
   .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
-  .tool-group:hover :global(.kit-copy-btn:not(.message-link-btn)) { opacity: 1; }
+  .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }
   /* Consecutive tool rows touch and use the tighter row padding from
      ToolBlock, so a run of calls reads as one unit beside the prose. */
   .tool-group-body {
