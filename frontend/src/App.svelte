@@ -139,7 +139,7 @@
 
   let messageListRef:
     | {
-        scrollToOrdinal: (o: number, call?: ScrollCall, reveal?: boolean) => void;
+        scrollToOrdinal: (o: number, call?: ScrollCall) => void;
         getDisplayItems: () => DisplayItem[];
         getNormalDisplayItems: () => DisplayItem[];
       }
@@ -235,7 +235,6 @@
   // are left alone — auto-changing unrelated filters is unexpected.
   $effect(() => {
     const ordinal = ui.pendingScrollOrdinal;
-    const reveal = ui.pendingLinkReveal;
     const loading = messages.loading;
     const thinkingVisible = ui.isBlockVisible("thinking");
     untrack(() => {
@@ -255,7 +254,7 @@
         item.ordinals.includes(ordinal),
       );
 
-      if (!found && !reveal) {
+      if (!found) {
         if (
           shouldAutoSwitchTranscriptModeToNormal(
             ui.transcriptMode,
@@ -304,7 +303,7 @@
       // may have cleared it before this effect ran). The list clears it
       // again when the message no longer holds the expected call.
       ui.selectedOrdinal = ordinal;
-      messageListRef.scrollToOrdinal(ordinal, call ?? undefined, reveal);
+      messageListRef.scrollToOrdinal(ordinal, call ?? undefined);
     });
   });
 
@@ -708,14 +707,12 @@
     untrack(() => {
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
-        ui.pendingLinkReveal = true;
         ui.pendingScrollOrdinal = -1;
         ui.pendingScrollSession = sid;
       } else {
         const ordinal = parseInt(msgParam, 10);
         if (Number.isFinite(ordinal)) {
           ui.scrollToOrdinal(ordinal, sid, call);
-          ui.pendingLinkReveal = true;
         }
       }
     });
@@ -731,9 +728,7 @@
       const target = ui.pendingScrollSession;
       if (target !== null && target !== messages.sessionId) return;
       const lastOrdinal = msgs[msgs.length - 1]!.ordinal;
-      const reveal = ui.pendingLinkReveal;
       ui.scrollToOrdinal(lastOrdinal, target ?? undefined);
-      ui.pendingLinkReveal = reveal;
     });
   });
 

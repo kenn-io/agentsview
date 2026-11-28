@@ -338,8 +338,6 @@ class UIStore {
   pendingScrollSession: string | null = $state(null);
   /** The tool call a pending jump expects at its message; null when any message at the ordinal will do. */
   pendingScrollCall: ScrollCall | null = $state(null);
-  revealedLinkOrdinal: number | null = $state(null);
-  pendingLinkReveal = $state(false);
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
@@ -549,17 +547,7 @@ class UIStore {
     return this.visibleBlocks.has(type);
   }
 
-  private clearLinkedReveal() {
-    this.revealedLinkOrdinal = null;
-    if (this.pendingLinkReveal) {
-      this.pendingLinkReveal = false;
-      this.pendingScrollOrdinal = null;
-      this.pendingScrollSession = null;
-    }
-  }
-
   setBlockVisible(type: BlockType, visible: boolean) {
-    this.clearLinkedReveal();
     const next = new Set(this.visibleBlocks);
     if (visible) {
       next.add(type);
@@ -571,7 +559,6 @@ class UIStore {
   }
 
   toggleBlock(type: BlockType) {
-    this.clearLinkedReveal();
     const next = new Set(this.visibleBlocks);
     if (next.has(type)) {
       next.delete(type);
@@ -583,7 +570,6 @@ class UIStore {
   }
 
   showAllBlocks() {
-    this.clearLinkedReveal();
     this.visibleBlocks = new Set(ALL_BLOCK_TYPES);
     this.persistBlockFilters();
   }
@@ -622,7 +608,6 @@ class UIStore {
   }
 
   setTranscriptMode(mode: TranscriptMode) {
-    this.clearLinkedReveal();
     this.transcriptMode = mode;
   }
 
@@ -651,23 +636,14 @@ class UIStore {
   }
 
   selectOrdinal(ordinal: number) {
-    if (this.revealedLinkOrdinal !== ordinal) this.revealedLinkOrdinal = null;
-    if (this.pendingLinkReveal) {
-      this.pendingLinkReveal = false;
-      this.pendingScrollOrdinal = null;
-      this.pendingScrollSession = null;
-    }
     this.selectedOrdinal = ordinal;
   }
 
   clearSelection() {
-    this.clearLinkedReveal();
     this.selectedOrdinal = null;
   }
 
   clearScrollState() {
-    this.revealedLinkOrdinal = null;
-    this.pendingLinkReveal = false;
     this.selectedOrdinal = null;
     this.pendingScrollOrdinal = null;
     this.pendingScrollSession = null;
@@ -675,8 +651,6 @@ class UIStore {
   }
 
   scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
-    this.pendingLinkReveal = false;
-    this.revealedLinkOrdinal = null;
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
@@ -687,7 +661,6 @@ class UIStore {
   setFollowLatest(enabled: boolean) {
     this.followLatest = enabled;
     if (enabled) {
-      this.clearLinkedReveal();
       this.followLatestRequest += 1;
       this.selectedOrdinal = null;
       this.pendingScrollOrdinal = null;

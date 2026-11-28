@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
@@ -53,51 +53,6 @@ async function selectRelativeRange(days: number) {
   preset!.click();
   await flushEffects();
 }
-
-it("opens a message link with a hidden target", async () => {
-  stubAppDependencies();
-  vi.spyOn(sessions, "load").mockResolvedValue();
-  vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-  onTestFinished(() => ui.showAllBlocks());
-  const makeMessage = (ordinal: number, role: string): Message => ({
-    id: ordinal + 1,
-    session_id: "session-1",
-    ordinal,
-    role,
-    content: `msg ${ordinal}`,
-    content_length: 5,
-    timestamp: "2026-01-01T00:00:00Z",
-    has_thinking: false,
-    thinking_text: "",
-    has_tool_use: false,
-    model: "",
-    context_tokens: 0,
-    output_tokens: 0,
-    has_context_tokens: false,
-    has_output_tokens: false,
-    is_system: false,
-  });
-  ui.setBlockVisible("assistant", false);
-  sessions.activeSessionId = "session-1";
-  router.route = "sessions";
-  router.sessionId = "session-1";
-  component = mount(App, { target: document.body });
-  await flushEffects();
-  messages.loading = true;
-  window.history.replaceState(null, "", "/sessions/session-1?msg=1");
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  await flushEffects();
-  sessions.activeSessionId = "session-1";
-  messages.sessionId = "session-1";
-  messages.messages = [makeMessage(0, "user"), makeMessage(1, "assistant"), makeMessage(2, "user")];
-  messages.loading = false;
-  await vi.waitFor(() =>
-    expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal }).toEqual({
-      revealed: 1,
-      pending: false,
-    }),
-  );
-});
 
 function stubAppDependencies() {
   vi.stubGlobal(

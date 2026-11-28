@@ -36,7 +36,6 @@ export interface SearchMessageSource {
 
 export interface SearchView {
   selectedOrdinal: number | null;
-  revealedLinkOrdinal?: number | null;
   sortNewestFirst: boolean;
   selectOrdinal(ordinal: number): void;
   setFollowLatest(follow: boolean): void;
@@ -79,7 +78,6 @@ export class InSessionSearchStore {
     return projectSessionScope({
       messages: this.source.messages,
       transcriptMode: this.view.transcriptMode,
-      revealOrdinal: this.view.revealedLinkOrdinal,
       visibleBlocks: this.view.visibleBlocks,
       hasBlockFilters: this.view.hasBlockFilters,
       keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(

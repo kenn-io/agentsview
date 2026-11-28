@@ -21,9 +21,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
-  import MessageLinkButton from "./MessageLinkButton.svelte";
   import { Button, CopyButton } from "@kenn-io/kit-ui";
   import { ui } from "../../stores/ui.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -33,12 +33,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, PinIcon } from "../../icons.js";
+  import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CirclePlayIcon, LinkIcon, PinIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
     message: Message;
-    revealFiltered?: boolean;
     /** Skill expansion that preceded this user message, shown as a disclosure. */
     skillMessage?: Message;
     session?: Session | null;
@@ -47,7 +46,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     compact?: boolean;
     allowMutations?: boolean;
   }
-  let { message, revealFiltered = false, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   /** A skill row holds one opaque body, so read it from the outer envelope. */
   function skillSegments(msg: Message) {
     if (!isSkillInvocationMessage(msg)) return null;
@@ -55,6 +54,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return segment ? [segment] : null;
   }
   let copied = $state(false);
+  let linkCopied = $state(false);
   let segments = $derived(enrichSegments(
     skillSegments(message) ?? parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
@@ -129,7 +129,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       : m.message_content_code_collapsed();
   }
 
-  let showText = $derived((revealFiltered || ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant")));
+  let showText = $derived(ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
   let accentColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let accentForeground = $derived(isSkillInvocation ? "var(--accent-teal-foreground)" : isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isSkillInvocation ? "var(--accent-teal-ink)" : isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
@@ -174,6 +174,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     return null;
   });
   let copyTimer: ReturnType<typeof setTimeout>;
+  let linkCopyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
   let forkTimer: ReturnType<typeof setTimeout>;
   async function handleCopy() {
@@ -181,6 +182,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (ok) {
       clearTimeout(copyTimer); copied = true;
       copyTimer = setTimeout(() => { copied = false; }, 1500);
+    }
+  }
+  async function handleCopyLink() {
+    const url = window.location.origin + router.buildMessageHref(message.session_id, message.ordinal);
+    if (await copyToClipboard(url)) {
+      clearTimeout(linkCopyTimer); linkCopied = true;
+      linkCopyTimer = setTimeout(() => { linkCopied = false; }, 1500);
     }
   }
   async function handleTogglePin() {
@@ -241,7 +249,12 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
-    <MessageLinkButton sessionId={message.session_id} ordinal={message.ordinal} />
+    <button type="button" class="pin-btn" onclick={handleCopyLink}
+      aria-label={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}
+      title={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}>
+      {#if linkCopied}<CheckIcon size="14" strokeWidth="2.4" aria-hidden="true" />
+      {:else}<LinkIcon size="14" strokeWidth="1.8" aria-hidden="true" />{/if}
+    </button>
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
@@ -258,7 +271,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     </div>
   </div>
   <div class="message-body">
-    {#if attachedSkill && (revealFiltered || ui.isBlockVisible("system"))}
+    {#if attachedSkill && ui.isBlockVisible("system")}
       <div class="markdown attached-skill">
         <SkillBlock content={attachedSkill.content} name={attachedSkill.label} />
       </div>
@@ -267,7 +280,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {@const searchKey = activeSearchOrdinal === undefined || segment.type === "tool"
         ? undefined : blockKey(activeSearchOrdinal, segment.type, segmentIndex)}
       {#if segment.type === "thinking"}
-        {#if revealFiltered || ui.isBlockVisible("thinking")}
+        {#if ui.isBlockVisible("thinking")}
           <ThinkingBlock content={segment.content} {searchKey} />
         {/if}
       {:else if segment.type === "tool"}
@@ -275,7 +288,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {:else if segment.type === "code"}
         {@const codeLabel = segment.label?.trim().toLowerCase()}
         {@const language = segment.label?.trim() ?? ""}
-        {#if revealFiltered || ui.isBlockVisible("code")}
+        {#if ui.isBlockVisible("code")}
           {#if codeLabel === "mermaid" && !hasSearchQuery}
             <MermaidBlock content={segment.content} />
           {:else}
@@ -332,7 +345,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {/if}
     {/each}
     <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
-    {#if revealFiltered || ui.isBlockVisible("tool")}
+    {#if ui.isBlockVisible("tool")}
       {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
@@ -396,7 +409,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
   .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
-  .message:hover :global(.kit-copy-btn), .message:hover :global(.message-link-btn) { opacity: 1; }
+  .message:hover :global(.kit-copy-btn) { opacity: 1; }
   .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: none; border-radius: var(--radius-sm, 4px); background: transparent;

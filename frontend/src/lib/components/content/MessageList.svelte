@@ -100,7 +100,6 @@
     projectSessionScope({
       messages: messages.messages,
       transcriptMode: ui.transcriptMode,
-      revealOrdinal: ui.revealedLinkOrdinal,
       visibleBlocks: ui.visibleBlocks,
       hasBlockFilters: ui.hasBlockFilters,
       keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(
@@ -604,10 +603,11 @@
     return item.ordinals.includes(ordinal) ? ordinal : undefined;
   }
 
-  // Distance from a grouped row to the selected message within it.
-  function getMemberOffset(index: number, ordinal: number): number {
+  // Distance from the top of a display row to the card of `ordinal` inside an
+  // open empty row, so a jump lands on that card instead of the row's top.
+  function emptyMemberOffset(index: number, ordinal: number): number {
     const item = itemAt(index);
-    if (!containerRef || (item?.kind !== "empty-group" && item?.kind !== "tool-group")) return 0;
+    if (!containerRef || item?.kind !== "empty-group") return 0;
     const row = containerRef.querySelector<HTMLElement>(`.virtual-row[data-index="${index}"]`);
     const card = row?.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`);
     if (!row || !card) return 0;
@@ -675,7 +675,7 @@
     instance.getTotalSize();
     const rowOffset = instance.getOffsetForIndex(index, "start")?.[0];
     if (rowOffset === undefined) return;
-    const memberOffset = getMemberOffset(index, jump.ordinal);
+    const memberOffset = emptyMemberOffset(index, jump.ordinal);
     const offset = rowOffset + memberOffset;
     const previousOffset = untrack(() => jump.offset);
     jump.offset = offset;
@@ -696,7 +696,7 @@
     return ++lastScrollRequest;
   }
 
-  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall, reveal = false) {
+  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
     const reqId = endScrollOwnership();
     const sessionId = messages.sessionId;
     const isCurrent = () => requestIsCurrent(reqId, sessionId);
@@ -733,16 +733,6 @@
       if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
     }
 
-    if (reveal) {
-      if (!ui.pendingLinkReveal) return endScrollOwnership(reqId);
-      ui.pendingLinkReveal = false;
-      if (displayIndexOf(ordinal) < 0 && messages.messages.some((message) => message.ordinal === ordinal)) {
-        ui.revealedLinkOrdinal = ordinal;
-        await tick();
-        if (!isCurrent() || !targetHolds()) return endScrollOwnership(reqId);
-      }
-    }
-
     // A message inside a collapsed empty row has no card until the row opens.
     const emptyGroup = displayItemsAsc.find(
       (item) => item.kind === "empty-group" && item.ordinals.includes(ordinal),
@@ -764,8 +754,8 @@
     ordinalJump = { reqId, ordinal, sessionId, targetHolds, until: performance.now() + 5000, sawLoadingOlder: false };
   }
 
-  export function scrollToOrdinal(ordinal: number, call?: ScrollCall, reveal = false) {
-    void scrollToOrdinalInternal(ordinal, call, reveal);
+  export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
+    void scrollToOrdinalInternal(ordinal, call);
   }
 
   function scrollToLatestInternal() {
@@ -1086,7 +1076,6 @@
             {#if item.kind === "tool-group"}
               <ToolCallGroup
                 messages={item.messages}
-                revealedOrdinal={ui.revealedLinkOrdinal}
                 timestamp={item.timestamp}
                 searchable={true}
                 sortNewestFirst={ui.sortNewestFirst}
@@ -1098,7 +1087,6 @@
               <EmptyMessagesRow
                 messages={item.messages}
                 open={emptyGroupOpen(item)}
-                revealedOrdinal={ui.revealedLinkOrdinal}
                 onToggle={(open) => setEmptyGroupOpen(item.ordinals, open)}
               />
             {:else if item.message.is_compact_boundary}
@@ -1112,7 +1100,6 @@
             {:else}
               <MessageContent
                 message={item.message}
-                revealFiltered={item.ordinals.includes(ui.revealedLinkOrdinal ?? -1)}
                 skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
               />
