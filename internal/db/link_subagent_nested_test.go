@@ -1165,10 +1165,10 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 	})
 	insertSession(t, d, "kid", "p", func(s *Session) {
 		s.MessageCount = 1
-		s.ParentSessionID = Ptr("spawner")
-		s.RelationshipType = "subagent"
 	})
 	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
+	require.NoError(t, err)
 
 	// The spawner is parser-excluded: the delete cascades its messages
 	// and with them the only edge claiming the kid.
@@ -1502,4 +1502,47 @@ func TestQueuedSubagentCleanupRemovesWithdrawnEdge(t *testing.T) {
 	kid, err := d.GetSession(t.Context(), "kid")
 	require.NoError(t, err)
 	assert.Nil(t, kid.ParentSessionID)
+}
+
+func TestQueuedSubagentCleanupRestoresParserParent(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		spawnerPresent bool
+	}{
+		{"spawner remains", true},
+		{"spawner removed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "spawner", "p")
+			insertSession(t, d, "kid", "p", func(s *Session) {
+				s.ParentSessionID = Ptr("parser-parent")
+				s.RelationshipType = "subagent"
+			})
+			insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"spawner"})
+			require.NoError(t, err)
+			assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
+			require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
+			_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM tool_calls WHERE session_id = ?", "spawner")
+			require.NoError(t, err)
+			if !tc.spawnerPresent {
+				_, err = d.DeleteParserExcludedSessions(t.Context(), []string{"spawner"})
+				require.NoError(t, err)
+			}
+			require.NoError(t, d.RepairQueuedSubagentParents())
+			assert.Equal(t, "parser-parent", parentOfSession(t, d, "kid"))
+		})
+	}
+}
+
+func TestQueuedSubagentCleanupKeepsUnresolvedParserParent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("parser-parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"kid"}))
+	require.NoError(t, d.RepairQueuedSubagentParents())
+	assert.Equal(t, "parser-parent", parentOfSession(t, d, "kid"))
 }

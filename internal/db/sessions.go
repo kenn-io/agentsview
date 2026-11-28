@@ -2373,13 +2373,13 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 }
 
 // clearDanglingSubagentParentQuery repairs captured former children with no
-// surviving spawn edge. A linked child with no parser parent loses its
-// edge-derived parent; parser-derived parents remain unless they are dangling.
+// surviving spawn edge. Restore the parser parent, even when it has not
+// arrived yet, or clear an edge-derived parent when no parser parent exists.
 // The subagent classification survives for a later edge.
 func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
-	SET parent_session_id = NULL,
+	SET parent_session_id = NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id),
 	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
@@ -2390,8 +2390,9 @@ func clearDanglingSubagentParentQuery(ph string) string {
 		AND tc.session_id IS NOT tc.subagent_session_id
 	)
 	AND (
-		(s.spawn_linked = 1 AND COALESCE(s.parser_parent_session_id, '') = '')
-		OR NOT EXISTS (SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id)
+		(s.spawn_linked = 1 AND s.parent_session_id IS NOT NULLIF(NULLIF(s.parser_parent_session_id, ''), s.id))
+		OR (COALESCE(s.parser_parent_session_id, '') = ''
+			AND NOT EXISTS (SELECT 1 FROM sessions p WHERE p.id = s.parent_session_id))
 	)`
 }
 
