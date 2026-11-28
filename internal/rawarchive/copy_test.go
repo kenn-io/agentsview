@@ -203,3 +203,35 @@ func TestCopyExplainsUnreadableUsageCache(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyRejectsIncompatibleUsageCache(t *testing.T) {
+	for _, kind := range []string{"wrong archive", "missing schema"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			source := t.TempDir()
+			path := filepath.Join(source, "sessions.db")
+			database, err := db.OpenIsolatedContext(ctx, path)
+			require.NoError(t, err)
+			_, err = database.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+			require.NoError(t, err)
+			id, err := database.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			caches := db.UsageCacheFiles(path, id)
+			cache := caches[len(caches)-1]
+			raw, err := sql.Open("sqlite3", cache)
+			require.NoError(t, err)
+			if kind == "wrong archive" {
+				_, err = raw.ExecContext(ctx, `UPDATE usage_cache_metadata SET value='other-archive' WHERE key='source_database_id'`)
+			} else {
+				_, err = raw.ExecContext(ctx, `DROP TABLE usage_facts`)
+			}
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+			destination := filepath.Join(t.TempDir(), "copy")
+			err = Copy(ctx, CopyOptions{DataDir: source, Destination: destination, Settings: RecoverySettings{LocalMachineName: "source"}})
+			require.ErrorContains(t, err, "usage cache")
+			assert.NoDirExists(t, destination)
+		})
+	}
+}

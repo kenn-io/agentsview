@@ -323,7 +323,7 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 	for _, format := range []int{21, 23} {
 		t.Run(strconv.Itoa(format), func(t *testing.T) {
-			_, cachePath, _ := copyUsageFixture(t, format)
+			_, cachePath, id := copyUsageFixture(t, format)
 			raw := openRawUsageCacheTestDB(t, cachePath)
 			var facts int
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
@@ -332,7 +332,7 @@ func TestClearCopiedUsageRollupsKeepsUpgradeableFacts(t *testing.T) {
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&zones))
 			require.Positive(t, zones)
 			require.NoError(t, raw.Close())
-			require.NoError(t, ClearCopiedUsageRollups(t.Context(), cachePath))
+			require.NoError(t, ClearCopiedUsageRollups(t.Context(), cachePath, id))
 			raw = openRawUsageCacheTestDB(t, cachePath)
 			var kept int
 			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&kept))

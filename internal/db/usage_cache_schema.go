@@ -510,7 +510,14 @@ func UsageCacheFiles(archivePath, databaseID string) []string {
 
 // ClearCopiedUsageRollups drops a copied cache's rollups, which hold host project
 // labels, so the copy rebuilds them from its facts under the aliased labels.
-func ClearCopiedUsageRollups(ctx context.Context, path string) (retErr error) {
+func ClearCopiedUsageRollups(ctx context.Context, path, databaseID string) (retErr error) {
+	probe := probeUsageCache(ctx, path)
+	if probe.Err != nil {
+		return probe.Err
+	}
+	if !probe.Recognized || probe.SourceDatabaseID != databaseID || probe.FormatVersion < usageCacheUpgradeFrom || probe.FormatVersion > usageCacheFormatVersion || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion || filepath.Base(path) != filepath.Base(usageCacheGenerationPath(path, probe.FormatVersion, databaseID)) || (probe.FormatVersion == usageCacheFormatVersion && !probe.Compatible) {
+		return errors.New("usage cache is incompatible with the archive")
+	}
 	database, err := openUsageCacheDatabase(ctx, path)
 	if err != nil {
 		return err

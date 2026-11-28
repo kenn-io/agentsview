@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/kit/atomicfile"
@@ -17,6 +18,7 @@ import (
 type CopyOptions struct {
 	DataDir, Destination string
 	Settings             RecoverySettings
+	CustomModelPricing   map[string]config.CustomModelRate
 }
 
 // Copy creates a detached copy while the caller holds the source writer lock.
@@ -94,7 +96,7 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 			err = rawcapture.SnapshotSQLite(ctx, cache, target, info)
 		}
 		if err == nil {
-			err = db.ClearCopiedUsageRollups(ctx, target)
+			err = db.ClearCopiedUsageRollups(ctx, target, databaseID)
 		}
 		if err != nil {
 			return fmt.Errorf("copying usage cache %s: %w; check the cache or move it aside and retry", cache, err)
@@ -103,6 +105,26 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 	}
 	if err := writeRecoveryConfig(stage, options.Settings); err != nil {
 		return err
+	}
+	if len(options.CustomModelPricing) > 0 {
+		prices := make(map[string]map[string]any, len(options.CustomModelPricing))
+		for model, rate := range options.CustomModelPricing {
+			if rate.PriceAs != "" {
+				prices[model] = map[string]any{"price_as": rate.PriceAs}
+			} else {
+				prices[model] = map[string]any{
+					"input_microdollars_per_mtok":             rate.InputMicrodollarsPerMTok,
+					"output_microdollars_per_mtok":            rate.OutputMicrodollarsPerMTok,
+					"cache_creation_microdollars_per_mtok":    rate.CacheCreationMicrodollarsPerMTok,
+					"cache_creation_1h_microdollars_per_mtok": rate.CacheCreation1hMicrodollarsPerMTok,
+					"cache_read_microdollars_per_mtok":        rate.CacheReadMicrodollarsPerMTok,
+				}
+			}
+		}
+		cfg := config.Config{DataDir: stage}
+		if err := cfg.SaveSettings(map[string]any{"custom_model_pricing": prices}); err != nil {
+			return err
+		}
 	}
 	return atomicfile.RenameNoReplace(stage, destination)
 }

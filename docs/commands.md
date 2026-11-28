@@ -291,7 +291,7 @@ to a new directory outside the source:
 AGENTSVIEW_DATA_DIR=/source/archive agentsview archive copy /new/archive
 ```
 
-The copy keeps sessions, messages, stars, pins, trash, assets, and
+The copy keeps sessions, messages, stars, pins, trash, assets, custom model prices, and
 the newest supported usage cache. Its new auth token is in `/new/archive/config.toml` as `auth_token`. It clears source paths, folder and worktree identity,
 credentials, and replica connections. Machine names and labels remain. Project
 labels containing paths become stable aliases. Archive-only mode disables source
