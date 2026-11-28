@@ -603,3 +603,33 @@ func TestOpenCodeV2ToolFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenCodeV2LoneSurrogate(t *testing.T) {
+	path, seed, writer := newTestDB(t)
+	seed.AddProject("project-a", "/workspace/project-a")
+	seed.AddSession("ses_surrogate", "project-a", "", "Lone Surrogate", 1700000000000, 1700000003000)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+	require.NoError(t, err)
+
+	assistantData := `{"role":"assistant","model":{"id":"claude-sonnet"},"content":[{"type":"tool","id":"call_1","name":"read","state":{"status":"completed","input":{"path":"a.txt"},"content":[{"type":"text","text":"before \ud835\n\nTi after"}]}}]}`
+	userData := `{"text":"prompt \ud800 end"}`
+	shellData := `{"command":"echo \udfff","output":"ok","callID":"call_sh","time":{"created":1700000002000,"completed":1700000002500}}`
+
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
+		('msg_u', 'ses_surrogate', 'user', 1, 1700000000000, 1700000000000, ?),
+		('msg_a', 'ses_surrogate', 'assistant', 2, 1700000001000, 1700000001000, ?),
+		('msg_s', 'ses_surrogate', 'shell', 3, 1700000002000, 1700000003000, ?)`,
+		userData, assistantData, shellData)
+	require.NoError(t, err)
+
+	_, messages, err := parseOpenCodeDBSession(path, "ses_surrogate", "host-a")
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+
+	assert.Contains(t, messages[0].Content, "prompt \ufffd end")
+	require.Len(t, messages[1].ToolCalls, 1)
+	require.Len(t, messages[1].ToolCalls[0].ResultEvents, 1)
+	assert.Contains(t, messages[1].ToolCalls[0].ResultEvents[0].Content, "before \ufffd\n\nTi after")
+	require.Len(t, messages[2].ToolCalls, 1)
+	assert.Contains(t, messages[2].ToolCalls[0].InputJSON, "echo \ufffd")
+}
