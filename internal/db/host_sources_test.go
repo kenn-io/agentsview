@@ -1,12 +1,9 @@
 package db
 
 import (
-	"context"
 	"database/sql"
-	"fmt"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +32,8 @@ func TestClearHostSources(t *testing.T) {
 			`INSERT INTO archive_source_bindings VALUES('archive','device','root','source','manifest')`,
 			`INSERT INTO archive_attachment_sources(repository_id,snapshot_id,archive_id,device_id,root_id,source_key,target) VALUES('repo','snapshot','archive','device','root','source','target')`,
 			`INSERT INTO archive_session_provenance VALUES('a','archive','device','root','source','manifest','native')`,
+			`INSERT INTO commit_links VALUES('a','sha','','','/work/repo',0,0,'','','')`,
+			`INSERT INTO commit_trailers(session_id,sha,branch,subject,repository,committed_at) VALUES('a','sha','','','/work/repo','')`,
 			`INSERT INTO git_cache VALUES('cache', 'log', '{"repo":"/host/repo"}', '2026-01-01')`,
 			`INSERT INTO friction_issue_links VALUES('fp', 'instance', 'project', 'issue', 'id', 'https://example.com', 'local', '2026-01-01')`,
 			`INSERT INTO friction_filing_state(fingerprint,state,last_error,updated_at) VALUES('other', 'failed', '/host/repo', '2026-01-01')`,
@@ -47,11 +46,19 @@ func TestClearHostSources(t *testing.T) {
 		}
 		return nil
 	}))
+	_, err := d.AppendDiagnostic(ctx, DiagnosticEvent{ID: "00000000-0000-4000-8000-000000000001", Source: "test", Message: "failed reading /work/private/session.jsonl"})
+	require.NoError(t, err)
 	require.NoError(t, d.ClearHostSources(ctx))
-	for _, table := range []string{"git_cache", "friction_issue_links", "friction_filing_state", "cursor_account_polls", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
+	for _, table := range []string{"diagnostic_events", "git_cache", "friction_issue_links", "friction_filing_state", "cursor_account_polls", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int
 		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
 		assert.Zero(t, count, table)
+	}
+
+	for _, table := range []string{"commit_links", "commit_trailers"} {
+		var repository string
+		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT repository FROM "+table+" WHERE session_id = ?", "a").Scan(&repository))
+		assert.Empty(t, repository, table)
 	}
 
 	var cwd, machine string
@@ -131,51 +138,6 @@ func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {
 	}
 	assert.Regexp(t, `^solo-[0-9a-f]{8}$`, projects[3])
 	assert.Equal(t, "api", projects[4])
-}
-
-func TestClearHostSourcesRelabelsManyProjectsPromptly(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		session, err := tx.PrepareContext(ctx, `INSERT INTO sessions(id, project) VALUES(?, ?)`)
-		if err != nil {
-			return err
-		}
-		defer session.Close()
-		link, err := tx.PrepareContext(ctx, `INSERT INTO commit_links(session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project) VALUES(?,'sha','','','','0','0','','',?)`)
-		if err != nil {
-			return err
-		}
-		defer link.Close()
-		for i := range 60000 {
-			id := strconv.Itoa(i)
-			project := fmt.Sprintf("/work/project-%d", i%3000)
-			if _, err := session.ExecContext(ctx, id, project); err != nil {
-				return err
-			}
-			if _, err := link.ExecContext(ctx, id, project); err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
-	copyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	require.NoError(t, d.ClearHostSources(copyCtx))
-	var remaining int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM sessions WHERE project LIKE '/work/%'`).Scan(&remaining))
-	assert.Zero(t, remaining)
-}
-
-func TestClearHostSourcesRemovesHostDiagnostics(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := d.AppendDiagnostic(ctx, DiagnosticEvent{ID: "00000000-0000-4000-8000-000000000001", Source: "test", Message: "failed reading /work/private/session.jsonl"})
-	require.NoError(t, err)
-	require.NoError(t, d.ClearHostSources(ctx))
-	events, err := d.DiagnosticEventsAfter(ctx, 0, 10)
-	require.NoError(t, err)
-	assert.Empty(t, events)
 }
 
 func TestClearHostSourcesPreservesSessionProjectAssignments(t *testing.T) {

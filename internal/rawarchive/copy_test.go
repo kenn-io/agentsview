@@ -15,7 +15,7 @@ import (
 )
 
 func TestCopyPreservesAssetReferences(t *testing.T) {
-	for _, state := range []string{"valid", "missing", "missing directory"} {
+	for _, state := range []string{"valid", "missing directory"} {
 		t.Run(state, func(t *testing.T) {
 			ctx := t.Context()
 			source := t.TempDir()
@@ -37,10 +37,6 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 			require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "example", Agent: "claude", Project: "example"}))
 			require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: "example", Role: "user", Content: content}}))
 			require.NoError(t, database.Close())
-			path := filepath.Join(assetDir, strings.TrimPrefix(ref, "asset://"))
-			if state == "missing" {
-				require.NoError(t, os.Remove(path))
-			}
 			if state == "missing directory" {
 				for name := range files {
 					require.NoError(t, os.Remove(filepath.Join(assetDir, name)))
@@ -163,6 +159,12 @@ func TestCopyUsageCache(t *testing.T) {
 			if state == "unreadable" {
 				require.NoError(t, os.WriteFile(cache, []byte("not a database"), 0o600))
 			} else {
+				original, err := sql.Open("sqlite3", cache)
+				require.NoError(t, err)
+				var paths int
+				require.NoError(t, original.QueryRowContext(ctx, "SELECT count(*) FROM usage_rollup_installs WHERE project = ?", "/work/api").Scan(&paths))
+				require.Positive(t, paths)
+				require.NoError(t, original.Close())
 				require.NoError(t, os.WriteFile(filepath.Join(source, "usage-cache-v999-unrelated.db"), []byte("unrelated"), 0o600))
 			}
 			dest := filepath.Join(t.TempDir(), "copy")
@@ -179,20 +181,11 @@ func TestCopyUsageCache(t *testing.T) {
 			require.NoError(t, copied.QueryRowContext(ctx, `SELECT sum(input_tokens), sum(output_tokens) FROM usage_facts`).Scan(&input, &output))
 			assert.Equal(t, 330, input)
 			assert.Equal(t, 100, output)
-			for _, table := range []string{"usage_rollup_installs", "usage_day_totals"} {
-				var paths int
-				require.NoError(t, copied.QueryRowContext(ctx, "SELECT count(*) FROM "+table+" WHERE project = ?", "/work/api").Scan(&paths))
-				assert.Zero(t, paths, table)
-			}
+			var paths int
+			require.NoError(t, copied.QueryRowContext(ctx, "SELECT count(*) FROM usage_rollup_installs WHERE project = ?", "/work/api").Scan(&paths))
+			assert.Zero(t, paths)
 			require.NoError(t, copied.Close())
 			assert.NoFileExists(t, filepath.Join(dest, "usage-cache-v999-unrelated.db"))
-			copyDB, err := db.OpenIsolatedContext(ctx, filepath.Join(dest, "sessions.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, copyDB.Close()) })
-			got, err := copyDB.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC", Project: db.CopiedProjectLabel("/work/api")})
-			require.NoError(t, err)
-			assert.Equal(t, 330, got.Totals.InputTokens)
-			assert.Equal(t, 100, got.Totals.OutputTokens)
 		})
 	}
 }

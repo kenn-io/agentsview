@@ -30,6 +30,7 @@ func TestArchiveCopyReportsDestination(t *testing.T) {
 	output, err := executeCommand(newRootCommand(), "archive", "copy", destination)
 	require.NoError(t, err)
 	assert.Equal(t, destination+"\n", output)
+	assert.FileExists(t, filepath.Join(destination, "sessions.db"))
 }
 
 func TestArchiveExtractCaptureAfterRestore(t *testing.T) {
