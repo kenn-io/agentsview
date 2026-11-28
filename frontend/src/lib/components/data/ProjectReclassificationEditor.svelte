@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip, TextInput } from "@kenn-io/kit-ui";
+  import { Button, Chip, overlayScrollbars, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import {
     DataService,
@@ -303,7 +303,7 @@
   }
 </script>
 
-<div class="editor">
+<div class="editor" {@attach overlayScrollbars({ axis: "y" })}>
   <section class="suggestions">
     <Button
       size="sm"
@@ -330,7 +330,7 @@
       {:else if candidates.length === 0}
         <p class="muted">{m.data_reclassify_no_candidates()}</p>
       {:else}
-        <div class="folder-list">
+        <div class="folder-list" {@attach overlayScrollbars({ axis: "y" })}>
           {#each candidates as candidate (candidate.id)}
             <div class="folder-row" class:selected={candidate.id === selectedCandidateId}>
               <Button
@@ -559,10 +559,9 @@
   .folder-row {
     min-height: 72px;
     padding: 4px;
-    border-bottom: 1px solid var(--border-muted);
   }
-  .folder-row:last-child {
-    border-bottom: 0;
+  .folder-row + .folder-row {
+    border-top: 1px solid var(--border-muted);
   }
   .folder-row.selected { background: var(--bg-inset); }
   .folder-row :global(.folder-choice) {

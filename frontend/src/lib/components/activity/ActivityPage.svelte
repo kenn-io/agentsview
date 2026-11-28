@@ -19,7 +19,7 @@
   } from "../../stores/yokedDates.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import FilterChip from "../shared/FilterChip.svelte";
-  import { Card, EmptyState, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Card, EmptyState, overlayScrollbars, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import LoadError from "../shared/LoadError.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -494,7 +494,7 @@
     {/if}
   </div>
 
-  <div class="activity-content">
+  <div class="activity-content" {@attach overlayScrollbars({ axis: "y" })}>
     <!-- Report-first ordering: once a report is loaded it stays mounted through
          every background refresh, so a periodic/SSE-driven reload updates props
          in place instead of swapping in the full-screen "Loading" state and

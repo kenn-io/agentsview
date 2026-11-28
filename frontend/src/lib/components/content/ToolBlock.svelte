@@ -18,7 +18,7 @@
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
-  import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
+  import { CopyButton, overlayScrollbars, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import {
     displayFormattedToolResult,
@@ -246,14 +246,14 @@
       </div>
     {/if}
     {#if taskPrompt}
-      <pre class="tool-content" {@attach searchBlock(inputKey)}>{taskPrompt}</pre>
+      <pre class="tool-content" {@attach searchBlock(inputKey)} {@attach overlayScrollbars({ axis: "x" })}>{taskPrompt}</pre>
     {:else if fallbackContent && isDiff}
-      <pre class="diff-view" class:after-strip={!!metaTags} {@attach searchBlock(inputKey)}>{#each bodyDiffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < bodyDiffLines.length - 1 ? "\n" : ""}{/each}</pre>
+      <pre class="diff-view" class:after-strip={!!metaTags} {@attach searchBlock(inputKey)} {@attach overlayScrollbars({ axis: "both" })}>{#each bodyDiffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < bodyDiffLines.length - 1 ? "\n" : ""}{/each}</pre>
     {:else if displayContent.text}
       {#if isCommand}
-        <pre class="tool-content tool-command" {@attach searchBlock(inputKey)}><code>{#if commandHtml !== null}{@html commandHtml}{:else}{displayContent.text}{/if}</code></pre>
+        <pre class="tool-content tool-command" {@attach searchBlock(inputKey)} {@attach overlayScrollbars({ axis: "x" })}><code>{#if commandHtml !== null}{@html commandHtml}{:else}{displayContent.text}{/if}</code></pre>
       {:else}
-        <pre class="tool-content" {@attach searchBlock(inputKey)}>{displayContent.text}</pre>
+        <pre class="tool-content" {@attach searchBlock(inputKey)} {@attach overlayScrollbars({ axis: "x" })}>{displayContent.text}</pre>
       {/if}
       {#if displayContent.isLong}
         <button class="show-more-btn" onclick={(e) => {
@@ -290,12 +290,12 @@
       {#if !outputCollapsed}
         {#if outputMode === "formatted" && !sourceTextForSearch}
           <div class="tool-content output-content formatted-output"
-            {@attach searchBlock(outputKey)} use:highlightCodeFences={{ content: formattedOutputContent }}
+            {@attach searchBlock(outputKey)} {@attach overlayScrollbars({ axis: "both" })} use:highlightCodeFences={{ content: formattedOutputContent }}
             use:loadAssetImages={formattedOutputContent}>
             {@html renderMarkdown(formattedOutputContent, { renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted })}
           </div>
         {:else}
-          <pre class="tool-content output-content" {@attach searchBlock(outputKey)}>{outputContent}</pre>
+          <pre class="tool-content output-content" {@attach searchBlock(outputKey)} {@attach overlayScrollbars({ axis: "both" })}>{outputContent}</pre>
         {/if}
       {/if}
     {/if}
@@ -322,7 +322,7 @@
                 <span class="meta-tag"><span class="meta-label">{m.tool_block_source_label()}</span>{event.source}</span>
                 {#if event.agent_id}<span class="meta-tag"><span class="meta-label">{m.tool_block_agent_label()}</span>{event.agent_id}</span>{/if}
               </div>
-              <pre class="tool-content output-content history-content" {@attach searchBlock(historyKeys[eventIndex])}>{event.content}</pre>
+              <pre class="tool-content output-content history-content" {@attach searchBlock(historyKeys[eventIndex])} {@attach overlayScrollbars({ axis: "both" })}>{event.content}</pre>
               {#if toolCall}<DocbankMatches {sessionId} {ordinal} toolUseId={toolCall.tool_use_id ?? ""} callIndex={toolCall.call_index ?? 0} eventIndex={event.event_index} />{/if}
             </div>
           {/each}

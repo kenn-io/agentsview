@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
   import { onDestroy, untrack } from "svelte";
-  import { Button, Tooltip } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars, Tooltip } from "@kenn-io/kit-ui";
   import { AnalyticsService, type DbToolUsageAnalysis as ToolUsageAnalysis, type DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { agentLabel } from "../../utils/agents.js";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -250,7 +250,7 @@
           <h4 class="section-title">
             {m.analytics_tool_usage_top_tools()}
           </h4>
-          <div class="tool-table">
+          <div class="tool-table" {@attach overlayScrollbars({ axis: "x" })}>
             <div class="tool-row tool-labels">
               <span></span><span>{m.analytics_tool_name()}</span><span>{m.analytics_tool_coverage()}</span><span>{m.analytics_tool_calls()}</span><span>{m.analytics_tool_sessions()}</span><span>{m.analytics_tool_share()}</span>
               {#each rateColumns as column}<span>{column.label}</span>{/each}

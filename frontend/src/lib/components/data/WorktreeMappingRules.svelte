@@ -2,6 +2,7 @@
   import {
     Button,
     Modal,
+    overlayScrollbars,
     SegmentedControl,
     TableHeaderCell,
     TableSort,
@@ -22,6 +23,8 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { LockIcon } from "../../icons.js";
   import StateNotice from "../shared/StateNotice.svelte";
+
+  let theadEl: HTMLTableSectionElement | undefined = $state();
 
   interface Props {
     readOnly?: boolean;
@@ -352,7 +355,7 @@
   />
 {/snippet}
 
-<section class="rules-view">
+<section class="rules-view" {@attach overlayScrollbars({ axis: "y" })}>
   <div class="heading-row">
     <h3>{m.worktree_title()}</h3>
     <p class="description">{m.worktree_description()}</p>
@@ -399,9 +402,9 @@
       {:else if mappings.length === 0}
         <div class="empty">{m.worktree_no_mappings()}</div>
       {:else}
-        <div class="table-scroll">
+        <div class="table-scroll" {@attach overlayScrollbars({ axis: "both", insetTop: theadEl })}>
           <table class="table">
-            <thead>
+            <thead bind:this={theadEl}>
               <tr>
                 <TableHeaderCell label={m.data_rules_col_prefix()} {sort} column="prefix" />
                 <TableHeaderCell label={m.data_rules_col_project()} {sort} column="project" />

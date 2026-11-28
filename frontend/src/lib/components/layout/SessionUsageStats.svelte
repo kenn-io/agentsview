@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
+  import { overlayScrollbars, Table, TableHeaderCell } from "@kenn-io/kit-ui";
   import { TriangleAlertIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { router } from "../../stores/router.svelte.js";
@@ -50,7 +50,11 @@
       })}
     </summary>
     {#if usage.breakdownOpen}
-      <div class="usage-breakdown-menu" {@attach keepInsidePane}>
+      <div
+        class="usage-breakdown-menu"
+        {@attach keepInsidePane}
+        {@attach overlayScrollbars({ axis: "both" })}
+      >
         {#if usage.breakdownLoading}
           <div class="usage-breakdown-status">
             {m.session_breadcrumb_usage_breakdown_loading()}
@@ -124,7 +128,11 @@
     {#if usage.planUsageOpen}
       {@const rootId = usage.planUsageDisplay.countedUnder}
       {@const showFiveHour = usage.planUsageDisplay.groups.some((g) => g.fiveHour)}
-      <div class="usage-breakdown-menu plan-usage-menu" {@attach keepInsidePane}>
+      <div
+        class="usage-breakdown-menu plan-usage-menu"
+        {@attach keepInsidePane}
+        {@attach overlayScrollbars({ axis: "both" })}
+      >
         {#if rootId}
           <a
             class="plan-usage-headline plan-usage-root"

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Disclosure } from "@kenn-io/kit-ui";
+  import { Disclosure, overlayScrollbars } from "@kenn-io/kit-ui";
   import type { DbMessage as Message } from "../../api/generated/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { formatTimestamp } from "../../utils/format.js";
@@ -45,7 +45,7 @@
         <span class="boundary-summary">{preview}</span>
       {/snippet}
       {#snippet meta()}{m.compact_boundary_show_full_summary()}{/snippet}
-      <pre class="boundary-full">{content}</pre>
+      <pre class="boundary-full" {@attach overlayScrollbars({ axis: "x" })}>{content}</pre>
     </Disclosure>
   {:else}
     <div class="boundary-preview">{preview}</div>

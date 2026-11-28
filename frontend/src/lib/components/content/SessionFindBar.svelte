@@ -18,7 +18,9 @@
   // retains its visible counter; its own live region is silenced here.
   function ownAnnouncements(node: HTMLElement) {
     const silenceCounter = () => {
-      node.querySelector(".kit-find-bar__counter")?.setAttribute("aria-live", "off");
+      for (const el of node.querySelectorAll(".kit-find-bar [aria-live]")) {
+        el.setAttribute("aria-live", "off");
+      }
     };
     silenceCounter();
     const observer = new MutationObserver(silenceCounter);

@@ -6,7 +6,7 @@
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
-  import { Button, TableHeaderCell } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars, TableHeaderCell } from "@kenn-io/kit-ui";
   import { formatMoney } from "../../money.js";
   import type { ActivitySessionSort } from "../../api/activity-report.js";
 
@@ -44,7 +44,9 @@
   // any interface zoom or text size.
   const LOAD_AHEAD_ROWS = 15;
 
+  let frameEl: HTMLDivElement | undefined = $state();
   let scrollEl: HTMLDivElement | undefined = $state();
+  let theadEl: HTMLTableSectionElement | undefined = $state();
 
   // by_session is typed `any[] | null` by the codegen; cast to the
   // generated element model for field-level type safety.
@@ -166,19 +168,24 @@
   <!-- Same thin query bar as the Analytics and Quality pages: it marks a load
        without taking a row or moving the table. It stays hidden for the first
        half second, so a fast page just continues the scroll. -->
-  <div class="table-frame" aria-busy={loading}>
+  <div class="table-frame" bind:this={frameEl} aria-busy={loading}>
     {#if loading}
       <div class="query-progress" aria-hidden="true"></div>
     {/if}
     {#if rows.length > 0}
-      <div class="table-scroll" bind:this={scrollEl} onscroll={loadMoreIfNearEnd}>
+      <div
+        class="table-scroll"
+        bind:this={scrollEl}
+        onscroll={loadMoreIfNearEnd}
+        {@attach overlayScrollbars({ axis: "both", host: frameEl, insetTop: theadEl })}
+      >
         <table class="table">
           <colgroup>
             {#each sortColumns as col (col.key)}
               <col style:width={col.width} />
             {/each}
           </colgroup>
-          <thead>
+          <thead bind:this={theadEl}>
             <tr>
               {#each sortColumns as col}
                 <TableHeaderCell

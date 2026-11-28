@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { overlayScrollbars } from "@kenn-io/kit-ui";
   import { searchBlock } from "../../search/session-block.svelte.js";
   import { searchCollapsed } from "../../search/component-state.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -55,6 +56,7 @@
       class="skill-content markdown"
       use:highlightCodeFences={{ content }}
       {@attach searchBlock(searchKey)}
+      {@attach overlayScrollbars({ axis: "x" })}
       use:loadAssetImages={content}
     >
       {@html renderMarkdown(content, {

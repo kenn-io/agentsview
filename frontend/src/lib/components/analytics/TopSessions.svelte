@@ -6,7 +6,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-  import { StatusDot } from "@kenn-io/kit-ui";
+  import { overlayScrollbars, StatusDot } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { m } from "../../i18n/index.js";
 
@@ -138,7 +138,7 @@
     onRetry={() => analytics.fetchTopSessions()}
   />
   {#if analytics.topSessions && analytics.topSessions.sessions.length > 0}
-    <div class="session-list">
+    <div class="session-list" {@attach overlayScrollbars({ axis: "y" })}>
       {#each analytics.topSessions.sessions as session, i}
         {@const label = sessionLabel(session)}
         {@const status = getSessionStatus(session)}

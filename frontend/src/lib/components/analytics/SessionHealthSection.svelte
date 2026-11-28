@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
-  import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
+  import { Card, overlayScrollbars, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -164,7 +164,7 @@
       <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_agent()}</div>
-          <div class="table-scroll">
+          <div class="table-scroll" {@attach overlayScrollbars({ axis: "both" })}>
             <table>
             <thead>
               <tr>
@@ -197,7 +197,7 @@
       <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_project()}</div>
-          <div class="table-scroll">
+          <div class="table-scroll" {@attach overlayScrollbars({ axis: "both" })}>
             <table>
             <thead>
               <tr>

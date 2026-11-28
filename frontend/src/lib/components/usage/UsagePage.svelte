@@ -1,6 +1,6 @@
 <script lang="ts">
   import { modelPickerItems } from "../../utils/model-groups.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import { Card, overlayScrollbars } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { usage, type UsageMode } from "../../stores/usage.svelte.js";
   import {
@@ -609,6 +609,7 @@
     class="usage-content"
     class:querying={usage.isQuerying}
     aria-busy={usage.isQuerying}
+    {@attach overlayScrollbars({ axis: "y" })}
   >
     {#if usage.isQuerying}
       <div class="query-progress" aria-hidden="true"></div>
@@ -638,10 +639,14 @@
 
     <div class="bottom-grid">
       <Card level="default" padding="none" class="chart-panel bounded">
-        <TopSessionsTable />
+        <div class="bounded-scroll" {@attach overlayScrollbars({ axis: "both" })}>
+          <TopSessionsTable />
+        </div>
       </Card>
       <Card level="default" padding="none" class="chart-panel bounded">
-        <CacheEfficiencyPanel />
+        <div class="bounded-scroll" {@attach overlayScrollbars({ axis: "both" })}>
+          <CacheEfficiencyPanel />
+        </div>
       </Card>
     </div>
 
@@ -760,7 +765,24 @@
   }
 
   .usage-content :global(.chart-panel.bounded) {
+    display: flex;
+    flex-direction: column;
     max-height: min(420px, 48vh);
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .usage-content :global(.chart-panel.bounded > .kit-card__body) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .bounded-scroll {
+    flex: 1;
+    min-height: 0;
+    padding: 12px;
     overflow: auto;
   }
 

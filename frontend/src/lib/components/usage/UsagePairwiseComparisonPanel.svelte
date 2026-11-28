@@ -1,6 +1,6 @@
 <script lang="ts">
   import LoadError from "../shared/LoadError.svelte";
-  import { Card, Table, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Card, overlayScrollbars, Table, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import { formatCount } from "../../utils/format.js";
@@ -333,7 +333,7 @@
       {m.usage_pairwise_not_enough_data()}
     </Card>
   {:else if rows.length > 0}
-    <div class="table-wrap">
+    <div class="table-wrap" {@attach overlayScrollbars({ axis: "x" })}>
       <Table bare unsorted>
         <thead>
           <tr>

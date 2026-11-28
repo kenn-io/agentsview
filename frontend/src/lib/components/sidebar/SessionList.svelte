@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { overlayScrollbars } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -36,6 +37,7 @@
   } from "./session-list-utils.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
+  let listFrameRef: HTMLDivElement | undefined = $state(undefined);
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
   let scrollRaf: number | null = $state(null);
@@ -527,10 +529,12 @@
   </div>
 {/if}
 
+<div class="session-list-frame" bind:this={listFrameRef}>
 <div
   class="session-list-scroll"
   bind:this={containerRef}
   onscroll={handleScroll}
+  {@attach overlayScrollbars({ axis: "y", host: listFrameRef })}
 >
   <div
     style="height: {totalSize}px; width: 100%; position: relative;"
@@ -646,6 +650,7 @@
       </div>
     {/each}
   </div>
+</div>
 </div>
 
 <style>
@@ -794,8 +799,17 @@
     color: var(--accent-red);
   }
 
+  .session-list-frame {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .session-list-scroll {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
   }

@@ -25,7 +25,7 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
+  import { Button, CopyButton, overlayScrollbars, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService, type VectorBuildStatus } from "../../api/generated/index.js";
   import { ApiError, isAbortError } from "../../api/runtime.js";
@@ -95,6 +95,8 @@ enabled = true`;
   let disposed = false;
   let copiedConfig = $state(false);
   let copiedCommand = $state(false);
+  let configSnippetEl = $state<HTMLDivElement>();
+  let commandSnippetEl = $state<HTMLDivElement>();
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(() => {
@@ -228,7 +230,7 @@ enabled = true`;
   {:else if phase === "unconfigured" && !setupStatus?.setup}
     <strong>{m.command_palette_semantic_setup_title()}</strong>
     <span class="setup-text">{m.command_palette_semantic_setup_config_step()}</span>
-    <div class="setup-snippet">
+    <div class="setup-snippet" bind:this={configSnippetEl}>
       <CopyButton
         class="setup-copy"
         copied={copiedConfig}
@@ -238,10 +240,10 @@ enabled = true`;
         copiedTitle={m.command_palette_semantic_copied()}
         onclick={() => void copy(CONFIG_SNIPPET, "config")}
       />
-      <pre>{CONFIG_SNIPPET}</pre>
+      <pre {@attach overlayScrollbars({ axis: "x", host: configSnippetEl })}>{CONFIG_SNIPPET}</pre>
     </div>
     <span class="setup-text">{m.command_palette_semantic_setup_build_step()}</span>
-    <div class="setup-snippet">
+    <div class="setup-snippet" bind:this={commandSnippetEl}>
       <CopyButton
         class="setup-copy"
         copied={copiedCommand}
@@ -251,7 +253,7 @@ enabled = true`;
         copiedTitle={m.command_palette_semantic_copied()}
         onclick={() => void copy(BUILD_COMMAND, "command")}
       />
-      <pre>{BUILD_COMMAND}</pre>
+      <pre {@attach overlayScrollbars({ axis: "x", host: commandSnippetEl })}>{BUILD_COMMAND}</pre>
     </div>
     <span class="setup-text">
       {m.command_palette_semantic_setup_local()}

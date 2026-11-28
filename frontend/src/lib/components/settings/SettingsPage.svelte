@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     Button,
+    overlayScrollbars,
     SearchInput,
     SettingsLayout,
     SettingsSection,
@@ -115,7 +116,7 @@
   bind:this={pageElement}
 >
   {#if settings.loading || !settings.loaded || settings.needsAuth || settings.error}
-    <div class="settings-standalone">
+    <div class="settings-standalone" {@attach overlayScrollbars({ axis: "y" })}>
       <div class="settings-header">
         <h2 class="settings-title">{m.settings_title()}</h2>
       </div>
@@ -292,12 +293,6 @@
 
   .settings-panel[hidden] {
     display: none;
-  }
-
-  /* Reserve the scrollbar's width up front so the centered panel does not
-     shift when switching to a panel tall enough to scroll. */
-  .settings-page :global(.kit-settings__scroll) {
-    scrollbar-gutter: stable;
   }
 
   /* Local overrides of kit-ui SettingsLayout: readable nav summaries and

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip } from "@kenn-io/kit-ui";
+  import { Button, Chip, overlayScrollbars } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import {
     DataService,
@@ -294,13 +294,15 @@
     }
   }
 
+  let editorEl: HTMLDivElement | undefined = $state();
+
   function cancel() {
     targetProject = "";
     clearPreview();
   }
 </script>
 
-<div class="editor">
+<div class="editor" bind:this={editorEl}>
   <section class="composer">
     <div class="composer-heading">
       <div>
@@ -392,7 +394,7 @@
       {/if}
     {/if}
   </section>
-  <section class="suggestions">
+  <section class="suggestions" {@attach overlayScrollbars({ axis: "y", host: editorEl })}>
     <div class="section-heading">
       <div>
         <h4>{m.data_batch_folders_heading()}</h4>

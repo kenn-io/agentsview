@@ -3,7 +3,7 @@
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { Button, EmptyState } from "@kenn-io/kit-ui";
+  import { Button, EmptyState, overlayScrollbars } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
@@ -53,29 +53,7 @@
   onDestroy(() => fileReferences.reset());
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
-
-  // Classic scrollbars take width from the transcript, which moves its
-  // centered reading column left by half their width. Publish that width
-  // on the content column so the session header above can center its
-  // title and stats on the same column.
-  $effect(() => {
-    const scroller = containerRef;
-    // SessionFindView wraps the scroller; its parent holds the header too.
-    const column = scroller?.closest(".find-viewport")?.parentElement;
-    if (!scroller || !column) return;
-    const publish = () => {
-      const width = scroller.offsetWidth - scroller.clientWidth;
-      column.style.setProperty("--transcript-scrollbar", `${width}px`);
-    };
-    publish();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(publish);
-    observer.observe(scroller);
-    return () => {
-      observer.disconnect();
-      column.style.removeProperty("--transcript-scrollbar");
-    };
-  });
+  let findViewportRef: HTMLDivElement | undefined = $state(undefined);
   let containerScrollTop = $state(0);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
@@ -1036,6 +1014,7 @@
     />
   {/if}
   <SessionFindView
+    bind:viewport={findViewportRef}
     items={displayItemsAsc}
     totalSize={virtualizer.instance?.getTotalSize() ?? 0}
     newestFirst={ui.sortNewestFirst}
@@ -1049,6 +1028,7 @@
     data-loaded={!messages.loading}
     onscroll={handleScroll}
     use:manualScrollIntent
+    {@attach overlayScrollbars({ axis: "y", host: findViewportRef })}
   >
     <div
       style="height: {virtualizer.instance?.getTotalSize() ?? 0}px; width: 100%; position: relative;"

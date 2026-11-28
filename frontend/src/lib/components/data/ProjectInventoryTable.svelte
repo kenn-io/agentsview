@@ -2,7 +2,7 @@
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatCount } from "../../utils/format.js";
   import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/generated/index";
-  import { Button, TableHeaderCell, TextInput } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars, TableHeaderCell, TextInput } from "@kenn-io/kit-ui";
   import { displayProjectLabel } from "./project-label.js";
 
   interface Props {
@@ -20,6 +20,7 @@
 
   let filterText = $state("");
   let selectionAnchor = $state("");
+  let theadEl: HTMLTableSectionElement | undefined = $state();
 
   // export.SafeProjectDisplayLabel legitimately returns "" for absolute-path
   // and URL-scheme projects. Display-only copy also distinguishes the
@@ -151,9 +152,9 @@
   </div>
 
   {#if sortedRows.length > 0}
-    <div class="table-scroll">
+    <div class="table-scroll" {@attach overlayScrollbars({ axis: "both", insetTop: theadEl })}>
       <table class="table">
-        <thead>
+        <thead bind:this={theadEl}>
           <tr>
             <TableHeaderCell
               label={m.data_col_project()}

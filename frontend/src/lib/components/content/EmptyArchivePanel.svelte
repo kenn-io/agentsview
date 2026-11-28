@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, EmptyState } from "@kenn-io/kit-ui";
+  import { Button, EmptyState, overlayScrollbars } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
@@ -16,7 +16,7 @@
   );
 </script>
 
-<div class="empty-archive-panel">
+<div class="empty-archive-panel" {@attach overlayScrollbars({ axis: "y" })}>
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
     <div class="empty-archive-toolbar" data-sidebar-focus-region="content">
       <SidebarToggleButton placement="content" />
@@ -32,7 +32,7 @@
           {m.settings_session_providers_not_configured()}
         </p>
       {:else}
-        <ul class="empty-archive-folders">
+        <ul class="empty-archive-folders" {@attach overlayScrollbars({ axis: "y" })}>
           {#each folders as folder}
             <li>{folder.name}: <code>{folder.dir}</code></li>
           {/each}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { overlayScrollbars } from "@kenn-io/kit-ui";
   import LoadError from "../shared/LoadError.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -55,7 +56,7 @@
       telemetry="analytics"
     />
   {:else if sessions.length > 0}
-    <div class="session-list">
+    <div class="session-list" {@attach overlayScrollbars({ axis: "y" })}>
       {#each sessions as row, i (row.sessionId)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->

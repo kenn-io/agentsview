@@ -141,6 +141,7 @@ describe("AnalyticsPage outcome window", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -399,6 +400,7 @@ describe("AnalyticsPage initial load", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -433,6 +435,7 @@ describe("AnalyticsPage initial load", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -468,6 +471,7 @@ describe("AnalyticsPage initial load", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -552,6 +556,7 @@ describe("AnalyticsPage sidebar controls", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -586,6 +591,7 @@ describe("AnalyticsPage sidebar controls", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -610,6 +616,7 @@ describe("AnalyticsPage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -688,6 +695,7 @@ describe("AnalyticsPage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -922,6 +930,7 @@ describe("AnalyticsPage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

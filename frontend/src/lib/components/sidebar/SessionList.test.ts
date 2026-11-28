@@ -40,6 +40,7 @@ vi.mock("../../api/client.js", () => ({
 
 class ResizeObserverMock {
   observe = vi.fn();
+  unobserve = vi.fn();
   disconnect = vi.fn();
 }
 

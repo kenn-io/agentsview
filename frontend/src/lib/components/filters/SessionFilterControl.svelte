@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
-  import { TextInput } from "@kenn-io/kit-ui";
+  import { overlayScrollbars, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { formatCount } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -184,6 +184,7 @@
     class="filter-dropdown kit-popover-card"
     class:left={align === "left"}
     bind:this={dropdownRef}
+    {@attach overlayScrollbars({ axis: "y" })}
   >
     {#if showDisplay}
       <div class="filter-section">
@@ -308,7 +309,7 @@
           bind:value={agentSearch}
         />
       {/if}
-      <div class="agent-select-list">
+      <div class="agent-select-list" {@attach overlayScrollbars({ axis: "y" })}>
         <button
           class="agent-select-row"
           class:selected={!sessions.filters.agent}
@@ -379,7 +380,7 @@
             bind:value={machineSearch}
           />
         {/if}
-        <div class="agent-select-list">
+        <div class="agent-select-list" {@attach overlayScrollbars({ axis: "y" })}>
           {#each sortedMachines as machine (machine)}
             {@const selected =
               sessions.isMachineSelected(machine)}
@@ -530,7 +531,6 @@
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
-    scrollbar-gutter: stable;
     /* Card chrome comes from the shared kit-popover-card class; a deeper
        shadow lifts it clear of the rows underneath. */
     padding: 6px;

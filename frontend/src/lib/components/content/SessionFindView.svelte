@@ -12,15 +12,16 @@
     totalSize: number;
     newestFirst: boolean;
     rowOffset: (index: number) => number;
+    viewport?: HTMLDivElement | undefined;
   }
-  let { children, items, totalSize, newestFirst, rowOffset }: Props = $props();
+  let { children, items, totalSize, newestFirst, rowOffset, viewport = $bindable() }: Props = $props();
 </script>
 
 <SessionFindBar />
 {#if inSessionSearch.isOpen && inSessionSearch.resultsOpen}
   <FindResultsList />
 {/if}
-<div class="find-viewport" class:has-find={inSessionSearch.isActive} class:find-open={inSessionSearch.isOpen}>
+<div class="find-viewport" bind:this={viewport} class:has-find={inSessionSearch.isActive} class:find-open={inSessionSearch.isOpen}>
   {@render children()}
   {#if inSessionSearch.isActive}
     <FindOverviewRail {items} {totalSize} {newestFirst} {rowOffset} />

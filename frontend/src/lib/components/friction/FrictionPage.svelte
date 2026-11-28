@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
-  import { Button, Card, EmptyState, IconButton, Typeahead } from "@kenn-io/kit-ui";
+  import { Button, Card, EmptyState, IconButton, overlayScrollbars, Typeahead } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { ChevronLeftIcon, ChevronRightIcon, CircleCheckIcon, LogsIcon } from "../../icons.js";
   import { friction } from "../../stores/friction.svelte.js";
@@ -170,7 +170,12 @@
     />
   </header>
 
-  <main class="content" class:content--missing={listMissing} aria-busy={busy}>
+  <main
+    class="content"
+    class:content--missing={listMissing}
+    aria-busy={busy}
+    {@attach overlayScrollbars({ axis: "y" })}
+  >
     {#if friction.lastBuildWritten !== null}
       <div class="build-status" role="status">
         {friction.lastBuildWritten > 0

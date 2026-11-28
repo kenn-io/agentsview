@@ -2,7 +2,7 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy } from "svelte";
-  import { Chip, CopyButton, Tooltip } from "@kenn-io/kit-ui";
+  import { Chip, CopyButton, overlayScrollbars, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../../api/generated/sessions/sessions.js";
@@ -308,13 +308,15 @@
     return `${turn.primary_category} · ${dur}`;
   }
 
+  let titlebarEl = $state<HTMLElement>();
+
   function scrollToTurn(turn: TurnTiming) {
     ui.scrollToOrdinal(turn.ordinal);
   }
 </script>
 
-<div class="vital">
-  <header class="vital-titlebar">
+<div class="vital" {@attach overlayScrollbars({ axis: "y", insetTop: titlebarEl })}>
+  <header class="vital-titlebar" bind:this={titlebarEl}>
     <div class="vital-title">{m.session_vitals_title()}</div>
     <button
       type="button"
@@ -838,7 +840,7 @@
     padding: 12px 14px 14px;
     border-bottom: 1px solid var(--border-muted);
   }
-  .v-section:last-child { border-bottom: 0; }
+  .v-section:last-of-type { border-bottom: 0; }
 
   .v-h {
     color: var(--text-muted);
