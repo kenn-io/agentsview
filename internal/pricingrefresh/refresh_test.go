@@ -501,13 +501,60 @@ func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
 		return pricing.Catalog{LiteLLM: []pricing.ModelPricing{{
 			ModelPattern: "scheduled-model",
 		}}}, nil
-	}, now)
+	}, now, nil)
 
 	require.NoError(t, err)
 	price, err := database.GetModelPricing("scheduled-model")
 	require.NoError(t, err)
 	require.NotNil(t, price)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
+}
+
+func TestRefreshCurrentReleasesWriteLockDuringFetch(t *testing.T) {
+	database := testDB(t)
+	now := pricingTestNow()
+	previous := seedPricingAttempt(t, database, now, 2*time.Hour)
+
+	var held atomic.Bool
+	var lockCalls atomic.Int32
+	withWriteLock := func(_ context.Context, work func() error) error {
+		lockCalls.Add(1)
+		held.Store(true)
+		defer held.Store(false)
+		return work()
+	}
+
+	var heldDuringFetch bool
+	err := refreshCurrent(t.Context(), database, func(
+		context.Context,
+	) (pricing.Catalog, error) {
+		heldDuringFetch = held.Load()
+		return pricing.Catalog{LiteLLM: []pricing.ModelPricing{{
+			ModelPattern: "unlocked-fetch-model",
+		}}}, nil
+	}, now, withWriteLock)
+	require.NoError(t, err)
+	assert.False(t, heldDuringFetch, "write lock must not be held during network fetch")
+	assert.Equal(t, int32(2), lockCalls.Load(), "expected pre-fetch and post-fetch write locks")
+	price, err := database.GetModelPricing("unlocked-fetch-model")
+	require.NoError(t, err)
+	require.NotNil(t, price)
+
+	// Canceling during fetch must restore the previous attempt under the write lock.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lockCalls.Store(0)
+	err = refreshCurrent(ctx, database, func(
+		context.Context,
+	) (pricing.Catalog, error) {
+		assert.False(t, held.Load())
+		cancel()
+		return pricing.Catalog{}, context.Canceled
+	}, now.Add(time.Minute), withWriteLock)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(2), lockCalls.Load(), "expected pre-fetch and restore write locks")
+	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
+	assert.NotEqual(t, previous, now.Format(time.RFC3339))
 }
 
 func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
@@ -551,7 +598,7 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 					return pricing.Catalog{LiteLLM: []pricing.ModelPricing{{
 						ModelPattern: "scheduled-model",
 					}}}, nil
-				}, now.Add(time.Minute),
+				}, now.Add(time.Minute), nil,
 			)
 		}()
 

@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -95,10 +99,43 @@ func TestMain(m *testing.M) {
 	// Match the default daemon fixtures; replacement tests set their own versions.
 	version = "test"
 	if os.Getenv("AGENTSVIEW_TEST_REAL_CLI") == "1" {
+		disableExternalNetworkForRealCLITest()
 		main()
 		return
 	}
 	os.Exit(runWithTestRuntimeRoot(m))
+}
+
+func disableExternalNetworkForRealCLITest() {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return
+	}
+	transport := base.Clone()
+	transport.Proxy = nil
+	dial := transport.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("external network disabled in test: %w", err)
+		}
+		if !isLoopbackTestHost(host) {
+			return nil, fmt.Errorf("external network disabled in test: %s", host)
+		}
+		return dial(ctx, network, addr)
+	}
+	http.DefaultTransport = transport
+}
+
+func isLoopbackTestHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 // testRuntimeRootEnv returns the runtime root variables for a helper child

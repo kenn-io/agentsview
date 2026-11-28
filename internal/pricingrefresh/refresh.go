@@ -165,43 +165,87 @@ func refreshAt(
 	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
-	previousAttempt, err := database.GetPricingMetaContext(ctx, refreshAttemptMetaKey)
-	if err != nil {
-		return false, fmt.Errorf("reading pricing refresh meta: %w", err)
-	}
-	if err := database.SetPricingMetaContext(
-		ctx, refreshAttemptMetaKey, now.UTC().Format(time.RFC3339),
-	); err != nil {
-		return false, fmt.Errorf(
-			"recording pricing refresh attempt: %w", err,
-		)
-	}
-	refreshed, err := fetchAndStore(ctx, database, fetch)
-	if err == nil || ctx.Err() == nil {
-		return refreshed, err
-	}
-	// The restore is one small write, so it runs after cancellation.
-	if restoreErr := database.SetPricingMetaContext(
-		context.WithoutCancel(ctx), refreshAttemptMetaKey, previousAttempt,
-	); restoreErr != nil {
-		return refreshed, fmt.Errorf(
-			"restoring pricing refresh attempt after cancellation: %w: %w",
-			restoreErr, err,
-		)
-	}
-	return refreshed, err
+	return refreshAtWithWriteLock(ctx, database, fetch, now, false, runUnlocked)
 }
 
-func fetchAndStore(
+func runUnlocked(_ context.Context, work func() error) error {
+	return work()
+}
+
+func refreshAtWithWriteLock(
 	ctx context.Context,
 	database *db.DB,
 	fetch func(context.Context) (pricing.Catalog, error),
+	now time.Time,
+	seedFallback bool,
+	withWriteLock func(context.Context, func() error) error,
 ) (bool, error) {
+	attempt := now.UTC().Format(time.RFC3339)
+	var previousAttempt string
+	if err := withWriteLock(ctx, func() error {
+		if seedFallback {
+			if err := SeedFallbackContext(ctx, database); err != nil {
+				return err
+			}
+		}
+		var err error
+		previousAttempt, err = database.GetPricingMetaContext(ctx, refreshAttemptMetaKey)
+		if err != nil {
+			return fmt.Errorf("reading pricing refresh meta: %w", err)
+		}
+		if err := database.SetPricingMetaContext(ctx, refreshAttemptMetaKey, attempt); err != nil {
+			return fmt.Errorf(
+				"recording pricing refresh attempt: %w", err,
+			)
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+
 	catalog, fetchErr := fetch(ctx)
+	restoreAttempt := func(cause error) (bool, error) {
+		// The restore is one small write, so it runs after cancellation.
+		restoreCtx := context.WithoutCancel(ctx)
+		if restoreErr := withWriteLock(restoreCtx, func() error {
+			return database.SetPricingMetaContext(
+				restoreCtx, refreshAttemptMetaKey, previousAttempt,
+			)
+		}); restoreErr != nil {
+			return false, fmt.Errorf(
+				"restoring pricing refresh attempt after cancellation: %w: %w",
+				restoreErr, cause,
+			)
+		}
+		return false, cause
+	}
 	if fetchErr != nil && catalog.GenAI == nil && len(catalog.LiteLLM) == 0 {
+		if ctx.Err() != nil {
+			return restoreAttempt(fetchErr)
+		}
 		return false, fetchErr
 	}
-	if err := storeCatalog(ctx, database, catalog); err != nil {
+	if err := withWriteLock(ctx, func() error {
+		if seedFallback {
+			if err := SeedFallbackContext(ctx, database); err != nil {
+				return err
+			}
+		}
+		if err := storeCatalog(ctx, database, catalog); err != nil {
+			return err
+		}
+		// Re-record the attempt in case a resync swapped the database while
+		// the network fetch ran without the write lock.
+		if err := database.SetPricingMetaContext(ctx, refreshAttemptMetaKey, attempt); err != nil {
+			return fmt.Errorf(
+				"recording pricing refresh attempt: %w", err,
+			)
+		}
+		return nil
+	}); err != nil {
+		if ctx.Err() != nil {
+			return restoreAttempt(err)
+		}
 		return false, err
 	}
 	return true, fetchErr
@@ -245,10 +289,16 @@ func EnsureCurrent(ctx context.Context, database *db.DB) error {
 }
 
 // RefreshCurrent applies the online pricing lifecycle immediately, regardless
-// of the most recent refresh attempt.
-func RefreshCurrent(ctx context.Context, database *db.DB) error {
+// of the most recent refresh attempt. When withWriteLock is non-nil, it wraps
+// each database read/write phase while leaving upstream network fetches
+// unlocked so local syncs do not block behind slow catalog downloads.
+func RefreshCurrent(
+	ctx context.Context,
+	database *db.DB,
+	withWriteLock func(context.Context, func() error) error,
+) error {
 	return refreshCurrent(
-		ctx, database, pricing.FetchCatalogContext, time.Now(),
+		ctx, database, pricing.FetchCatalogContext, time.Now(), withWriteLock,
 	)
 }
 
@@ -257,8 +307,9 @@ func refreshCurrent(
 	database *db.DB,
 	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
+	withWriteLock func(context.Context, func() error) error,
 ) error {
-	return runCurrent(ctx, database, fetch, now, true)
+	return runCurrent(ctx, database, fetch, now, true, withWriteLock)
 }
 
 func ensureCurrent(
@@ -267,7 +318,7 @@ func ensureCurrent(
 	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) error {
-	return runCurrent(ctx, database, fetch, now, false)
+	return runCurrent(ctx, database, fetch, now, false, nil)
 }
 
 func runCurrent(
@@ -276,7 +327,11 @@ func runCurrent(
 	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 	force bool,
+	withWriteLock func(context.Context, func() error) error,
 ) error {
+	if withWriteLock == nil {
+		withWriteLock = runUnlocked
+	}
 	gate := retainRefreshGate(database)
 	if force {
 		select {
@@ -299,10 +354,9 @@ func runCurrent(
 	}()
 
 	if force {
-		if err := SeedFallbackContext(ctx, database); err != nil {
-			return err
-		}
-		_, err := refreshAt(ctx, database, fetch, now)
+		_, err := refreshAtWithWriteLock(
+			ctx, database, fetch, now, true, withWriteLock,
+		)
 		return err
 	}
 	_, err := ensure(ctx, database, false, fetch, now)

@@ -614,16 +614,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// upsert so the first usage page load does not observe an
 	// empty table; the scheduler's background LiteLLM refresh
 	// follows immediately.
-	var pricingRefreshRunner remoteSyncExclusiveRunner
-	if engine != nil {
-		pricingRefreshRunner = engine
-	}
-	seedPricing(ctx, database, pricingRefreshRunner)
+	seedPricing(ctx, database, engine)
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
-	jobs := []poller.Job{pricingRefreshJob(database, pricingRefreshRunner), codexCloudSyncJob(codexCloudSync, idleTracker), codexCloudLiveJob(codexCloudMonitor, idleTracker)}
+	jobs := []poller.Job{pricingRefreshJob(database, engine), codexCloudSyncJob(codexCloudSync, idleTracker), codexCloudLiveJob(codexCloudMonitor, idleTracker)}
 	if imageTextManager != nil {
 		jobs = append(jobs, imageTextJob(imageTextManager, idleTracker))
 	}
