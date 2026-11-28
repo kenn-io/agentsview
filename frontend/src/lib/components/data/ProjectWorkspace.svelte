@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip, IconButton, SegmentedControl } from "@kenn-io/kit-ui";
+  import { Button, Chip, IconButton, overlayScrollbars, SegmentedControl } from "@kenn-io/kit-ui";
   import { XIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import type { DbProjectInventoryRow } from "../../api/generated/index";
@@ -108,7 +108,7 @@
       />
     {/if}
   </div>
-  <div class="project-session-pane">
+  <div class="project-session-pane" {@attach overlayScrollbars({ axis: "y" })}>
     <ProjectSessionPreviewPane
       projectKey={row.project_key}
       {projects}

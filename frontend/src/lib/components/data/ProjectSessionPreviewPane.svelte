@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, IconButton, showFlash } from "@kenn-io/kit-ui";
+  import { Button, IconButton, overlayScrollbars, showFlash } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import {
     DataService,
@@ -266,7 +266,7 @@
       : m.data_reclassify_session_preview_filtered_empty()}</p>
   {:else if expanded && activeSession}
     <div class="carousel" aria-live="polite">
-      <div class="session-transcript">
+      <div class="session-transcript" {@attach overlayScrollbars({ axis: "y" })}>
         {#if messagesLoadingId === activeSession.id}
           <p class="preview-status">{m.data_reclassify_session_preview_loading()}</p>
         {:else if messagesError}

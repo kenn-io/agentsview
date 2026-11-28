@@ -664,6 +664,7 @@ describe("ActivityPage date yoke integration", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

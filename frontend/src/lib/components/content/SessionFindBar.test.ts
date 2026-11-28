@@ -125,7 +125,9 @@ describe("SessionFindBar", () => {
       "Match 1 of 2",
     );
     expect(document.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
-    expect(document.querySelector(".kit-find-bar__counter")?.getAttribute("aria-live")).toBe("off");
+    expect(document.querySelector(".kit-find-bar .kit-sr-only")?.getAttribute("aria-live")).toBe(
+      "off",
+    );
   });
 
   it("toggles the result panel with matching accessible state", async () => {

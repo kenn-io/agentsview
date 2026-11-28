@@ -121,11 +121,8 @@ test.describe("Settings layout", () => {
       await nav.locator("button", { hasText: name }).click();
       await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
     }
-    // Columns are measured from the open panel's left edge. In WebKit the
-    // centered panel moves 3px between panels that scroll and panels that
-    // do not, because WebKit reserves no scrollbar-gutter space for the
-    // app's ::-webkit-scrollbar width (see scrollbar-layout.spec.ts). This
-    // test checks where controls sit inside a panel.
+    // Columns are measured from the open panel's left edge so this test checks
+    // where controls sit inside a panel independently of outer centering.
     const panelLeft = () => panel.evaluate((element) => element.getBoundingClientRect().left);
     const leftOf = (selector: string) =>
       panel

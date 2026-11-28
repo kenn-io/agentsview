@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Button, Card, CopyButton } from "@kenn-io/kit-ui";
+  import { Button, Card, CopyButton, overlayScrollbars } from "@kenn-io/kit-ui";
   import { downloadFrictionDigestMarkdown } from "../../api/client.js";
   import { m } from "../../i18n/index.js";
   import { friction } from "../../stores/friction.svelte.js";
@@ -73,7 +73,7 @@
     <p class="error" role="alert">{friction.errors.markdown}</p>
   {:else if friction.markdown !== null}
     <Card level="inset" padding="none" class="markdown-card">
-      <pre class="markdown-source">{friction.markdown}</pre>
+      <pre class="markdown-source" {@attach overlayScrollbars({ axis: "both" })}>{friction.markdown}</pre>
     </Card>
   {/if}
   {#if downloadError}

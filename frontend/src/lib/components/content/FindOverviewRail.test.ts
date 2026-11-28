@@ -29,6 +29,7 @@ it("positions visible matches without hidden thinking, including live filter cha
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );

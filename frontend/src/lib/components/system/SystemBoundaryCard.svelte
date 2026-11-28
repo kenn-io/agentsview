@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Disclosure } from "@kenn-io/kit-ui";
+  import { Disclosure, overlayScrollbars } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { formatTimestamp } from "../../utils/format.js";
@@ -50,7 +50,7 @@
       {#snippet summary()}
         <span class="show-content">{m.system_boundary_show_content()}</span>
       {/snippet}
-      <pre>{content}</pre>
+      <pre {@attach overlayScrollbars({ axis: "x" })}>{content}</pre>
     </Disclosure>
   {/if}
 </div>

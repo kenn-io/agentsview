@@ -3,7 +3,7 @@
   import { usage } from "../../stores/usage.svelte.js";
   import type { AttributionView, GroupBy } from "../../stores/usagePreferences.js";
   import { tick } from "svelte";
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars } from "@kenn-io/kit-ui";
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
@@ -341,7 +341,7 @@
             scale={tileScale}
           />
         </div>
-        <div class="side-rail">
+        <div class="side-rail" {@attach overlayScrollbars({ axis: "y" })}>
           {#each rows as row, i (row.id)}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
             <div

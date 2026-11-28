@@ -3,7 +3,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { searchBlock } from "../../search/session-block.svelte.js";
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
-  import { CopyButton } from "@kenn-io/kit-ui";
+  import { CopyButton, overlayScrollbars } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -16,6 +16,7 @@
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let highlighted = $state<string | null>(null);
+  let rootEl = $state<HTMLDivElement>();
 
   $effect(() => {
     const source = content;
@@ -44,7 +45,7 @@
 </script>
 
 <!-- kit-ui-check-ignore: controlled clipboard behavior and a search attachment on pre require the app-owned code block. -->
-<div class="code-block">
+<div class="code-block" bind:this={rootEl}>
   <CopyButton
     class="code-copy"
     revealOnHover
@@ -58,7 +59,7 @@
   {#if language}
     <div class="code-lang">{language}</div>
   {/if}
-  <pre class="code-content" {@attach searchBlock(searchKey)}><code>{#if highlighted !== null}{@html highlighted}{:else}{content}{/if}</code></pre>
+  <pre class="code-content" {@attach searchBlock(searchKey)} {@attach overlayScrollbars({ axis: "x", host: rootEl })}><code>{#if highlighted !== null}{@html highlighted}{:else}{content}{/if}</code></pre>
 </div>
 
 <style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { modelPickerItems } from "../../utils/model-groups.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import { Card, overlayScrollbars } from "@kenn-io/kit-ui";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -638,9 +638,10 @@
     }
     unsubEvents?.();
   });
+  let analyticsPageEl = $state<HTMLDivElement>();
 </script>
 
-<div class="analytics-page">
+<div class="analytics-page" bind:this={analyticsPageEl}>
   <div class="analytics-toolbar">
     {#if !ui.isMobileViewport && !ui.sidebarOpen}
       <div
@@ -692,6 +693,7 @@
     class="analytics-content"
     class:querying={analytics.isQuerying}
     aria-busy={analytics.isQuerying}
+    {@attach overlayScrollbars({ axis: "y", host: analyticsPageEl })}
   >
     {#if analytics.isQuerying}
       <div class="query-progress" aria-hidden="true"></div>
@@ -821,9 +823,6 @@
   .analytics-content {
     flex: 1;
     overflow-y: auto;
-    /* Reserve the scrollbar's width up front so right-aligned controls do not
-       shift when loaded results first make a tall pane scroll. */
-    scrollbar-gutter: stable;
     padding: 16px;
     display: flex;
     flex-direction: column;

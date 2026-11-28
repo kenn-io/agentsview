@@ -48,7 +48,7 @@
 </script>
 
 <script lang="ts">
-  import { FlashBanner, showFlash } from "@kenn-io/kit-ui";
+  import { FlashBanner, overlayScrollbars, showFlash } from "@kenn-io/kit-ui";
   import { onMount, untrack } from "svelte";
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
@@ -836,6 +836,8 @@
     }
   });
 
+  let pageScrollHost: HTMLDivElement | undefined = $state(undefined);
+
   onMount(() => {
     globalAuthToken = getAuthToken();
     settings.load();
@@ -910,37 +912,41 @@
 
 <FlashBanner toneLabels={{ danger: m.settings_save_error_label() }} />
 
-{#if router.route === "usage" || router.route === "token-usage"}
-  <div class="page-scroll">
-    <UsagePage />
-  </div>
-{:else if router.route === "activity"}
-  <div class="page-scroll">
-    <ActivityPage />
-  </div>
-{:else if router.route === "recall"}
-  <div class="page-scroll">
-    <RecallPage />
-  </div>
-{:else if router.route === "quality"}
-  <div class="page-scroll">
-    <QualityPage />
-  </div>
-{:else if router.route === "friction"}
-  <div class="page-scroll">
-    <FrictionPage />
-  </div>
-{:else if router.route === "pinned"}
-  <div class="page-scroll">
-    <PinnedPage />
-  </div>
-{:else if router.route === "trash"}
-  <div class="page-scroll">
-    <TrashPage />
-  </div>
-{:else if router.route === "recent-edits"}
-  <div class="page-scroll">
-    <RecentEditsPage />
+{#if router.route === "usage" || router.route === "token-usage" || router.route === "activity" || router.route === "recall" || router.route === "quality" || router.route === "friction" || router.route === "pinned" || router.route === "trash" || router.route === "recent-edits"}
+  <div class="page-scroll-host" bind:this={pageScrollHost}>
+    {#if router.route === "usage" || router.route === "token-usage"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <UsagePage />
+      </div>
+    {:else if router.route === "activity"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <ActivityPage />
+      </div>
+    {:else if router.route === "recall"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <RecallPage />
+      </div>
+    {:else if router.route === "quality"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <QualityPage />
+      </div>
+    {:else if router.route === "friction"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <FrictionPage />
+      </div>
+    {:else if router.route === "pinned"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <PinnedPage />
+      </div>
+    {:else if router.route === "trash"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <TrashPage />
+      </div>
+    {:else if router.route === "recent-edits"}
+      <div class="page-scroll" {@attach overlayScrollbars({ axis: "y", host: pageScrollHost })}>
+        <RecentEditsPage />
+      </div>
+    {/if}
   </div>
 {:else if router.route === "data"}
   <div class="fixed-page-host">
@@ -1065,21 +1071,25 @@
 {/if}
 
 <style>
+  .page-scroll-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .page-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    /* Reserve the scrollbar's width up front so centered columns and
-       right-aligned controls do not shift when content first makes the page
-       scroll. */
-    scrollbar-gutter: stable;
   }
 
-  /* Match the transcript's reading column and scrollbar inset. */
+  /* Match the transcript's reading column. */
   :global(.session-live-notice) {
-    --column-inset: calc((100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2);
+    --column-inset: calc((100% - var(--reading-column)) / 2);
     flex-shrink: 0;
-    margin: 8px calc(max(12px, var(--column-inset)) + var(--transcript-scrollbar, 0px)) 0 max(12px, var(--column-inset));
+    margin: 8px max(12px, var(--column-inset)) 0;
   }
 
   :global(.session-live-notice .state-notice__description) {

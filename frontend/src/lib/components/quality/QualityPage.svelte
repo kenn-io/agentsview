@@ -20,7 +20,7 @@
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
   import type { AutomatedScope } from "../../api/types.js";
-  import { Card, EmptyState, Typeahead } from "@kenn-io/kit-ui";
+  import { Card, EmptyState, overlayScrollbars, Typeahead } from "@kenn-io/kit-ui";
   import LoadError from "../shared/LoadError.svelte";
   import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
@@ -446,7 +446,12 @@
     />
   </header>
 
-  <main class="content" class:querying aria-busy={querying}>
+  <main
+    class="content"
+    class:querying
+    aria-busy={querying}
+    {@attach overlayScrollbars({ axis: "y" })}
+  >
     {#if querying}
       <div class="query-progress" aria-hidden="true"></div>
     {/if}

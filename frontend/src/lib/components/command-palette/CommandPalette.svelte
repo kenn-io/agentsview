@@ -4,6 +4,7 @@
     Button,
     IconButton,
     KbdBadge,
+    overlayScrollbars,
     SegmentedControl,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
@@ -34,6 +35,7 @@
     SearchMode,
   } from "../../stores/search.svelte.js";
 
+  let paletteEl = $state<HTMLDivElement>();
   let hintStatus = $state<VectorBuildStatus | null>(null);
   $effect(() => {
     if (searchStore.mode !== "fulltext") return;
@@ -313,7 +315,7 @@
   onmouseup={handleOverlayMouseup}
   onkeydown={handleKeydown}
 >
-  <div class="palette">
+  <div class="palette" bind:this={paletteEl}>
     <div class="palette-input-wrap">
       <SearchIcon class="search-icon" size="14" strokeWidth="2" aria-hidden="true" />
       <input
@@ -397,7 +399,11 @@
       {showSearchResults && searchStore.isSearching ? m.command_palette_searching() : ""}
     </div>
 
-    <div class="palette-results" aria-busy={showSearchResults && searchStore.isSearching}>
+    <div
+      class="palette-results"
+      aria-busy={showSearchResults && searchStore.isSearching}
+      {@attach overlayScrollbars({ axis: "y", host: paletteEl })}
+    >
       {#if showSearchResults}
         {#if searchStore.isSearching}
           <!-- Placeholder rows shaped like results keep the palette at a

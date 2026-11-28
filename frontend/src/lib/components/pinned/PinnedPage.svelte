@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
+  import { CopyButton, EmptyState, overlayScrollbars } from "@kenn-io/kit-ui";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
   import LoadError from "../shared/LoadError.svelte";
   import LoadingState from "../shared/LoadingState.svelte";
@@ -179,6 +179,7 @@
                   class="pin-content-full markdown"
                   use:highlightCodeFences={{ content: pin.content }}
                   use:loadAssetImages={pin.content}
+                  {@attach overlayScrollbars({ axis: "y" })}
                 >
                   {@html renderMarkdown(pin.content, {
                     renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
@@ -351,7 +352,8 @@
   .pin-content-full :global(p:first-child) {
     margin-top: 0;
   }
-  .pin-content-full :global(p:last-child) {
+  .pin-content-full :global(p:last-child),
+  .pin-content-full :global(p:has(+ .kit-scrollbar)) {
     margin-bottom: 0;
   }
   .pin-content-full :global(code) {

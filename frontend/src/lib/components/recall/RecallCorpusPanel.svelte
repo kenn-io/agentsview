@@ -1256,7 +1256,7 @@
 
   .progress-table-shell {
     margin-top: var(--space-4);
-    overflow-x: auto;
+    overflow: hidden;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
   }
@@ -1330,7 +1330,7 @@
   }
 
   .recall-table-shell {
-    overflow-x: auto;
+    overflow: hidden;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     background: var(--bg-surface);

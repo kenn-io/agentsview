@@ -46,7 +46,22 @@ async function rightEdge(element: Locator): Promise<number> {
 
 async function expectScrollbarAppeared(scroller: Locator): Promise<void> {
   await expect.poll(() => overflows(scroller)).toBe(true);
-  expect(await scrollbarWidth(scroller)).toBeGreaterThan(0);
+  await expect(scroller).toHaveAttribute("data-kit-overlay-scroll-viewport", "");
+  expect(await scrollbarWidth(scroller)).toBe(0);
+  await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollTop === 0 ? 1 : 0;
+  });
+  const track = scroller.locator(
+    'xpath=self::*[@data-kit-overlay-scroll-self]/*[@data-kit-scrollbar="y"] | parent::*[@data-kit-overlay-scroll-host]/*[@data-kit-scrollbar="y"]',
+  );
+  await expect(track).toHaveAttribute("data-visible", "true");
+  await expect
+    .poll(() =>
+      track
+        .locator('[data-kit-scrollbar-thumb="y"]')
+        .evaluate((el) => el.getBoundingClientRect().height),
+    )
+    .toBeGreaterThan(0);
 }
 
 const syntheticPins = Array.from({ length: 30 }, (_, index) => ({
@@ -81,11 +96,6 @@ const syntheticTrashedSessions = Array.from({ length: 12 }, (_, index) => ({
 }));
 
 test.describe("Scrollbar layout", () => {
-  test.skip(
-    ({ browserName }) => browserName !== "chromium",
-    "WebKit reserves no scrollbar-gutter space for a ::-webkit-scrollbar width, so the shift remains",
-  );
-
   test("keeps the Pinned column in place when pins make the page scroll", async ({ page }) => {
     const release = await holdRequests(page, "**/api/v1/pins*", (route) =>
       route.fulfill({ json: { pins: syntheticPins } }),

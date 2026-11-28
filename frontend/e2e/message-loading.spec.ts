@@ -162,6 +162,56 @@ test.describe("Message loading", () => {
     await expect(follow).toHaveAttribute("aria-pressed", "false");
   });
 
+  test("follow latest exits and keeps position when dragging the overlay scrollbar thumb", async ({
+    page,
+  }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+    await waitForRowCountStable(sp);
+
+    const follow = page.getByLabel("Follow latest messages");
+    await follow.click();
+    await expect(follow).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(() => sp.scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
+        timeout: 2_000,
+      })
+      .toBeLessThanOrEqual(8);
+
+    const thumb = page.locator(
+      '.find-viewport > [data-kit-scrollbar="y"] [data-kit-scrollbar-thumb="y"]',
+    );
+    await sp.scroller.hover();
+    await expect(page.locator('.find-viewport > [data-kit-scrollbar="y"]')).toHaveAttribute(
+      "data-visible",
+      "true",
+    );
+
+    const box = await thumb.boundingBox();
+    expect(box).not.toBeNull();
+    const startX = box!.x + box!.width / 2;
+    const startY = box!.y + box!.height / 2;
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX, Math.max(80, startY - 220), { steps: 8 });
+    await page.mouse.up();
+
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
+    const distanceAfterDrag = await sp.scroller.evaluate(
+      (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+    );
+    expect(distanceAfterDrag).toBeGreaterThan(200);
+
+    // Wait past several 100ms follow-settle ticks to confirm the transcript
+    // does not snap back to the latest edge.
+    await page.waitForTimeout(350);
+    const distanceAfterSettle = await sp.scroller.evaluate(
+      (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+    );
+    expect(distanceAfterSettle).toBeGreaterThan(200);
+  });
+
   test("follow latest exits on global keyboard message navigation", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();

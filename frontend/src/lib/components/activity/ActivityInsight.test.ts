@@ -67,6 +67,7 @@ import ActivityInsight from "./ActivityInsight.svelte";
 // option list to keep the fixed-position popover placed correctly.
 class ResizeObserverMock {
   observe = vi.fn();
+  unobserve = vi.fn();
   disconnect = vi.fn();
 }
 

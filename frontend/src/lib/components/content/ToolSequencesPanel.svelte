@@ -2,7 +2,7 @@
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import type { ErrorKind } from "../../utils/telemetry.js";
-  import { Button, type ChipTone } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
     DbSessionTiming,
@@ -176,6 +176,7 @@
   class:embedded
   aria-labelledby="{uid}-title"
   aria-busy={loading}
+  {@attach !embedded ? overlayScrollbars({ axis: "both" }) : undefined}
 >
   <header class="panel-head">
     <div class="panel-title-block">
@@ -306,7 +307,7 @@
                           <dd>
                             {#if call.input_preview}
                               <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()} {@attach overlayScrollbars({ axis: "both" })}>{call.input_preview}</pre>
                             {:else}
                               <p class="none">{m.tool_sequences_no_input()}</p>
                             {/if}
@@ -326,7 +327,7 @@
                             {/if}
                             {#if call.result_preview}
                               <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()} {@attach overlayScrollbars({ axis: "both" })}>{call.result_preview}</pre>
                             {:else if call.result_bytes !== null && call.result_bytes > 0}
                               <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
                             {:else if call.result_bytes === 0}

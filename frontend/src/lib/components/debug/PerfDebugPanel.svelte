@@ -1,6 +1,6 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import { IconButton } from "@kenn-io/kit-ui";
+  import { IconButton, overlayScrollbars } from "@kenn-io/kit-ui";
   import { perf } from "../../stores/perf.svelte.js";
   import { XIcon } from "../../icons.js";
 
@@ -24,6 +24,9 @@
     return `${value} B`;
   }
 
+  let panelEl = $state<HTMLElement>();
+  let headingEl = $state<HTMLDivElement>();
+
   function formatTime(value: number): string {
     return new Date(value).toLocaleTimeString();
   }
@@ -33,6 +36,7 @@
   <section
     class="perf-panel kit-popover-card"
     aria-label={m.perf_aria_label()}
+    bind:this={panelEl}
   >
     <header class="perf-header">
       <div>
@@ -69,8 +73,12 @@
       </div>
     {/if}
 
-    <div class="entry-table" role="table">
-      <div class="entry-row entry-heading" role="row">
+    <div
+      class="entry-table"
+      role="table"
+      {@attach overlayScrollbars({ axis: "both", host: panelEl, insetTop: headingEl })}
+    >
+      <div class="entry-row entry-heading" role="row" bind:this={headingEl}>
         <span>{m.perf_col_time()}</span>
         <span>{m.perf_col_route()}</span>
         <span>{m.perf_col_name()}</span>

@@ -5,7 +5,7 @@
 </script>
 
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, overlayScrollbars } from "@kenn-io/kit-ui";
   import { FrictionService, type FrictionFindingItem } from "../../api/generated/index.js";
   import { isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
@@ -92,7 +92,7 @@
   {:else if findings.length === 0}
     <p class="findings-state">{m.friction_session_empty()}</p>
   {:else}
-    <ul class="findings-list">
+    <ul class="findings-list" {@attach overlayScrollbars({ axis: "y" })}>
       {#each findings as finding}
         <li class="finding-row" data-kind={finding.kind}>
           <span class="kind">{kindLabel(finding.kind)}</span>
