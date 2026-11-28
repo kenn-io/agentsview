@@ -246,7 +246,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 		present = true
 		fmt.Fprintf(hash, "%s\x00%s\x00%d\x00%s\x00", id, kind, created, raw)
 		var data openCodeV2Message
-		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		if err := json.Unmarshal([]byte(raw), &data, jsontext.AllowInvalidUTF8(true)); err != nil {
 			return nil, true, "", fmt.Errorf("decoding opencode v2 message %s: %w", id, err)
 		}
 		pm := ParsedMessage{Ordinal: len(parsed), Timestamp: millisToTime(created), SourceUUID: id}
@@ -304,7 +304,10 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 		case "shell":
 			pm.Role, pm.HasToolUse = RoleUser, true
 			pm.Content = data.Command
-			input, err := json.Marshal(map[string]string{"command": data.Command})
+			input, err := json.Marshal(
+				map[string]string{"command": data.Command},
+				jsontext.AllowInvalidUTF8(true),
+			)
 			if err != nil {
 				return nil, true, "", err
 			}
@@ -404,7 +407,11 @@ func openCodeV2ToolCall(ctx context.Context, item openCodeV2Content, cwd string)
 		}
 		content := strings.Join(texts, "\n")
 		if hasFiles {
-			encoded, err := json.Marshal(blocks, json.Deterministic(true))
+			encoded, err := json.Marshal(
+				blocks,
+				json.Deterministic(true),
+				jsontext.AllowInvalidUTF8(true),
+			)
 			if err != nil {
 				return call, err
 			}
