@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/kit/atomicfile"
@@ -14,6 +15,7 @@ import (
 type CopyOptions struct {
 	DataDir, Destination string
 	Settings             RecoverySettings
+	CustomModelPricing   map[string]config.CustomModelRate
 }
 
 // Copy creates a detached copy while the caller holds the source writer lock.
@@ -77,7 +79,9 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for _, cache := range db.UsageCacheFiles(path, databaseID) {
+	caches := db.UsageCacheFiles(path, databaseID)
+	for i := len(caches) - 1; i >= 0; i-- {
+		cache := caches[i]
 		info, err := os.Lstat(cache)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -92,9 +96,30 @@ func Copy(ctx context.Context, options CopyOptions) (retErr error) {
 		if err != nil {
 			return err
 		}
+		break
 	}
 	if err := writeRecoveryConfig(stage, options.Settings); err != nil {
 		return err
+	}
+	if len(options.CustomModelPricing) > 0 {
+		prices := make(map[string]map[string]any, len(options.CustomModelPricing))
+		for model, rate := range options.CustomModelPricing {
+			if rate.PriceAs != "" {
+				prices[model] = map[string]any{"price_as": rate.PriceAs}
+			} else {
+				prices[model] = map[string]any{
+					"input_microdollars_per_mtok":             rate.InputMicrodollarsPerMTok,
+					"output_microdollars_per_mtok":            rate.OutputMicrodollarsPerMTok,
+					"cache_creation_microdollars_per_mtok":    rate.CacheCreationMicrodollarsPerMTok,
+					"cache_creation_1h_microdollars_per_mtok": rate.CacheCreation1hMicrodollarsPerMTok,
+					"cache_read_microdollars_per_mtok":        rate.CacheReadMicrodollarsPerMTok,
+				}
+			}
+		}
+		cfg := config.Config{DataDir: stage}
+		if err := cfg.SaveSettings(map[string]any{"custom_model_pricing": prices}); err != nil {
+			return err
+		}
 	}
 	database, err = db.OpenIsolatedWithArchiveContent(ctx, filepath.Join(stage, "sessions.db"), options.Settings.ArchiveContent)
 	if err != nil {

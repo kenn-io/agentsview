@@ -189,3 +189,26 @@ func TestCopyUsageCache(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyPrefersCurrentUsageCache(t *testing.T) {
+	ctx := t.Context()
+	source := t.TempDir()
+	path := filepath.Join(source, "sessions.db")
+	database, err := db.OpenIsolatedContext(ctx, path)
+	require.NoError(t, err)
+	started := "2026-08-10T09:00:00Z"
+	require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "session", Agent: "claude", Project: "project", StartedAt: &started}))
+	require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: "session", Role: "assistant", Timestamp: started, Model: "model-a", TokenUsage: []byte(`{"input_tokens":330}`)}}))
+	_, err = database.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	id, err := database.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	caches := db.UsageCacheFiles(path, id)
+	require.Greater(t, len(caches), 1)
+	require.NoError(t, os.WriteFile(caches[0], []byte("corrupt obsolete cache"), 0o600))
+	dest := filepath.Join(t.TempDir(), "copy")
+	require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}}))
+	assert.FileExists(t, filepath.Join(dest, filepath.Base(caches[len(caches)-1])))
+	assert.NoFileExists(t, filepath.Join(dest, filepath.Base(caches[0])))
+}

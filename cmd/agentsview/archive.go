@@ -36,7 +36,7 @@ func newArchiveCommand() *cobra.Command {
 			return err
 		}
 		err = rawarchive.Copy(cmd.Context(), rawarchive.CopyOptions{
-			DataDir: cfg.DataDir, Destination: args[0],
+			DataDir: cfg.DataDir, Destination: args[0], CustomModelPricing: cfg.CustomModelPricing,
 			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories},
 		})
 		if err != nil {

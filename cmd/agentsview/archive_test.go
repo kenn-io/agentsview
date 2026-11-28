@@ -488,3 +488,33 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 		assert.Equal(t, id, messages[0].Content)
 	}
 }
+
+func TestArchiveCopyPreservesCustomPricing(t *testing.T) {
+	source := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(source, "config.toml"), []byte("auth_token = \"source-secret\"\n[custom_model_pricing.model]\ninput_microdollars_per_mtok = 2000000\n[custom_model_pricing.alias]\nprice_as = \"gpt-4o\"\n"), 0o600))
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(source, "sessions.db"))
+	require.NoError(t, err)
+	started := "2026-08-10T09:00:00Z"
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "session", Agent: "claude", Project: "project", StartedAt: &started}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Role: "assistant", Timestamp: started, Model: "model", TokenUsage: []byte(`{"input_tokens":1000000}`)}}))
+	require.NoError(t, database.Close())
+	destination := filepath.Join(t.TempDir(), "copy")
+	_, err = executeCommand(newRootCommand(), "archive", "copy", destination)
+	require.NoError(t, err)
+	t.Setenv("AGENTSVIEW_DATA_DIR", destination)
+	cfg, err := config.LoadCapture()
+	require.NoError(t, err)
+	require.Contains(t, cfg.CustomModelPricing, "model")
+	assert.EqualValues(t, 2000000, cfg.CustomModelPricing["model"].InputMicrodollarsPerMTok)
+	assert.Equal(t, "gpt-4o", cfg.CustomModelPricing["alias"].PriceAs)
+	copied, err := db.OpenIsolatedContext(t.Context(), filepath.Join(destination, "sessions.db"))
+	require.NoError(t, err)
+	defer copied.Close()
+	copied.SetCustomPricing(cfg.CustomModelPricing)
+	usage, err := copied.GetDailyUsage(t.Context(), db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2000000, usage.Totals.TotalCost.Microdollars)
+	contents, err := os.ReadFile(filepath.Join(destination, "config.toml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(contents), "source-secret")
+}
