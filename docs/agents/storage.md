@@ -1436,14 +1436,17 @@ The filter folds case only for case-insensitive literals.
 Alternation branches keep scanning when no literal outside them is required.
 The tokenizer folds case for every script while `LIKE` and `lower()` fold only
 ASCII, so the index returns a superset and results stay identical to a scan.
-Patterns shorter than three characters, single-session searches, and branches
-where the index lists more than a quarter of the messages in the scope's
-sessions keep the scan. A capped count of the listed IDs makes that choice; it
-stops as soon as the share is passed. Tool input and tool result branches are
-not indexed.
+Patterns shorter than three characters and single-session searches keep the
+scan. Message and thinking branches also scan when their index lists more than
+a quarter of the messages in the scope's sessions. A capped count of the listed
+IDs makes that choice; it stops as soon as the share is passed. Single-word
+substring search also indexes tool input, call result, and result-event text in
+separate contentless-delete trigram tables. It compares each table's candidates
+with the number of source rows in the session scope, so a common field does not
+prevent a selective field from using its index. Regex search continues to scan
+tool text.
 
-Because the tool branches read every row of every session they cover,
-substring, word, and regex search read the scope's sessions in batches, newest
+Substring, word, and regex search read the scope's sessions in batches, newest
 first in the result order, and stop after the batch that fills the page and
 its next-page row. The first batch holds sessions totaling 16,384 messages and
 each later batch doubles that. Results sort by session recency, then session
@@ -1474,11 +1477,13 @@ while it is absent. Claude.ai and ChatGPT imports drop it on the live archive,
 so a search that chose index filters before the drop gets a missing-table error;
 it reruns once and scans.
 
-The first writable open after column migrations builds the index once for an
-existing archive, before HTTP readiness, and logs that startup is waiting for
-the message scan. Tokenizing costs about 2.7 times the porter FTS index, near 30
-MB of message text per second. Read-only opens use the index when present and
-scan otherwise. Hand-built legacy schemas in tests must drop
+The first writable open builds missing message indexes for an existing archive.
+Daemon startup defers the tool index build and scans tool text until its
+separate ready marker is written. The build yields the writer between batches of about
+one MiB; writes maintain each table through triggers. A restart resumes an
+incomplete tool index from its last committed batch. Tokenizing costs about 2.7
+times the porter FTS index, near 30 MB of message text per second. Read-only
+opens use the index when present and scan otherwise. Hand-built legacy schemas in tests must drop
 `message_trigram_source` and the index before rebuilding or narrowing
 `messages`, because the view and triggers name its columns.
 

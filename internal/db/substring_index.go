@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -79,6 +80,187 @@ var dropSubstringIndexSQL = []string{
 	"DROP VIEW IF EXISTS message_trigram_source",
 }
 
+const (
+	toolSubstringReadyKey  = "tool_substring_index_ready"
+	toolSubstringCursorKey = "tool_substring_index_cursor"
+)
+
+type toolSubstringField struct{ index, source, column string }
+
+var toolSubstringFields = []toolSubstringField{
+	{"tool_input_trigram_fts", "tool_calls", "input_json"},
+	{"tool_result_trigram_fts", "tool_calls", "result_content"},
+	{"tool_event_trigram_fts", "tool_result_events", "content"},
+}
+
+func toolSubstringDDL(f toolSubstringField) string {
+	return fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS %[1]s USING fts5(%[3]s, content='', contentless_delete=1, tokenize='trigram', detail='none');
+CREATE TRIGGER IF NOT EXISTS %[1]s_ai AFTER INSERT ON %[2]s BEGIN
+ INSERT INTO %[1]s(rowid, %[3]s) VALUES(new.id, new.%[3]s); END;
+CREATE TRIGGER IF NOT EXISTS %[1]s_ad AFTER DELETE ON %[2]s BEGIN
+ DELETE FROM %[1]s WHERE rowid=old.id; END;
+CREATE TRIGGER IF NOT EXISTS %[1]s_au AFTER UPDATE OF %[3]s ON %[2]s WHEN old.%[3]s IS NOT new.%[3]s BEGIN
+ DELETE FROM %[1]s WHERE rowid=old.id;
+ INSERT INTO %[1]s(rowid, %[3]s) VALUES(new.id, new.%[3]s); END;`, f.index, f.source, f.column)
+}
+
+func dropToolSubstringSQL() []string {
+	var stmts []string
+	for _, f := range toolSubstringFields {
+		for _, suffix := range []string{"_ai", "_ad", "_au"} {
+			stmts = append(stmts, "DROP TRIGGER IF EXISTS "+f.index+suffix)
+		}
+		stmts = append(stmts, "DROP TABLE IF EXISTS "+f.index)
+	}
+	return stmts
+}
+
+func hasToolSubstringIndex(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) bool {
+	var ready bool
+	return q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey).Scan(&ready) == nil && ready
+}
+
+// prepareToolSubstringIndex creates missing tables and resumes incomplete builds.
+func prepareToolSubstringIndex(ctx context.Context, w *writerHandle) (bool, error) {
+	var available bool
+	if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_module_list WHERE name='fts5')`).Scan(&available); err != nil {
+		return false, err
+	}
+	if !available {
+		return false, nil
+	}
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Take the write lock before checking the schema, so another process cannot
+	// recreate the tables between the check and cursor initialization.
+	if _, err = tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
+		return false, err
+	}
+	var count int
+	var ready bool
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('tool_input_trigram_fts','tool_result_trigram_fts','tool_event_trigram_fts')), EXISTS(SELECT 1 FROM stats WHERE key=?)`, toolSubstringReadyKey).Scan(&count, &ready); err != nil {
+		return false, err
+	}
+	if count == len(toolSubstringFields) && ready {
+		return false, tx.Commit()
+	}
+	if count != len(toolSubstringFields) {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey); err != nil {
+			return false, err
+		}
+		for _, stmt := range dropToolSubstringSQL() {
+			if _, err = tx.ExecContext(ctx, stmt); err != nil {
+				return false, err
+			}
+		}
+		for _, f := range toolSubstringFields {
+			if _, err = tx.ExecContext(ctx, toolSubstringDDL(f)); err != nil {
+				return false, err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringCursorKey); err != nil {
+			return false, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO stats(key,value) VALUES(?, '0:0')", toolSubstringCursorKey); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+type toolSubstringCursor struct {
+	field int
+	id    int64
+}
+
+// buildToolSubstringBatch bounds each transaction by approximately one MiB of source text.
+func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error) {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize the cursor read with table recreation and other builders.
+	if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=value WHERE key=?", toolSubstringCursorKey); err != nil {
+		return false, err
+	}
+	var ready bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM stats WHERE key=?)", toolSubstringReadyKey).Scan(&ready); err != nil {
+		return false, err
+	}
+	if ready {
+		return true, tx.Commit()
+	}
+	var value string
+	if err := tx.QueryRowContext(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringCursorKey).Scan(&value); err != nil {
+		return false, err
+	}
+	var next toolSubstringCursor
+	if n, err := fmt.Sscanf(value, "%d:%d", &next.field, &next.id); err != nil || n != 2 || next.field < 0 || next.field > len(toolSubstringFields) || next.id < 0 {
+		return false, fmt.Errorf("invalid tool substring cursor %q", value)
+	}
+	for next.field < len(toolSubstringFields) {
+		f := toolSubstringFields[next.field]
+		rows, err := tx.QueryContext(ctx, "SELECT id, length(CAST("+f.column+" AS BLOB)) FROM "+f.source+" WHERE id > ? ORDER BY id", next.id)
+		if err != nil {
+			return false, err
+		}
+		var last, size int64
+		for rows.Next() {
+			var id int64
+			var n sql.NullInt64
+			if err = rows.Scan(&id, &n); err != nil {
+				break
+			}
+			if last != 0 && size+n.Int64 > 1<<20 {
+				break
+			}
+			last = id
+			size += n.Int64
+			if size >= 1<<20 {
+				break
+			}
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return false, err
+		}
+		if last == 0 {
+			next.field++
+			next.id = 0
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM "+f.index+" WHERE rowid > ? AND rowid <= ?", next.id, last); err != nil {
+			return false, err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO "+f.index+"(rowid, "+f.column+") SELECT id, "+f.column+" FROM "+f.source+" WHERE id > ? AND id <= ?", next.id, last); err != nil {
+			return false, err
+		}
+		next.id = last
+		if _, err := tx.ExecContext(ctx, "UPDATE stats SET value=? WHERE key=?", fmt.Sprintf("%d:%d", next.field, next.id), toolSubstringCursorKey); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO stats(key,value) VALUES(?, '1')", toolSubstringReadyKey); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringCursorKey); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
 // ensureSubstringIndex builds the substring index once for an archive that
 // lacks it, after column migrations have added thinking_text. The build reads
 // every message body, so a large archive waits for it on the first writable
@@ -146,7 +328,10 @@ func substringIndexDropped(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "no such table: message_trigram_fts") ||
-		strings.Contains(msg, "no such table: thinking_trigram_fts")
+		strings.Contains(msg, "no such table: thinking_trigram_fts") ||
+		strings.Contains(msg, "no such table: tool_input_trigram_fts") ||
+		strings.Contains(msg, "no such table: tool_result_trigram_fts") ||
+		strings.Contains(msg, "no such table: tool_event_trigram_fts")
 }
 
 // searchWithSubstringCandidates chooses index filters for literals and runs
@@ -224,40 +409,39 @@ type substringFilter struct {
 	args []any
 }
 
-// substringCandidateFilters limit the message and thinking branches of a
-// content search to rows the substring index lists for a literal.
+// substringCandidateFilters limit content search branches to indexed candidates.
 type substringCandidateFilters struct {
-	message, thinking substringFilter
+	message, thinking, toolInput, toolResult, toolEvent substringFilter
 }
 
-// substringIndexMaxShare is the largest fraction, as 1/n, of the messages
-// in a search's scope that the index may list before a scan of the scope's
-// sessions costs less than looking up each listed message.
+// substringIndexMaxShare is the largest fraction, as 1/n, of source rows in
+// a search's scope that the index may list before the branch scans instead.
 const substringIndexMaxShare = 4
 
-// substringCandidates returns conditions that keep only messages whose text
-// may contain the literals, ignoring case. A branch keeps scanning when the
-// archive has no substring index, no literal can be looked up, or the
-// index lists more than a quarter as many messages as the scope's sessions
-// hold. The index lists matches across the whole archive, so a common
-// sequence inside one project or date range is cheaper to scan for. The
-// capped count stops as soon as it passes that share.
+// substringCandidates returns conditions for rows that may contain the
+// literals, ignoring case. A branch scans when its index is unavailable, the
+// literal is too short, or candidates exceed a quarter of its scoped rows.
+// Message counts use the whole index; tool counts use the session scope.
 func (db *DB) substringCandidates(
 	ctx context.Context, f ContentSearchFilter, literals []string,
 ) (substringCandidateFilters, error) {
 	var out substringCandidateFilters
-	if f.SessionID != "" || (!hasSource(f, "messages") && !hasSource(f, "thinking")) {
+	if f.SessionID != "" {
 		return out, nil
 	}
 	query, ok := substringIndexQuery(literals...)
-	if !ok || !db.hasSubstringIndex(ctx) {
+	if !ok {
 		return out, nil
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
-	scopeMessages, err := db.substringScopeMessages(ctx,
-		"(SELECT id AS session_id, message_count FROM sessions) WHERE "+scope, scopeArgs)
-	if err != nil {
-		return out, err
+	messageIndex := (hasSource(f, "messages") || hasSource(f, "thinking")) && db.hasSubstringIndex(ctx)
+	var scopeMessages int64
+	if messageIndex {
+		var err error
+		scopeMessages, err = db.substringScopeMessages(ctx, "(SELECT id AS session_id, message_count FROM sessions) WHERE "+scope, scopeArgs)
+		if err != nil {
+			return out, err
+		}
 	}
 	for _, branch := range []struct {
 		table  string
@@ -267,10 +451,10 @@ func (db *DB) substringCandidates(
 		{"message_trigram_fts", "messages", &out.message},
 		{"thinking_trigram_fts", "thinking", &out.thinking},
 	} {
-		if !hasSource(f, branch.source) {
+		if !messageIndex || !hasSource(f, branch.source) {
 			continue
 		}
-		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages)
+		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages, "", "", nil)
 		if err != nil {
 			return out, err
 		}
@@ -280,6 +464,41 @@ func (db *DB) substringCandidates(
 		*branch.filter = substringFilter{
 			sql:  " AND m.id IN (SELECT rowid FROM " + branch.table + " WHERE " + branch.table + " MATCH ?)",
 			args: []any{query},
+		}
+	}
+	if f.Mode != "regex" && len(strings.Fields(f.Pattern)) == 1 && hasToolSubstringIndex(ctx, db.getReader()) {
+		scopeRows := make(map[string]int64)
+		for _, branch := range []struct {
+			field         toolSubstringField
+			source, alias string
+			filter        *substringFilter
+		}{
+			{toolSubstringFields[0], "tool_input", "tc", &out.toolInput},
+			{toolSubstringFields[1], "tool_result", "tc", &out.toolResult},
+			{toolSubstringFields[2], "tool_result", "tre", &out.toolEvent},
+		} {
+			if !hasSource(f, branch.source) {
+				continue
+			}
+			rowCount, ok := scopeRows[branch.field.source]
+			if !ok {
+				if err := db.getReader().QueryRow(ctx, "SELECT count(*) FROM "+branch.field.source+" WHERE "+scope, scopeArgs...).Scan(&rowCount); err != nil {
+					return out, fmt.Errorf("sizing tool substring scope: %w", err)
+				}
+				scopeRows[branch.field.source] = rowCount
+			}
+			// Start with FTS matches. An IN subquery makes SQLite repeat MATCH
+			// for every scoped row, even when the match list is empty.
+			join := " CROSS JOIN " + branch.field.source + " scoped ON scoped.id = " + branch.field.index + ".rowid"
+			condition := " AND scoped." + scope
+			selective, err := db.substringIndexSelective(ctx, branch.field.index, query, rowCount, join, condition, scopeArgs)
+			if err != nil {
+				return out, err
+			}
+			if !selective {
+				continue
+			}
+			*branch.filter = substringFilter{sql: " AND " + branch.alias + ".id IN (SELECT rowid FROM " + branch.field.index + " WHERE " + branch.field.index + " MATCH ?)", args: []any{query}}
 		}
 	}
 	return out, nil
@@ -298,16 +517,16 @@ func (db *DB) substringScopeMessages(ctx context.Context, from string, args []an
 }
 
 // substringIndexSelective reports whether table lists at most a
-// substringIndexMaxShare share of scopeMessages for query. The capped count
-// stops as soon as it passes that share.
+// substringIndexMaxShare share of scopeRows for query. The capped count stops
+// as soon as it passes that share.
 func (db *DB) substringIndexSelective(
-	ctx context.Context, table, query string, scopeMessages int64,
+	ctx context.Context, table, query string, scopeRows int64, join, condition string, args []any,
 ) (bool, error) {
-	limit := scopeMessages / substringIndexMaxShare
+	limit := scopeRows / substringIndexMaxShare
 	var listed int64
 	if err := db.getReader().QueryRow(ctx,
-		`SELECT count(*) FROM (SELECT 1 FROM `+table+` WHERE `+table+` MATCH ? LIMIT ?)`,
-		query, limit+1,
+		`SELECT count(*) FROM (SELECT 1 FROM `+table+join+` WHERE `+table+` MATCH ?`+condition+` LIMIT ?)`,
+		append(append([]any{query}, args...), limit+1)...,
 	).Scan(&listed); err != nil {
 		return false, fmt.Errorf("counting substring candidates: %w", err)
 	}
@@ -335,7 +554,7 @@ func (db *DB) termsIndexQueries(
 		if !ok {
 			continue
 		}
-		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages)
+		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages, "", "", nil)
 		if err != nil {
 			return nil, err
 		}

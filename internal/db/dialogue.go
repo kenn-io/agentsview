@@ -90,7 +90,7 @@ func prepareMessageFTSRepair(ctx context.Context, w *writerHandle) error {
 
 // SearchRepairPending reports whether deferred search index repair is owed.
 func (db *DB) SearchRepairPending() bool {
-	return db.messageFTSRepairPending.Load() || db.searchIndexRepairPending.Load()
+	return db.messageFTSRepairPending.Load() || db.searchIndexRepairPending.Load() || db.toolSubstringRepairPending.Load()
 }
 
 // RepairMessageFTS rebuilds deferred search indexes. Writers wait while it holds db.mu.
@@ -98,39 +98,56 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 	if !db.SearchRepairPending() {
 		return nil
 	}
-	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
-		if err := db.lockWriterCtx(ctx); err != nil {
-			return struct{}{}, err
-		}
-		defer db.mu.Unlock()
-		if db.writerClosed.Load() {
-			return struct{}{}, ErrWriterClosed
-		}
-		w := db.getWriter()
-		if db.messageFTSRepairPending.Load() {
-			var exists bool
-			if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {
-				return struct{}{}, err
+	for {
+		done, err := RetryAcrossHandoff(ctx, db, func() (bool, error) {
+			if err := db.lockWriterCtx(ctx); err != nil {
+				return false, err
 			}
-			if !exists {
-				if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
-					return struct{}{}, err
+			defer db.mu.Unlock()
+			if db.writerClosed.Load() {
+				return false, ErrWriterClosed
+			}
+			w := db.getWriter()
+			if db.messageFTSRepairPending.Load() {
+				var exists bool
+				if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {
+					return false, err
 				}
-			} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
-				return struct{}{}, err
+				if !exists {
+					if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
+						return false, err
+					}
+				} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
+					return false, err
+				}
+				db.messageFTSRepairPending.Store(false)
 			}
-			db.messageFTSRepairPending.Store(false)
+			if db.searchIndexRepairPending.Load() {
+				if _, err := ensureSubstringIndex(ctx, w, nil, false); err != nil {
+					return false, err
+				}
+				if _, err := ensureCJKFTS(ctx, w, false, false); err != nil {
+					return false, err
+				}
+				db.searchIndexRepairPending.Store(false)
+			}
+			if db.toolSubstringRepairPending.Load() {
+				done, err := buildToolSubstringBatch(ctx, w)
+				if err != nil {
+					return false, err
+				}
+				if !done {
+					return false, nil
+				}
+				db.toolSubstringRepairPending.Store(false)
+			}
+			return true, nil
+		})
+		if err != nil {
+			return err
 		}
-		if db.searchIndexRepairPending.Load() {
-			if _, err := ensureSubstringIndex(ctx, w, nil, false); err != nil {
-				return struct{}{}, err
-			}
-			if _, err := ensureCJKFTS(ctx, w, false, false); err != nil {
-				return struct{}{}, err
-			}
-			db.searchIndexRepairPending.Store(false)
+		if done {
+			return nil
 		}
-		return struct{}{}, nil
-	})
-	return err
+	}
 }

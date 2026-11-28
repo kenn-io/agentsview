@@ -553,10 +553,11 @@ func substringUnion(
 			FROM tool_calls tc
 			JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
-			WHERE tc.input_json LIKE ? ESCAPE '\' AND tc.%s`,
-			snippetExpr("tc.input_json"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect())))
-		args = append(args, like)
+			WHERE tc.%s%s AND tc.input_json LIKE ? ESCAPE '\'`,
+			snippetExpr("tc.input_json"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect()), candidates.toolInput.sql))
 		args = append(args, scopeArgs...)
+		args = append(args, candidates.toolInput.args...)
+		args = append(args, like)
 	}
 	if hasSource(f, "tool_result") {
 		// Canonical output: result_content only when the call has no result
@@ -579,15 +580,15 @@ func substringUnion(
 			FROM tool_calls tc
 			JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
-			WHERE tc.result_content LIKE ? ESCAPE '\'
+			WHERE tc.%s%s AND tc.result_content LIKE ? ESCAPE '\'
 			  AND NOT EXISTS (SELECT 1 FROM tool_result_events tre
 			    WHERE tre.session_id = tc.session_id
 			      AND tre.tool_use_id = tc.tool_use_id
-			      AND tc.tool_use_id <> '')
-			  AND tc.%s`,
-			snippetExpr("tc.result_content"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect())))
-		args = append(args, like)
+			      AND tc.tool_use_id <> '')`,
+			snippetExpr("tc.result_content"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "mm", SQLiteQueryDialect()), candidates.toolResult.sql))
 		args = append(args, scopeArgs...)
+		args = append(args, candidates.toolResult.args...)
+		args = append(args, like)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id, s.project, s.agent,
 				s.transcript_revision AS transcript_revision,
@@ -600,10 +601,11 @@ func substringUnion(
 			FROM tool_result_events tre
 			JOIN sessions s ON s.id = tre.session_id
 			`+eventAnchorJoin+`
-			WHERE tre.content LIKE ? ESCAPE '\' AND tre.%s`,
-			snippetExpr("tre.content"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
-		args = append(args, like)
+			WHERE tre.%s%s AND tre.content LIKE ? ESCAPE '\'`,
+			snippetExpr("tre.content"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()), candidates.toolEvent.sql))
 		args = append(args, scopeArgs...)
+		args = append(args, candidates.toolEvent.args...)
+		args = append(args, like)
 	}
 	if hasSource(f, "tool_result") {
 		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, "c.text LIKE ? ESCAPE '\\'", false)...)
