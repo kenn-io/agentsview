@@ -365,7 +365,7 @@ beforeEach(() => {
     .mockResolvedValue(makeToolSequences());
   messages.clear();
   sessionTiming.reset();
-  sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
+  vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(true);
   getTiming.mockReset();
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
@@ -403,7 +403,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
-  sync.serverVersion = null;
+  vi.restoreAllMocks();
   for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
@@ -1031,7 +1031,7 @@ describe("SessionBreadcrumb", () => {
   });
 
   it("omits the open/resume menu for a copied archive", async () => {
-    sync.serverVersion = { host_paths_detached: true } as typeof sync.serverVersion;
+    vi.spyOn(sync, "hostSessionActionsAvailable", "get").mockReturnValue(false);
     sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "" });
     const component = mount(SessionBreadcrumb, {
       target: document.body,

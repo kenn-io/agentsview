@@ -64,6 +64,7 @@ func TestClearHostSources(t *testing.T) {
 			return err
 		}
 		for _, query := range []string{
+			`INSERT INTO sessions(id,project,agent,file_path) VALUES('cloud','project','codex-cloud','/data/0f1e2d3c4b5a69788796a5b4c3d2e1f0/thread.jsonl.zstd')`,
 			`INSERT INTO raw_archive_roots VALUES('root','device','machine','claude','/original/root','configured')`,
 			`INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns) VALUES('root','file','hash',1,1)`,
 			`INSERT INTO raw_archive_sources(manifest_id,root_id,source_key,original_path,canonical_json) VALUES('manifest','root','source','/original/file',x'7b7d')`,
@@ -120,6 +121,9 @@ func TestClearHostSources(t *testing.T) {
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM session_project_identity_snapshots WHERE session_id='a'`).Scan(&snapshots))
 	require.Equal(t, 1, snapshots)
 	require.NoError(t, d.ClearHostSources(ctx))
+	var account string
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT account_key FROM codex_cloud_accounts WHERE session_id='cloud'`).Scan(&account))
+	assert.Equal(t, "0f1e2d3c4b5a69788796a5b4c3d2e1f0", account)
 	for _, table := range []string{"provider_freshness", "skipped_files", "source_failures", "local_session_source_baselines", "claude_subagent_sources", "remote_skipped_files", "parser_checkpoint_blobs", "parser_checkpoints", "artifact_export_queue", "artifact_publications", "artifact_publication_revisions", "artifact_checkpoint_heads", "artifact_checkpoint_floors", "artifact_import_queue", "artifact_import_attempt_generations", "artifact_peer_checkpoint_heads", "artifact_checkpoint_landing_sessions", "artifact_checkpoint_landings", "artifact_checkpoint_stage_sessions", "artifact_checkpoint_stages", "worktree_project_mappings", "project_identity_observations", "session_project_identity_snapshots", "repository_project_names", "worktree_project_mapping_changes", "project_identity_observation_changes", "session_project_identity_snapshot_changes", "diagnostic_events", "git_cache", "friction_issue_links", "friction_filing_state", "artifact_imported_sessions", "raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int
 		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
@@ -128,11 +132,13 @@ func TestClearHostSources(t *testing.T) {
 
 	for _, table := range []string{"sessions", "recall_entries", "insights", "session_deletion_changes", "commit_links", "commit_trailers"} {
 		var project string
-		require.NoError(t, d.Reader().QueryRow(ctx, "SELECT project FROM "+table+" LIMIT 1").Scan(&project))
+		query := "SELECT project FROM " + table + " LIMIT 1"
 		expected := "/work/project"
 		if table == "sessions" {
+			query = "SELECT project FROM sessions WHERE id='a'"
 			expected = path
 		}
+		require.NoError(t, d.Reader().QueryRow(ctx, query).Scan(&project))
 		assert.Equal(t, CopiedProjectLabel(expected), project, table)
 	}
 	var recallCwd string

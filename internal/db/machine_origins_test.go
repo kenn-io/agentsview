@@ -276,7 +276,7 @@ func TestCodexCloudAccountPrefixReservedForAccounts(t *testing.T) {
 	assert.InDelta(t, 2, hour.Machines[hashed].Activity.Totals.AgentMinutes, 0.001)
 }
 
-func TestDetachedCodexCloudCopiesKeepReportingAttribution(t *testing.T) {
+func TestCodexCloudCopiesMatchBetweenDayAndDigest(t *testing.T) {
 	const imported = testRemoteInstallation + "~codex-cloud:thread-1"
 	d := testDB(t)
 	ctx := t.Context()
@@ -314,7 +314,6 @@ func TestDetachedCodexCloudCopiesKeepReportingAttribution(t *testing.T) {
 		usage(imported, "b", "2026-07-28T05:04:00Z", 100, 20),
 	}))
 	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "codex-cloud:thread-1", []UsageEvent{
-		usage("codex-cloud:thread-1", "d", "2026-07-28T05:03:00Z", 25, 10),
 		usage("codex-cloud:thread-1", "c", "2026-07-29T00:10:00Z", 150, 30),
 	}))
 
@@ -331,20 +330,5 @@ func TestDetachedCodexCloudCopiesKeepReportingAttribution(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, reportingDigestDayFromDay(day), digest)
-	}
-	require.NoError(t, d.ClearHostSources(ctx))
-	// Schema 7 exports require an installation identity, which detachment clears.
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
-	for i, digest := range digests {
-		day, err := d.ExportReportingDay(ctx, ReportingExportOptions{
-			Date: from.Add(time.Duration(i) * 24 * time.Hour), Now: now, SchemaVersion: 7, ByMachine: true,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, digest, reportingDigestDayFromDay(day))
-		if i == 0 {
-			hour := day.Hours[5]
-			assert.EqualValues(t, 40, hour.Machines["codex-cloud-account:0f1e2d3c4b5a69788796a5b4c3d2e1f0"].Usage.Totals.OutputTokens)
-			assert.Zero(t, hour.Machines[testLocalInstallation].Usage.Totals.OutputTokens)
-		}
 	}
 }

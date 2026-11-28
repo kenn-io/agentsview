@@ -14,26 +14,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestCopyPreservesAssetReferences(t *testing.T) {
+func TestCopyDetachedArchive(t *testing.T) {
 	ctx := t.Context()
 	source := t.TempDir()
 	assetDir := filepath.Join(source, "assets")
 	require.NoError(t, os.MkdirAll(assetDir, 0o700))
 	ref, _, err := assets.Put(assetDir, "image/png", []byte("canonical image"))
 	require.NoError(t, err)
-	database, err := db.OpenIsolatedContext(ctx, filepath.Join(source, "sessions.db"))
-	require.NoError(t, err)
-	require.NoError(t, database.Close())
-	dest := filepath.Join(t.TempDir(), "copy")
-	require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}}))
-	got, err := os.ReadFile(filepath.Join(dest, "assets", strings.TrimPrefix(ref, "asset://")))
-	require.NoError(t, err)
-	assert.Equal(t, "canonical image", string(got))
-}
-
-func TestCopyDetachedArchive(t *testing.T) {
-	ctx := t.Context()
-	source := t.TempDir()
 	path := filepath.Join(source, "sessions.db")
 	database, err := db.OpenIsolatedContext(ctx, path)
 	require.NoError(t, err)
@@ -49,6 +36,9 @@ func TestCopyDetachedArchive(t *testing.T) {
 	}
 	err = Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}, CustomModelPricing: prices})
 	require.NoError(t, err)
+	got, err := os.ReadFile(filepath.Join(dest, "assets", strings.TrimPrefix(ref, "asset://")))
+	require.NoError(t, err)
+	assert.Equal(t, "canonical image", string(got))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dest)
 	cfg, err := config.LoadCapture()
 	require.NoError(t, err)
@@ -139,11 +129,23 @@ func TestCopyUsageCache(t *testing.T) {
 		require.NoError(t, database.Close())
 		caches := db.UsageCacheFiles(path, id)
 		require.Greater(t, len(caches), 1)
+		cache, err := sql.Open("sqlite3", caches[len(caches)-1])
+		require.NoError(t, err)
+		var rollups int
+		require.NoError(t, cache.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones`).Scan(&rollups))
+		require.Positive(t, rollups)
+		require.NoError(t, cache.Close())
 		require.NoError(t, os.WriteFile(caches[0], []byte("corrupt obsolete cache"), 0o600))
 		dest := filepath.Join(t.TempDir(), "copy")
 		require.NoError(t, Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}}))
-		assert.FileExists(t, filepath.Join(dest, filepath.Base(caches[len(caches)-1])))
+		copiedCache := filepath.Join(dest, filepath.Base(caches[len(caches)-1]))
+		assert.FileExists(t, copiedCache)
 		assert.NoFileExists(t, filepath.Join(dest, filepath.Base(caches[0])))
+		cache, err = sql.Open("sqlite3", copiedCache)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, cache.Close()) })
+		require.NoError(t, cache.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones`).Scan(&rollups))
+		assert.Zero(t, rollups)
 	})
 
 	t.Run("current corrupt cache", func(t *testing.T) {
