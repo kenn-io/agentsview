@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
-
-const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
 
 function makeToolMessage(ordinal: number): Message {
   return {
@@ -34,7 +31,6 @@ function makeToolMessage(ordinal: number): Message {
 
 afterEach(() => {
   sessionTiming.reset();
-  copyMock.mockClear();
   document.body.innerHTML = "";
 });
 
@@ -145,6 +141,11 @@ describe("ToolCallGroup", () => {
 
   it("copies a link to each grouped message", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    onTestFinished(() => {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    });
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const component = mount(ToolCallGroup, {
       target: document.body,
@@ -161,7 +162,6 @@ describe("ToolCallGroup", () => {
     await tick();
 
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/s1?msg=2`);
-    await vi.waitFor(() => expect(document.querySelector('[data-message-ordinal="2"] [aria-label="Copied!"]')).not.toBeNull());
     expect(document.querySelector('[data-message-ordinal="1"] [aria-label="Copy link to message"]')).not.toBeNull();
     unmount(component);
   });

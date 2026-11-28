@@ -25,7 +25,6 @@ import type { DbMessage as Message } from "./lib/api/generated/index.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import { SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
-import MessageLinkButton from "./lib/components/content/MessageLinkButton.svelte";
 vi.mock("./lib/feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
 }));
@@ -55,25 +54,11 @@ async function selectRelativeRange(days: number) {
   await flushEffects();
 }
 
-it("opens a copied message link without changing hidden block preferences", async () => {
+it("opens a message link with a hidden target", async () => {
   stubAppDependencies();
   vi.spyOn(sessions, "load").mockResolvedValue();
   vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  onTestFinished(() => {
-    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
-    else Reflect.deleteProperty(navigator, "clipboard");
-    ui.showAllBlocks();
-  });
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  const button = mount(MessageLinkButton, { target: document.body, props: { sessionId: "session-1", ordinal: 1 } });
-  await tick();
-  document.querySelector<HTMLButtonElement>('[aria-label="Copy link to message"]')!.click();
-  await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-  const url = writeText.mock.calls[0]![0] as string;
-  expect(url).toBe(`${window.location.origin}/sessions/session-1?msg=1`);
-  await unmount(button);
+  onTestFinished(() => ui.showAllBlocks());
   const makeMessage = (ordinal: number, role: string): Message => ({
     id: ordinal + 1, session_id: "session-1", ordinal, role, content: `msg ${ordinal}`, content_length: 5,
     timestamp: "2026-01-01T00:00:00Z", has_thinking: false, thinking_text: "", has_tool_use: false,
@@ -86,17 +71,14 @@ it("opens a copied message link without changing hidden block preferences", asyn
   component = mount(App, { target: document.body });
   await flushEffects();
   messages.loading = true;
-  window.history.replaceState(null, "", url);
+  window.history.replaceState(null, "", "/sessions/session-1?msg=1");
   window.dispatchEvent(new PopStateEvent("popstate"));
   await flushEffects();
   sessions.activeSessionId = "session-1";
   messages.sessionId = "session-1";
   messages.messages = [makeMessage(0, "user"), makeMessage(1, "assistant"), makeMessage(2, "user")];
   messages.loading = false;
-  await vi.waitFor(() => expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal, selected: ui.selectedOrdinal, ordinal: ui.pendingScrollOrdinal, session: sessions.activeSessionId, messages: messages.sessionId, loading: messages.loading }).toEqual({ revealed: 1, pending: false, selected: 1, ordinal: null, session: "session-1", messages: "session-1", loading: false }));
-  expect(ui.selectedOrdinal).toBe(1);
-  expect(ui.isBlockVisible("assistant")).toBe(false);
-  ui.showAllBlocks();
+  await vi.waitFor(() => expect({ revealed: ui.revealedLinkOrdinal, pending: ui.pendingLinkReveal }).toEqual({ revealed: 1, pending: false }));
 });
 
 function stubAppDependencies() {

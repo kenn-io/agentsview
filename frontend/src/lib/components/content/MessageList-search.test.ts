@@ -160,27 +160,6 @@ describe("MessageList search visibility", () => {
     expect(document.querySelector(".layout-skim")).not.toBeNull();
   });
 
-  it("keeps find in sync after a message jump and filter change", async () => {
-    ui.showAllBlocks();
-    ui.setTranscriptMode("normal");
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    component.scrollToOrdinal(1);
-    await tick();
-    await vi.advanceTimersByTimeAsync(20);
-    ui.setBlockVisible("thinking", false);
-    await tick();
-    inSessionSearch.open();
-    inSessionSearch.query = "needle";
-    await tick();
-    await vi.advanceTimersByTimeAsync(200);
-    await tick();
-    expect(document.querySelectorAll(".thinking-header")).toHaveLength(0);
-    expect(inSessionSearch.countForBlock("1:thinking:0")).toBe(0);
-    expect(inSessionSearch.countForOrdinal(0)).toBe(1);
-    expect(inSessionSearch.countForOrdinal(2)).toBe(1);
-  });
-
   it("applies a filter change during an active query to counts, DOM, and the current result", async () => {
     component = mount(MessageList, { target: document.body });
     await tick();

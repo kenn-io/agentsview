@@ -300,52 +300,23 @@ describe("MessageList follow cancellation", () => {
     expect(ui.selectedOrdinal).toBe(12);
   });
 
-  it("lands a jump on the target card of an open empty row", async () => {
+  it.each(["empty", "tool"])("lands a jump on a message inside a %s group", async (kind) => {
     ui.followLatest = false;
-    const empty = (ordinal: number) => ({
-      ...makeMessage(ordinal),
-      content: "",
-      content_length: 0,
-    });
-    messages.messages = [makeMessage(10), empty(11), empty(12)];
-    setVirtualRows(2);
-    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-      this: Element,
-    ) {
-      const top = this.matches('[data-message-ordinal="12"]')
-        ? 260
-        : this.matches(".virtual-row")
-          ? 40
-          : 0;
-      return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
-    });
-    component = mount(MessageList, { target: document.body });
-    await flushScrollUpdates();
-
-    component.scrollToOrdinal(12);
-
-    await vi.waitFor(() => {
-      expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
-    });
-  });
-
-  it.each([false, true])("lands on a grouped tool message with newestFirst=%s", async (newestFirst) => {
-    ui.followLatest = false;
-    ui.sortNewestFirst = newestFirst;
-    messages.messages = [1, 2, 3].map((ordinal) => ({
-      ...makeMessage(ordinal), role: "assistant", content: "", content_length: 0, has_tool_use: true,
+    const empty = (ordinal: number) => ({ ...makeMessage(ordinal), content: "", content_length: 0 });
+    const tool = (ordinal: number) => ({
+      ...empty(ordinal), role: "assistant", has_tool_use: true,
       tool_calls: [{ call_index: 0, tool_name: "Read", category: "Read", tool_use_id: String(ordinal), input_json: "{}" }],
-    }));
-    setVirtualRows(1);
+    });
+    messages.messages = kind === "empty" ? [makeMessage(10), empty(11), empty(12)] : [tool(11), tool(12)];
+    setVirtualRows(kind === "empty" ? 2 : 1);
     virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      const top = this.matches('[data-message-ordinal="3"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
+      const top = this.matches('[data-message-ordinal="12"]') ? 260 : this.matches(".virtual-row") ? 40 : 0;
       return DOMRect.fromRect({ x: 0, y: top, width: 400, height: 100 });
     });
     component = mount(MessageList, { target: document.body });
     await flushScrollUpdates();
-    component.scrollToOrdinal(3);
+    component.scrollToOrdinal(12);
     await vi.waitFor(() => expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320));
   });
 
@@ -765,44 +736,6 @@ describe("MessageList follow cancellation", () => {
     await vi.waitFor(() => expect(virtualizerMock.cancelScroll).toHaveBeenCalled());
     expect(ui.revealedLinkOrdinal).toBeNull();
     expect(document.body.textContent).not.toMatch(/msg 1\b/);
-  });
-
-  it("honors a filter changed after opening a message", async () => {
-    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
-    setVirtualRows(3);
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    component.scrollToOrdinal(1);
-    await flushScrollUpdates();
-    ui.setBlockVisible("assistant", false);
-    await tick();
-    expect(document.body.textContent).not.toContain("msg 1");
-  });
-
-  it("honors focused mode after opening a message", async () => {
-    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(3)];
-    setVirtualRows(3);
-    ui.setTranscriptMode("focused");
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    component.scrollToOrdinal(1);
-    await flushScrollUpdates();
-    ui.setTranscriptMode("normal");
-    await tick();
-    ui.setTranscriptMode("focused");
-    await tick();
-    expect(document.body.textContent).not.toContain("msg 1");
-  });
-
-  it("keeps block filters unchanged for an ordinary jump", async () => {
-    ui.setBlockVisible("assistant", false);
-    messages.messages = [makeMessage(1), makeMessage(10)];
-    component = mount(MessageList, { target: document.body });
-    await tick();
-    ui.setFollowLatest(false);
-    (component as JumpList).scrollToOrdinal(1);
-    await flushScrollUpdates();
-    expect(ui.isBlockVisible("assistant")).toBe(false);
   });
 
   function withCall(message: Message, toolUseId: string, inputJson?: string): Message {

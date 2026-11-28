@@ -155,24 +155,30 @@ beforeEach(() => {
   setLocale("en");
 });
 
-it("copies a link to the message and confirms the copy", async () => {
-  router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
-  try {
-    await render(message({ session_id: "session-1", ordinal: 7 }));
-    await click('[aria-label="Copy link to message"]');
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
-    expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
-  } finally {
-    window.history.replaceState(null, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
+it.each([
+  { name: "web", sessionId: "session-1", expected: () => `${window.location.origin}/sessions/session-1?msg=7` },
+  { name: "remote", sessionId: "session-1", expected: () => "https://example.org/archive/sessions/session-1?msg=7" },
+  { name: "desktop", sessionId: "codex:session-1", expected: () => "agentsview://sessions/codex%3Asession-1?msg=7" },
+  { name: "read-only", sessionId: "session-1", expected: undefined },
+])("copies a link to the message on $name", async ({ name, sessionId, expected }) => {
+  if (name === "web") router.navigate("sessions", { project: "project-a", agent: "claude", desktop: "on" });
+  if (name === "remote") {
+    state.isDesktop = true;
+    localStorage.setItem("agentsview-server-url", "https://example.org/archive");
   }
-});
-
-it("offers the message link where mutations are disabled", async () => {
-  await render(message({ session_id: "session-1", ordinal: 7 }), { allowMutations: false });
-  await click('[aria-label="Copy link to message"]');
-  expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/sessions/session-1?msg=7`);
-  expect(document.querySelector('[aria-label="Copied!"]')?.getAttribute("title")).toBe("Copied!");
+  if (name === "desktop") state.isDesktop = true;
+  try {
+    await render(message({ session_id: sessionId, ordinal: 7 }), { allowMutations: name !== "read-only" });
+    await click('[aria-label="Copy link to message"]');
+    if (expected) expect(writeText).toHaveBeenCalledWith(expected());
+    else expect(writeText).toHaveBeenCalledOnce();
+    if (name === "web") expect(document.querySelector('[aria-label="Copied!"]')).not.toBeNull();
+  } finally {
+    if (name === "web") {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }
 });
 
 it("does not confirm a failed message link copy", async () => {
@@ -183,20 +189,6 @@ it("does not confirm a failed message link copy", async () => {
   expect(document.querySelector('[aria-label="Copied!"]')).toBeNull();
 });
 
-it("copies a link to the selected remote server", async () => {
-  state.isDesktop = true;
-  localStorage.setItem("agentsview-server-url", "https://example.org/archive");
-  await render(message({ session_id: "session-1", ordinal: 7 }));
-  await click('[aria-label="Copy link to message"]');
-  expect(writeText).toHaveBeenCalledWith("https://example.org/archive/sessions/session-1?msg=7");
-});
-
-it("copies a desktop deep link instead of the temporary backend port", async () => {
-  state.isDesktop = true;
-  await render(message({ session_id: "codex:session-1", ordinal: 7 }));
-  await click('[aria-label="Copy link to message"]');
-  expect(writeText).toHaveBeenCalledWith("agentsview://sessions/codex%3Asession-1?msg=7");
-});
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.replaceChildren();
