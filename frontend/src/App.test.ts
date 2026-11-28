@@ -115,6 +115,13 @@ it("opens a copied message link with its target hidden by saved filters", async 
   );
   expect(ui.isBlockVisible("assistant")).toBe(false);
   expect(ui.selectedOrdinal).toBe(1);
+  ui.selectOrdinal(1);
+  await tick();
+  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 1, 2]);
+  ui.selectOrdinal(2);
+  await tick();
+  expect(inSessionSearch.scope?.messages.map((item) => item.ordinal)).toEqual([0, 2]);
+  expect(router.params.msg).toBeUndefined();
 });
 
 function stubAppDependencies() {

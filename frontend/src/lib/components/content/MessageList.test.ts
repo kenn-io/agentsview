@@ -1289,6 +1289,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("keeps hidden blocks hidden when a linked message is already visible", async () => {
+    ui.setBlockVisible("thinking", false);
     window.history.replaceState(null, "", "/sessions/s1?msg=1");
     window.dispatchEvent(new PopStateEvent("popstate"));
     onTestFinished(() => {
@@ -1296,7 +1297,6 @@ describe("MessageList follow cancellation", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     ui.followLatest = false;
-    ui.setBlockVisible("thinking", false);
     messages.messages = [
       {
         ...makeMessage(1),
@@ -1311,6 +1311,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("opens a ?msg link on a message the saved filters hide without changing them", async () => {
+    ui.setBlockVisible("assistant", false);
     window.history.replaceState(null, "", "/sessions/s1?msg=1");
     window.dispatchEvent(new PopStateEvent("popstate"));
     onTestFinished(() => {
@@ -1318,7 +1319,6 @@ describe("MessageList follow cancellation", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     ui.followLatest = false;
-    ui.setBlockVisible("assistant", false);
     const linked = { ...makeMessage(1), content: "linked answer", content_length: 13 };
     messages.messages = [makeMessage(0), linked, makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;

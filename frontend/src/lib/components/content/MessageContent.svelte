@@ -255,19 +255,19 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
     {#if allowMutations}
-    <button type="button" class="pin-btn" class:pinned
+    <button type="button" class="message-action-btn pin-btn" class:pinned
       title={pinned ? m.message_content_unpin_message() : m.message_content_pin_message()} onclick={handleTogglePin}>
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
     {/if}
-    <button type="button" class="pin-btn" onclick={handleCopyLink}
+    <button type="button" class="message-action-btn" onclick={handleCopyLink}
       aria-label={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}
       title={linkCopied ? m.message_content_copied() : m.message_content_copy_link()}>
       {#if linkCopied}<CheckIcon size="14" strokeWidth="2.4" aria-hidden="true" />
       {:else}<LinkIcon size="14" strokeWidth="1.8" aria-hidden="true" />{/if}
     </button>
     {#if canForkFromMessage}
-      <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
+      <button type="button" class="message-action-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
         <CirclePlayIcon size="14" strokeWidth="1.8" aria-hidden="true" />
       </button>
@@ -421,17 +421,17 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
   .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
   .message:hover :global(.kit-copy-btn) { opacity: 1; }
-  .pin-btn {
+  .message-action-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: none; border-radius: var(--radius-sm, 4px); background: transparent;
     color: var(--text-muted); cursor: pointer; opacity: 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s; flex-shrink: 0;
   }
-  .message:hover .pin-btn, .pin-btn:focus-visible, .pin-btn.pinned { opacity: 1; }
-  @media (hover: none) { .pin-btn { opacity: 1; } }
-  .pin-btn:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
+  .message:hover .message-action-btn, .message-action-btn:focus-visible, .pin-btn.pinned { opacity: 1; }
+  @media (hover: none) { .message-action-btn { opacity: 1; } }
+  .message-action-btn:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
   .pin-btn.pinned { color: var(--accent-blue); }
-  .pin-btn:active { transform: var(--press-transform); }
+  .message-action-btn:active { transform: var(--press-transform); }
   .pin-feedback, .fork-feedback { font-size: 11px; color: var(--text-muted); animation: fade-in-out 1.5s ease-in-out; }
   .pin-feedback[role="alert"] { animation: none; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }

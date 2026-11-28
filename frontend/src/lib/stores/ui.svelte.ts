@@ -1,4 +1,5 @@
 import { SettingsUpdateRequestZoomLevel as ZoomLevel } from "../api/generated/models/settingsUpdateRequestZoomLevel.js";
+import { router } from "./router.svelte.js";
 import {
   getHighContrast,
   getThemeMode,
@@ -548,6 +549,7 @@ class UIStore {
   }
 
   setBlockVisible(type: BlockType, visible: boolean) {
+    if (this.visibleBlocks.has(type) !== visible) router.clearMessageTarget();
     const next = new Set(this.visibleBlocks);
     if (visible) {
       next.add(type);
@@ -559,6 +561,7 @@ class UIStore {
   }
 
   toggleBlock(type: BlockType) {
+    router.clearMessageTarget();
     const next = new Set(this.visibleBlocks);
     if (next.has(type)) {
       next.delete(type);
@@ -570,6 +573,7 @@ class UIStore {
   }
 
   showAllBlocks() {
+    if (this.hasBlockFilters) router.clearMessageTarget();
     this.visibleBlocks = new Set(ALL_BLOCK_TYPES);
     this.persistBlockFilters();
   }
@@ -608,6 +612,7 @@ class UIStore {
   }
 
   setTranscriptMode(mode: TranscriptMode) {
+    if (this.transcriptMode !== mode) router.clearMessageTarget();
     this.transcriptMode = mode;
   }
 
@@ -636,7 +641,22 @@ class UIStore {
   }
 
   selectOrdinal(ordinal: number) {
+    this.clearMessageTargetForJump(ordinal);
     this.selectedOrdinal = ordinal;
+  }
+
+  private clearMessageTargetForJump(ordinal: number, sessionId?: string, resolvingLast = false) {
+    const target = router.params["msg"];
+    if (target === undefined) return;
+    const linked =
+      target === "last"
+        ? resolvingLast && this.pendingScrollOrdinal === -1
+          ? ordinal
+          : this.selectedOrdinal
+        : Number.parseInt(target, 10);
+    if ((sessionId !== undefined && sessionId !== router.sessionId) || ordinal !== linked) {
+      router.clearMessageTarget();
+    }
   }
 
   clearSelection() {
@@ -651,6 +671,7 @@ class UIStore {
   }
 
   scrollToOrdinal(ordinal: number, sessionId?: string, call?: ScrollCall) {
+    this.clearMessageTargetForJump(ordinal, sessionId, true);
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
@@ -661,6 +682,7 @@ class UIStore {
   setFollowLatest(enabled: boolean) {
     this.followLatest = enabled;
     if (enabled) {
+      router.clearMessageTarget();
       this.followLatestRequest += 1;
       this.selectedOrdinal = null;
       this.pendingScrollOrdinal = null;
