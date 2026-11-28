@@ -157,6 +157,14 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "changing models requires rebuilding",
 		},
 		{
+			name: "local server rejects namespaced alias",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.Model = "nomic-ai/nomic-embed-text-v1.5"
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.Local, s.Endpoint = true, "" })
+			},
+			wantErr: "changing models requires rebuilding",
+		},
+		{
 			name: "local server preserves nomic-embed-text",
 			mutate: func(c *VectorConfig) {
 				c.Embeddings.Model = "nomic-embed-text"
@@ -540,17 +548,75 @@ timeout = '1s'
 		assert.Equal(t, "5m", f.LoadFile(t).Vector.Embeddings.Servers["default"].Timeout)
 	})
 
-	t.Run("new Nomic model gets defaults", func(t *testing.T) {
+	for _, tc := range []struct {
+		oldModel, model string
+	}{
+		{"custom", "nomic-embed-text"},
+		{"custom", "nomic-embed-text:latest"},
+		{"custom", "nomic-embed-text:v1.5"},
+		{"custom", "nomic-embed-text-v1.5"},
+		{"custom", "nomic-ai/nomic-embed-text-v1.5"},
+		{"nomic-embed-text", "nomic-embed-text-v1.5"},
+	} {
+		t.Run(tc.oldModel+" to "+tc.model, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true, "embeddings": map[string]any{
+				"model": tc.oldModel, "dimension": 768, "input_suffix": "suffix", "query_prefix": "custom: ",
+			}}})
+			cfg := f.LoadFile(t)
+			candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", tc.model, 768, "")
+			require.NoError(t, err)
+			require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", tc.model, 768, ""))
+			for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+				assert.Equal(t, tc.model, got.Model)
+				assert.Equal(t, 768, got.Dimension)
+				assert.Empty(t, got.InputSuffix)
+				assert.Equal(t, 4000, got.MaxInputChars)
+				assert.Equal(t, 2048, got.ModelContextTokens)
+				assert.Equal(t, "search_query: ", got.QueryPrefix)
+				assert.Equal(t, "search_document: ", got.DocumentPrefix)
+			}
+		})
+	}
+
+	t.Run("new Gemini model gets role prefixes", func(t *testing.T) {
 		f := newConfigFixture(t)
-		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\ninput_suffix = 'suffix'\n")
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\nquery_prefix = 'old: '\n")
 		cfg := f.LoadFile(t)
-		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-embed-text", 768, ""))
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "gemini-embedding-2", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "gemini-embedding-2", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			assert.Equal(t, "gemini-embedding-2", got.Model)
+			assert.Equal(t, 768, got.Dimension)
+			assert.Equal(t, "task: search result | query: ", got.QueryPrefix)
+			assert.Equal(t, "title: none | text: ", got.DocumentPrefix)
+		}
+	})
+
+	t.Run("same Gemini model keeps recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'gemini-embedding-2'\ndimension = 768\nquery_prefix = 'custom: '\ndocument_prefix = ''\ninput_suffix = 'suffix'\n")
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "gemini-embedding-2", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "gemini-embedding-2", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			assert.Equal(t, "custom: ", got.QueryPrefix)
+			assert.Empty(t, got.DocumentPrefix)
+			assert.Equal(t, "suffix", got.InputSuffix)
+		}
+	})
+
+	t.Run("same alias keeps generic defaults", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-ai/nomic-embed-text-v1.5'\ndimension = 768\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "nomic-ai/nomic-embed-text-v1.5", 768, ""))
 		got := f.LoadFile(t).Vector.Embeddings
-		assert.Empty(t, got.InputSuffix)
-		assert.Equal(t, 4000, got.MaxInputChars)
-		assert.Equal(t, 2048, got.ModelContextTokens)
-		assert.Equal(t, "search_query: ", got.QueryPrefix)
-		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+		assert.Empty(t, got.QueryPrefix)
+		assert.Empty(t, got.DocumentPrefix)
+		assert.Equal(t, 8192, got.MaxInputChars)
 	})
 
 	for _, tc := range []struct {

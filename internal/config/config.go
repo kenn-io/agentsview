@@ -4349,7 +4349,7 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 		embeddings["model"] = model
 		embeddings["dimension"] = dimension
 		embeddings["servers"] = map[string]any{"default": server}
-		if isNomicModel(model) && oldModel != model {
+		if oldModel != model && (isNomicModel(model) || model == "nomic-embed-text-v1.5" || model == "nomic-ai/nomic-embed-text-v1.5") {
 			for key, value := range map[string]any{
 				"max_input_chars":      nomicMaxInputChars,
 				"model_context_tokens": nomicModelContextTokens,
@@ -4360,6 +4360,9 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 					embeddings[key] = value
 				}
 			}
+		} else if oldModel != model && model == "gemini-embedding-2" {
+			embeddings["query_prefix"] = "task: search result | query: "
+			embeddings["document_prefix"] = "title: none | text: "
 		}
 		section["embeddings"] = embeddings
 	})

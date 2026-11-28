@@ -74,6 +74,19 @@ func TestAgentAdvertisedCommandsParse(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsSwitchHelp(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "index", "embeddings", "switch", "--help")
+	require.NoError(t, err)
+	for _, text := range []string{
+		"The same model keeps its recipe", "When the model changes",
+		"nomic-embed-text,", "nomic-embed-text:latest", "nomic-embed-text:v1.5",
+		"nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1.5",
+		"search_query: ", "search_document: ",
+	} {
+		assert.Contains(t, help, text)
+	}
+}
+
 func TestAgentHelpCommandChecker(t *testing.T) {
 	for _, line := range []string{
 		"agentsview session get <id> --json",
