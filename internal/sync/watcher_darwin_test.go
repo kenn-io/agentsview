@@ -1408,6 +1408,7 @@ func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
+	rootOpen := backend.logical[root].open.Load
 	watcher.Start()
 
 	first := filepath.Join(root, "first.json")
@@ -1424,6 +1425,9 @@ func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
+	// The callback publishes the batch before recovery acknowledges it and
+	// reopens path delivery. Wait before requiring an ordinary file event.
+	require.Eventually(t, rootOpen, 5*time.Second, time.Millisecond)
 	second := filepath.Join(root, "second.json")
 	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
