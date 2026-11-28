@@ -44,15 +44,12 @@ func TestCopyPreservesAssetReferences(t *testing.T) {
 			}
 			parent := t.TempDir()
 			dest := filepath.Join(parent, "copy")
-			_, err = Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
-			if state != "valid" {
-				require.ErrorContains(t, err, "asset")
-				entries, err := os.ReadDir(parent)
-				require.NoError(t, err)
-				assert.Empty(t, entries)
-				return
-			}
+			report, err := Copy(ctx, CopyOptions{DataDir: source, Destination: dest, Settings: RecoverySettings{LocalMachineName: "source"}})
 			require.NoError(t, err)
+			if state == "missing" {
+				assert.Contains(t, strings.Join(append(report.Gaps, report.Excluded...), "\n"), strings.TrimPrefix(ref, "asset://"))
+				delete(files, strings.TrimPrefix(ref, "asset://"))
+			}
 			for name, want := range files {
 				for _, dir := range []string{assetDir, filepath.Join(dest, "assets")} {
 					got, err := os.ReadFile(filepath.Join(dir, name))
