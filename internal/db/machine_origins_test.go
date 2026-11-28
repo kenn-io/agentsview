@@ -276,7 +276,7 @@ func TestCodexCloudAccountPrefixReservedForAccounts(t *testing.T) {
 	assert.InDelta(t, 2, hour.Machines[hashed].Activity.Totals.AgentMinutes, 0.001)
 }
 
-func TestCodexCloudCopiesMatchBetweenDayAndDigest(t *testing.T) {
+func TestDetachedCodexCloudCopiesKeepReportingAttribution(t *testing.T) {
 	const imported = testRemoteInstallation + "~codex-cloud:thread-1"
 	d := testDB(t)
 	ctx := t.Context()

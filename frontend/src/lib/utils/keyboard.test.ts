@@ -88,26 +88,28 @@ describe("registerShortcuts", () => {
     }
   });
 
-  it.each([
-    ["claude", { host_paths_detached: true }],
-    ["claude", null],
-  ])("does not copy a %s resume command for version %j", async (agent, version) => {
-    sync.serverVersion = version as typeof sync.serverVersion;
-    sessions.sessions = [{ id: `${agent}:copied`, agent } as (typeof sessions.sessions)[number]];
-    sessions.activeSessionId = `${agent}:copied`;
-    const resume = vi
-      .spyOn(SessionsService, "postApiV1SessionsByIdResume")
-      .mockRejectedValue(new Error("detached"));
-    try {
-      fireKey("c");
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(resume).not.toHaveBeenCalled();
-      expect(copyToClipboard).not.toHaveBeenCalled();
-    } finally {
-      sync.serverVersion = null;
-    }
-  });
+  it.each([{ host_paths_detached: true }, null])(
+    "does not copy a Claude resume command for version %j",
+    async (version) => {
+      sync.serverVersion = version as typeof sync.serverVersion;
+      sessions.sessions = [
+        { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
+      ];
+      sessions.activeSessionId = "claude:copied";
+      const resume = vi
+        .spyOn(SessionsService, "postApiV1SessionsByIdResume")
+        .mockRejectedValue(new Error("detached"));
+      try {
+        fireKey("c");
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(resume).not.toHaveBeenCalled();
+        expect(copyToClipboard).not.toHaveBeenCalled();
+      } finally {
+        sync.serverVersion = null;
+      }
+    },
+  );
 
   describe("remote c copy", () => {
     it.each([
