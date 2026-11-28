@@ -863,6 +863,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		repairMessageFTS(ctx, idleTracker, database.RepairMessageFTS)
 	}()
 	defer func() { requestRestart(nil); <-repairDone }()
+	prLinksDone := make(chan struct{})
+	go func() {
+		defer close(prLinksDone)
+		runDeferredArchiveTask(ctx, idleTracker, "pull request link backfill", database.BackfillPRLinks)
+	}()
+	defer func() { requestRestart(nil); <-prLinksDone }()
 	if engine != nil && !cfg.NoSync && skipInitialSync {
 		fallbackCtx, cancelFallback := context.WithCancel(ctx)
 		fallbackDone := make(chan struct{})
@@ -935,6 +941,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 }
 
 func repairMessageFTS(ctx context.Context, idleTracker *server.IdleTracker, repair func(context.Context) error) {
+	runDeferredArchiveTask(ctx, idleTracker, "search index repair", repair)
+}
+
+func runDeferredArchiveTask(ctx context.Context, idleTracker *server.IdleTracker, name string, task func(context.Context) error) {
 	policy := backoff.NewExponentialBackOff()
 	policy.InitialInterval = time.Minute
 	policy.MaxInterval = time.Hour
@@ -943,10 +953,10 @@ func repairMessageFTS(ctx context.Context, idleTracker *server.IdleTracker, repa
 		if !ok {
 			return struct{}{}, backoff.Permanent(context.Canceled)
 		}
-		err := repair(ctx)
+		err := task(ctx)
 		done()
 		if err != nil && ctx.Err() == nil {
-			log.Printf("search index repair: %v", err)
+			log.Printf("%s: %v", name, err)
 		}
 		return struct{}{}, err
 	}, backoff.WithBackOff(policy), backoff.WithMaxElapsedTime(0))

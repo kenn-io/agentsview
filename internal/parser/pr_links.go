@@ -122,30 +122,57 @@ type prLinkIdentity struct {
 	number           int
 }
 
+func isPromptPRDelimiter(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("<>\"'()[]", r)
+}
+
 // PromptPRLinksContext extracts pull and merge request URLs from text,
 // stopping when ctx ends so callers holding locks can interrupt scanning.
 func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var links prLinkCollector
 	for pos := 0; pos < len(text); {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		start := pos
-		checkAt := pos + 4096
-		for pos < len(text) {
-			r, n := utf8.DecodeRuneInString(text[pos:])
-			if unicode.IsSpace(r) || strings.ContainsRune("<>\"'()[]", r) {
+		idx := strings.Index(text[pos:], "://")
+		if idx < 0 {
+			break
+		}
+		sep := pos + idx
+		start := sep
+		checkBack := start - 4096
+		for start > pos {
+			r, n := utf8.DecodeLastRuneInString(text[pos:start])
+			if isPromptPRDelimiter(r) {
 				break
 			}
-			pos += n
-			if pos >= checkAt {
-				checkAt = pos + 4096
+			start -= n
+			if start <= checkBack {
+				checkBack = start - 4096
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
 			}
 		}
-		token := text[start:pos]
+		end := sep + 3
+		checkFwd := end + 4096
+		for end < len(text) {
+			r, n := utf8.DecodeRuneInString(text[end:])
+			if isPromptPRDelimiter(r) {
+				break
+			}
+			end += n
+			if end >= checkFwd {
+				checkFwd = end + 4096
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+		}
+		token := text[start:end]
 		var starts []int
 		query := false
 		queryCanSeparate := false
@@ -183,11 +210,11 @@ func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
 					return nil, err
 				}
 			}
-			end := len(token)
+			tokEnd := len(token)
 			if i+1 < len(starts) {
-				end = starts[i+1]
+				tokEnd = starts[i+1]
 			}
-			candidate := token[start:end]
+			candidate := token[start:tokEnd]
 			if i+1 < len(starts) {
 				candidate = strings.TrimRightFunc(candidate, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSymbol(r) })
 			}
@@ -212,6 +239,7 @@ func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
 				links.add(link)
 			}
 		}
+		pos = end
 		if pos < len(text) {
 			_, n := utf8.DecodeRuneInString(text[pos:])
 			pos += n

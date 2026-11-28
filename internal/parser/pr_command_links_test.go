@@ -68,6 +68,11 @@ func TestCommandPRLinks(t *testing.T) {
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, ""},
 		{`GH_HOST=git.example gh pr view 41 -R example/repo; gh pr view 42 -R example/repo`, ""},
 		{`env GH_PAGER=cat gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42"},
+		{`g'h' p"r" view 42 -R example/repo`, "https://github.com/example/repo/pull/42"},
+		{"g\\\nh pr view 43 -R example/repo", "https://github.com/example/repo/pull/43"},
+		{`bash -c 'g'\''h' p\"r\" view 44 -R example/repo'`, ""},
+		{`bash -c 'g'"'"'h'"'"' p"r" view 44 -R example/repo'`, "https://github.com/example/repo/pull/44"},
+		{`git status && go test ./...`, ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			links, err := AnalyzePRCommand(t.Context(), tc.command)

@@ -1018,6 +1018,7 @@ type DB struct {
 	messageFTSRepairPending    atomic.Bool
 	searchIndexRepairPending   atomic.Bool
 	toolSubstringRepairPending atomic.Bool
+	prLinksBackfillPending     atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -1543,9 +1544,10 @@ func OpenWithProgress(
 	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
-// OpenDaemonWithProgress defers search index repair until the daemon listens.
+// OpenDaemonWithProgress defers search index repair and pull request link
+// backfill until the daemon listens.
 func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
-	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
+	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true, deferPRLinksBackfill: true}, policy, progress)
 }
 
 // OpenIsolated opens an archive without starting long-running database
@@ -1663,6 +1665,7 @@ type openOptions struct {
 	backgroundMaintenance        bool
 	deferRepositoryProjectRepair bool
 	deferMessageFTSRepair        bool
+	deferPRLinksBackfill         bool
 }
 
 func open(
@@ -1760,6 +1763,9 @@ func open(
 		}
 		if err := d.setDataVersion(ctx); err != nil {
 			return closeOnError(fmt.Errorf("setting data version: %w", err))
+		}
+		if err := d.preparePRLinksBackfill(ctx, progress, options.deferPRLinksBackfill); err != nil {
+			return closeOnError(fmt.Errorf("backfilling pull request links: %w", err))
 		}
 	}
 
@@ -2664,7 +2670,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		},
 		{
 			"sessions", "structured_pr_links",
-			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
+			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links",
 		},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{

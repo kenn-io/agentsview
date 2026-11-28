@@ -72,13 +72,13 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
 	182:                         {parser.AgentEvener},
 	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
-	184:                         {}, // Existing prompts are indexed on open; nothing to reparse.
+	184:                         {}, // Existing prompts are indexed on open or deferred daemon backfill; nothing to reparse.
 	185:                         {}, // Account stamps are written by the next usage sync; nothing to reparse.
 	186:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	187:                         {parser.AgentHermes, parser.AgentAugureDesktop},
 	188:                         {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentPrimeAgent},
 	189:                         {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate, parser.AgentOpenClaude, parser.AgentAmp, parser.AgentCursor, parser.AgentFactory, parser.AgentIflow, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentDevin, parser.AgentOpenHands, parser.AgentZCode, parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentTau, parser.AgentCommandCode, parser.AgentQwen, parser.AgentQwenPaw, parser.AgentGemini, parser.AgentGoose, parser.AgentGrok, parser.AgentFx, parser.AgentCline, parser.AgentZencoder, parser.AgentWorkBuddy, parser.AgentDeepSeekTUI, parser.AgentKiro, parser.AgentCodebuff, parser.AgentPositAssistant},
-	190:                         {}, // Retained tool calls are indexed on open.
+	190:                         {}, // Retained tool calls are indexed on open or deferred daemon backfill.
 	191:                         {}, // Native title reconciliation backfills Antigravity CLI titles without reparsing.
 	192:                         {parser.AgentCodex},
 	193:                         {parser.AgentMusePersonal},
