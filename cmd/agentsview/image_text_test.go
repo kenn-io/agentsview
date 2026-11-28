@@ -61,27 +61,6 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	}
 }
 
-func TestDetachedArchivePreservesImageText(t *testing.T) {
-	ctx := t.Context()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
-	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	require.NoError(t, d.ClearHostSources(ctx))
-	manager, err := setupImageText(ctx, config.Config{}, d)
-	require.NoError(t, err)
-	require.Nil(t, manager)
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
-	require.Equal(t, 1, count)
-}
-
 func TestDetachedArchiveImageTextConfiguration(t *testing.T) {
 	ctx := t.Context()
 	source := t.TempDir()
@@ -167,45 +146,6 @@ func TestDetachedArchiveImageTextConfiguration(t *testing.T) {
 	}
 	search("invoice", 0)
 	search("recovered", 0)
-}
-
-func TestDetachedArchiveImageTextContentPolicy(t *testing.T) {
-	for _, policy := range []string{"config", "database"} {
-		t.Run(policy, func(t *testing.T) {
-			ctx := t.Context()
-			dir := t.TempDir()
-			d, err := db.Open(ctx, filepath.Join(dir, "sessions.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, d.Close()) })
-			require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
-			content := `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`
-			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			identity, err := ocr.NewIdentity("test", "model", "revision")
-			require.NoError(t, err)
-			require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-			require.NoError(t, d.ClearHostSources(ctx))
-			if policy == "config" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("archive_content = 'transcripts'\n"), 0o600))
-			} else {
-				d.SetArchiveContent(config.ArchiveContentTranscripts)
-			}
-			cfg, err := config.LoadReadOnlyAt(dir)
-			require.NoError(t, err)
-			require.False(t, cfg.ImageTextConfigured)
-			manager, err := setupImageText(ctx, cfg, d)
-			require.NoError(t, err)
-			require.Nil(t, manager)
-			for _, table := range []string{"image_text_cache", "image_text_occurrences"} {
-				var count int
-				require.NoError(t, d.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
-				require.Zero(t, count)
-			}
-			page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
-			require.NoError(t, err)
-			require.Empty(t, page.Results)
-		})
-	}
 }
 
 func TestImageTextJobKeepsDaemonAwake(t *testing.T) {

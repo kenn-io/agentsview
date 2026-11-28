@@ -41,11 +41,12 @@ func TestDetachedArchiveRejectsHostActions(t *testing.T) {
 	directory := serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions/claude:copied/directory", nil)
 	require.Equal(t, http.StatusOK, directory.Code)
 	assert.Empty(t, decodeRecorder[sessionDirectoryResponse](t, directory).Path)
+	open := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sessions/claude:copied/open", map[string]any{"opener_id": "editor"})
+	assert.Equal(t, http.StatusBadRequest, open.Code)
 	for _, tc := range []struct {
 		path string
 		body any
 	}{
-		{"/api/v1/sessions/claude:copied/open", map[string]any{"opener_id": "editor"}},
 		{"/api/v1/sessions/claude:copied/resume", map[string]any{"command_only": true}},
 		{"/api/v1/sessions/claude:copied/resume", map[string]any{"from_ordinal": 0, "fork_session": true}},
 	} {

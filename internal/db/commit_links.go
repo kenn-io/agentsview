@@ -710,13 +710,6 @@ var commitLinkSelect = `WITH trailer_owners AS (SELECT key AS trailer_id,value A
 func (d *DB) StoreTrailerCommitLinks(ctx context.Context, repo string, commits []gitlog.TrailerCommit) (int, error) {
 	var stored int
 	err := d.Update(ctx, func(tx *sql.Tx) error {
-		var detached bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='host_paths_detached' AND value='1')`).Scan(&detached); err != nil {
-			return err
-		}
-		if detached {
-			repo = ""
-		}
 		changed := map[string]bool{}
 		if d.ArchiveContent().UsageOnly() {
 			commits = nil

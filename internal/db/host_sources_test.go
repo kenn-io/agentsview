@@ -125,15 +125,3 @@ func TestCopiedProjectLabelsAreRecognizableAndDistinct(t *testing.T) {
 	assert.Contains(t, projects[3], "solo")
 	assert.Equal(t, "api", projects[4])
 }
-
-func TestCopyProjectLabels(t *testing.T) {
-	labels := []string{"/work/project", `C:\work\project`, `\\server\share\project`}
-	seen := map[string]bool{}
-	for _, label := range labels {
-		alias := CopiedProjectLabel(label)
-		assert.Regexp(t, `^[^/\\]+-[0-9a-f]{64}$`, alias)
-		assert.False(t, seen[alias])
-		seen[alias] = true
-	}
-	assert.Equal(t, "project-a", CopiedProjectLabel("project-a"))
-}

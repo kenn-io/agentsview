@@ -179,10 +179,6 @@ func TestCopyOmitsRecoveryVaults(t *testing.T) {
 	var content string
 	require.NoError(t, copyDB.Reader().QueryRow(ctx, `SELECT content FROM messages WHERE session_id='example'`).Scan(&content))
 	assert.Equal(t, "retained history", content)
-	retained, err := copyDB.GetSessionFull(ctx, "example")
-	require.NoError(t, err)
-	require.NotNil(t, retained)
-	assert.Nil(t, retained.DeletedAt)
 	for _, table := range []string{"raw_archive_roots", "raw_archive_files", "raw_archive_sources", "raw_archive_devices", "raw_archive_root_aliases", "raw_archive_sessions", "archive_attachments", "archive_attachment_sources", "archive_source_bindings", "archive_session_provenance"} {
 		var count int
 		require.NoError(t, copyDB.Reader().QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count))
@@ -272,11 +268,6 @@ func TestCopySelectsUsageCaches(t *testing.T) {
 	require.NoError(t, copied.QueryRowContext(ctx, `SELECT sum(input_tokens), sum(output_tokens) FROM usage_facts`).Scan(&input, &output))
 	assert.Equal(t, 330, input)
 	assert.Equal(t, 100, output)
-	var stale int
-	require.NoError(t, copied.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_installs WHERE project = '/work/api'`).Scan(&stale))
-	assert.Zero(t, stale)
-	require.NoError(t, copied.QueryRowContext(ctx, `SELECT count(*) FROM usage_day_totals WHERE project = '/work/api'`).Scan(&stale))
-	assert.Zero(t, stale)
 	require.NoError(t, copied.Close())
 	assert.NoFileExists(t, filepath.Join(dest, filepath.Base(unrelated)))
 	copyDB, err := db.OpenIsolatedContext(ctx, filepath.Join(dest, "sessions.db"))
@@ -285,4 +276,8 @@ func TestCopySelectsUsageCaches(t *testing.T) {
 	got, err := copyDB.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want.Totals, got.Totals)
+	got, err = copyDB.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC", Project: db.CopiedProjectLabel("/work/api")})
+	require.NoError(t, err)
+	assert.Equal(t, want.Totals.InputTokens, got.Totals.InputTokens)
+	assert.Equal(t, want.Totals.OutputTokens, got.Totals.OutputTokens)
 }

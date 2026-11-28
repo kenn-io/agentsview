@@ -965,20 +965,15 @@ type emptyTrashResponse struct {
 	Deleted int `json:"deleted"`
 }
 
-func (s *Server) hostPathsDetached(ctx context.Context) (bool, error) {
-	if database, ok := s.db.(*db.DB); ok {
-		return database.HostPathsDetached(ctx)
-	}
-	return false, nil
-}
-
 func (s *Server) requireHostSessionActions(ctx context.Context) error {
-	detached, err := s.hostPathsDetached(ctx)
-	if err != nil {
-		return serverError(err)
-	}
-	if detached {
-		return apiError(http.StatusConflict, "session actions are unavailable in a copied archive")
+	if database, ok := s.db.(*db.DB); ok {
+		detached, err := database.HostPathsDetached(ctx)
+		if err != nil {
+			return serverError(err)
+		}
+		if detached {
+			return apiError(http.StatusConflict, "session actions are unavailable in a copied archive")
+		}
 	}
 	return nil
 }
@@ -996,13 +991,6 @@ func (s *Server) humaGetSessionDir(
 	}
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
-	}
-	detached, err := s.hostPathsDetached(ctx)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	if detached {
-		return &jsonOutput[sessionDirectoryResponse]{Body: sessionDirectoryResponse{}}, nil
 	}
 	return &jsonOutput[sessionDirectoryResponse]{
 		Body: sessionDirectoryResponse{Path: resolveSessionPath(session, filepath.IsAbs)},
@@ -1022,9 +1010,6 @@ func (s *Server) humaOpenSession(
 	}
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
-	}
-	if err := s.requireHostSessionActions(ctx); err != nil {
-		return nil, err
 	}
 	projectDir := resolveSessionDir(session)
 	if projectDir == "" {

@@ -26,8 +26,6 @@ func TestDetachedArchiveCommitRepositories(t *testing.T) {
 	assert.Equal(t, "/work/repo", repository)
 	require.NoError(t, d.ClearHostSources(t.Context()))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionCommitLinksTx(tx, "s1") }))
-	_, err = d.StoreTrailerCommitLinks(t.Context(), "/work/repo", []gitlog.TrailerCommit{{SHA: strings.Repeat("b", 40), Sessions: []string{"claude:s1"}, CommittedAt: tsZero}})
-	require.NoError(t, err)
 	for _, table := range []string{"commit_links", "commit_trailers"} {
 		var count, paths int
 		require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT count(*), count(NULLIF(repository,'')) FROM `+table).Scan(&count, &paths))

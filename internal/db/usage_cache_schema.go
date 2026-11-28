@@ -508,24 +508,6 @@ func UsageCacheFiles(archivePath, databaseID string) []string {
 	return paths
 }
 
-// ClearCopiedUsageRollups removes labels from cached aggregates while retaining usage facts.
-func ClearCopiedUsageRollups(ctx context.Context, path string) (retErr error) {
-	probe := probeUsageCache(ctx, path)
-	if probe.Err != nil {
-		return probe.Err
-	}
-	if !probe.Recognized || probe.FormatVersion < usageCacheUpgradeFrom || probe.FormatVersion > usageCacheFormatVersion || probe.RetirementProtocolVersion > usageCacheRetirementProtocolVersion {
-		return errors.New("unsupported usage cache")
-	}
-	database, err := openUsageCacheDatabase(ctx, path)
-	if err != nil {
-		return err
-	}
-	defer func() { retErr = errors.Join(retErr, database.Close()) }()
-	_, err = database.ExecContext(ctx, `DELETE FROM usage_rollup_timezones`)
-	return err
-}
-
 func (m *usageCacheManager) Generation(
 	ctx context.Context, databaseID string,
 ) (*usageCache, error) {

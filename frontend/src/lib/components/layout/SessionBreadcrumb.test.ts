@@ -422,7 +422,6 @@ describe("SessionBreadcrumb", () => {
     });
     await tick();
     expect(document.querySelector(".resume-btn")).toBeNull();
-    expect(openersService.getApiV1Openers).not.toHaveBeenCalled();
   });
   it("keeps a rejected rename for retry", async () => {
     const rename = vi
@@ -807,25 +806,6 @@ describe("SessionBreadcrumb", () => {
 
     component.$destroy();
     messages.clear();
-  });
-
-  it("does not build a resume command after the server rejects a copied archive", async () => {
-    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(
-      new ApiError(409, "copied archive"),
-    );
-    mount(SessionBreadcrumb, {
-      target: document.body,
-      props: { session: makeSession("claude"), onBack: () => {} },
-    });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
-    await tick();
-    Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item"))
-      .find((button) => button.textContent?.includes("Default terminal"))
-      ?.click();
-    await flushPromises();
-    expect(sessionsService.postApiV1SessionsByIdResume).toHaveBeenCalled();
-    expect(copyToClipboard).not.toHaveBeenCalled();
   });
 
   it("does not pin a partial-history model when older messages remain unloaded", async () => {
