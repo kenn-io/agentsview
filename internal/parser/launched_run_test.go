@@ -24,6 +24,7 @@ func TestLaunchedRunID(t *testing.T) {
 		{"unrelated setup output", "cat old.log && codex exec hello", startup, ""},
 		{"claude argument", "claude -p --session-id " + id, "", id},
 		{"quoted command substitution prompt", `claude -p "$(cat review.txt)" --session-id ` + id, "", id},
+		{"quoted command substitution option", `claude "$(cat flags)" -p --output-format json`, `{"type":"result","session_id":"` + id + `"}`, ""},
 		{"shell JSON prompt mentions tool", `{"command":"claude -p --session-id ` + id + ` 'see tools.exec_command'"}`, "", id},
 		{"wrapped", "env X=1 bash -lc 'codex.exe exec --json hello'", `{"type":"thread.started","thread_id":"` + id + `"}`, "codex:" + id},
 		{"json in human output", "codex exec hello", `{"type":"thread.started","thread_id":"` + id + `"}`, ""},
