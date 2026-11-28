@@ -144,12 +144,8 @@ export class RouterStore {
     }
   }
 
-  #buildUrl(
-    path: string,
-    params: Record<string, string> = {},
-    basePath = getBasePath(),
-    includeSticky = true,
-  ): string {
+  #buildUrl(path: string, params: Record<string, string> = {}, includeSticky = true): string {
+    const basePath = getBasePath();
     const merged = includeSticky ? { ...this.#stickyParams, ...params } : params;
     const qs = searchFromRouteParams(merged).toString();
     const full = basePath + path;
@@ -192,7 +188,7 @@ export class RouterStore {
   }
 
   buildMessageHref(id: string, ordinal: number): string {
-    return this.#buildUrl(sessionPath(id), { msg: String(ordinal) }, getBasePath(), false);
+    return this.#buildUrl(sessionPath(id), { msg: String(ordinal) }, false);
   }
 
   navigate(route: Route, params: Record<string, string> = {}): boolean {
