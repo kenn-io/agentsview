@@ -105,7 +105,7 @@ func TestLaunchedRunScopedReparse(t *testing.T) {
 	_, err = raw.ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id=NULL; UPDATE sessions SET parent_session_id=NULL, spawn_linked=0, data_version=193; PRAGMA user_version=193`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	assert.ElementsMatch(t, []parser.AgentType{parser.AgentClaude, parser.AgentCodex}, db.ScopedDataVersionProviders(193, 194))
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentClaude, parser.AgentCodex}, db.ScopedDataVersionProviders(194, 195))
 	database, err = db.OpenIsolated(ctx, archive)
 	require.NoError(t, err)
 	defer database.Close()
