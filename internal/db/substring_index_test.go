@@ -974,3 +974,31 @@ func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
 		})
 	}
 }
+
+func TestToolSubstringSmallScopeScansGlobalMatches(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "local", "local", [][2]string{{"assistant", "running"}})
+	seedSearchSession(t, d, "remote", "remote", [][2]string{{"assistant", "running"}})
+	_, err := d.getWriter().ExecContext(ctx, `WITH n(i) AS (VALUES(1),(2),(3),(4))
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read',CASE WHEN n.i=1 THEN 'scopedneedle' ELSE 'other' END FROM messages m,n WHERE m.session_id='local'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<30000)
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category,input_json)
+ SELECT m.id,m.session_id,'Read','Read','scopedneedle' FROM messages m,n WHERE m.session_id='remote'`)
+	require.NoError(t, err)
+	f := ContentSearchFilter{Pattern: "scopedneedle", Project: "local", Sources: []string{"tool_input"}, Limit: 20}
+	candidates, err := d.substringCandidates(ctx, f, []string{f.Pattern})
+	require.NoError(t, err)
+	assert.Empty(t, candidates.toolInput.sql)
+	page, err := d.SearchContent(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "tool_input", page.Matches[0].Location)
+	_, err = d.getWriter().ExecContext(ctx, "DELETE FROM stats WHERE key=?", toolSubstringReadyKey)
+	require.NoError(t, err)
+	scan, err := d.SearchContent(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, scan, page)
+}
