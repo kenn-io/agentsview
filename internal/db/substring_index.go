@@ -200,20 +200,15 @@ func buildToolSubstringBatch(ctx context.Context, w *writerHandle) (bool, error)
 	if err := tx.QueryRowContext(ctx, "SELECT (SELECT CAST(value AS TEXT) FROM stats WHERE key=?)", toolSubstringStateKey).Scan(&state); err != nil {
 		return false, err
 	}
-	if !state.Valid {
-		return false, fmt.Errorf("missing tool substring state")
-	}
 	if !strings.HasPrefix(state.String, toolSubstringVersion+":") {
 		return false, fmt.Errorf("unknown tool substring index version %q", state.String)
 	}
 	if state.String == toolSubstringReady {
 		return true, tx.Commit()
 	}
-	value := state.String
 	var next toolSubstringCursor
-	var version string
-	if n, err := fmt.Sscanf(value, "%1s:%d:%d", &version, &next.field, &next.id); err != nil || n != 3 || version != toolSubstringVersion || next.field < 0 || next.field > len(toolSubstringFields) || next.id < 0 || value != fmt.Sprintf("%s:%d:%d", version, next.field, next.id) {
-		return false, fmt.Errorf("invalid tool substring cursor %q", value)
+	if _, err := fmt.Sscanf(state.String, toolSubstringVersion+":%d:%d", &next.field, &next.id); err != nil {
+		return false, fmt.Errorf("invalid tool substring cursor %q", state.String)
 	}
 	for next.field < len(toolSubstringFields) {
 		f := toolSubstringFields[next.field]

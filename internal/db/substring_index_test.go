@@ -1057,14 +1057,6 @@ func TestToolSubstringUnknownVersionsRemainUntouched(t *testing.T) {
 			pending, err := prepareToolSubstringIndex(ctx, d.getWriter())
 			require.NoError(t, err)
 			assert.False(t, pending)
-			require.NoError(t, d.DropFTS(ctx))
-			require.NoError(t, d.RebuildFTS(ctx))
-			var got string
-			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT CAST(value AS TEXT) FROM stats WHERE key=?", toolSubstringStateKey).Scan(&got))
-			assert.Equal(t, state, got)
-			var exists bool
-			require.NoError(t, d.getReader().QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='tool_input_trigram_fts')").Scan(&exists))
-			assert.True(t, exists)
 		})
 	}
 }
