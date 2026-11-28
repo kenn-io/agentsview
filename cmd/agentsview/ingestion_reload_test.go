@@ -625,7 +625,15 @@ func TestToolIndexUpgradeWaitsForCatchup(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), "DROP TABLE tool_input_trigram_fts")
+	for _, table := range []string{"tool_input_trigram_fts", "tool_result_trigram_fts", "tool_event_trigram_fts"} {
+		for _, suffix := range []string{"_ai", "_ad", "_au"} {
+			_, err = raw.ExecContext(t.Context(), "DROP TRIGGER IF EXISTS "+table+suffix)
+			require.NoError(t, err)
+		}
+		_, err = raw.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+table)
+		require.NoError(t, err)
+	}
+	_, err = raw.ExecContext(t.Context(), "DELETE FROM stats WHERE key='tool_substring_index_ready'")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
