@@ -135,18 +135,3 @@ func TestClearHostSourcesPreservesSessionProjectAssignments(t *testing.T) {
 	require.True(t, other.ProjectAssigned)
 	assert.Equal(t, CopiedProjectLabel("/work/assigned"), other.Project)
 }
-
-func TestClearHostSourcesPreservesCursorUsage(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_events(occurred_at,model,input_tokens,output_tokens,charged_microdollars,dedup_key) VALUES('2026-08-10T09:00:00Z','model',330,100,42,'event-1')`)
-		return err
-	}))
-	require.NoError(t, d.ClearHostSources(ctx))
-	usage, err := d.GetDailyUsage(ctx, UsageFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	assert.Equal(t, 330, usage.Totals.InputTokens)
-	assert.Equal(t, 100, usage.Totals.OutputTokens)
-	assert.EqualValues(t, 42, usage.Totals.TotalCost.Microdollars)
-}

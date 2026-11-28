@@ -64,23 +64,6 @@ function activeResumeModel(sessionId: string): string {
   return messages.resumeModelFor(sessionId);
 }
 
-// Copy a runnable resume command. Cursor needs the backend cwd applied
-// client-side so the copied command is self-contained. A copied archive has
-// no host to resume on, so it neither asks the backend nor copies.
-function copyActiveResumeCommand(): void {
-  const session = sessions.activeSession;
-  if (!sync.hostSessionActionsAvailable || !session || !supportsResume(session.agent)) return;
-  const fallback = () => buildResumeCommand(session.agent, session.id, { model: activeResumeModel(session.id) });
-  const copy = (cmd: string | null) => {
-    if (sync.hostSessionActionsAvailable && cmd) void copyToClipboard(cmd);
-  };
-  SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
-    command_only: true,
-  } satisfies ResumeRequest)
-    .then((resp) => copy(formatResumeResponseCommand(session.agent, resp) || fallback()))
-    .catch(() => copy(fallback()));
-}
-
 /**
  * Register global keyboard shortcuts.
  * Returns a cleanup function to remove the listener.
@@ -254,7 +237,30 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
           starred.toggle(sessions.activeSessionId);
         }
       },
-      c: copyActiveResumeCommand,
+      c: () => {
+        const session = sync.hostSessionActionsAvailable && sessions.activeSession;
+        if (session && supportsResume(session.agent)) {
+          // Copy a runnable resume command. Cursor needs the backend cwd
+          // applied client-side so the copied command is self-contained.
+          SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
+            command_only: true,
+          } satisfies ResumeRequest)
+            .then((resp) => {
+              const cmd =
+                formatResumeResponseCommand(session.agent, resp) ||
+                buildResumeCommand(session.agent, session.id, {
+                  model: activeResumeModel(session.id),
+                });
+              if (cmd) void copyToClipboard(cmd);
+            })
+            .catch(() => {
+              const cmd = buildResumeCommand(session.agent, session.id, {
+                model: activeResumeModel(session.id),
+              });
+              if (cmd) void copyToClipboard(cmd);
+            });
+        }
+      },
       "/": () => {
         if (sessions.activeSessionId) {
           inSessionSearch.open();

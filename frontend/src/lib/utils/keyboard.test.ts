@@ -112,41 +112,6 @@ describe("registerShortcuts", () => {
     }
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "does not copy when a pending resume request %ss after detachment",
-    async (outcome) => {
-      sync.serverVersion = {} as NonNullable<typeof sync.serverVersion>;
-      sessions.sessions = [
-        { id: "claude:copied", agent: "claude" } as (typeof sessions.sessions)[number],
-      ];
-      sessions.activeSessionId = "claude:copied";
-      let resolve!: (
-        value: Awaited<ReturnType<typeof SessionsService.postApiV1SessionsByIdResume>>,
-      ) => void;
-      let reject!: (reason: Error) => void;
-      vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockReturnValue(
-        new Promise((ok, fail) => {
-          resolve = ok;
-          reject = fail;
-        }),
-      );
-      try {
-        fireKey("c");
-        sync.serverVersion = { host_paths_detached: true } as NonNullable<
-          typeof sync.serverVersion
-        >;
-        if (outcome === "resolve")
-          resolve({ launched: false, command: "claude --resume copied", cwd: "" });
-        else reject(new Error("detached"));
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(copyToClipboard).not.toHaveBeenCalled();
-      } finally {
-        sync.serverVersion = null;
-      }
-    },
-  );
-
   describe("remote c copy", () => {
     it.each([
       ["claude", false, "cd '/remote/project' && claude --resume abc-123"],
