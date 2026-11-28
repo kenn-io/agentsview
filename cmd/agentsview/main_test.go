@@ -4518,7 +4518,7 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
-		require.Eventually(t, func() bool { return FindDaemonRuntime(dir) != nil }, 30*time.Second, 100*time.Millisecond)
+		require.Eventually(t, func() bool { return FindDaemonRuntime(t.Context(), dir) != nil }, 30*time.Second, 100*time.Millisecond)
 		cancel()
 		select {
 		case err := <-done:

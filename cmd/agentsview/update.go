@@ -171,6 +171,12 @@ func performUpdateWithDaemonLifecycle(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("loading daemon config before update: %w", err)
 	}
+	if daemonCfg.SavedNoDaemonAutostart {
+		restartDaemon = func(ctx context.Context, _ config.Config, _ updateDaemonStopResult) error {
+			fmt.Fprintln(daemonProgressWriter(ctx), "Automatic daemon restart skipped: no_daemon_autostart is set.\nRestart the service, or run agentsview daemon start if no service manager is in use.")
+			return nil
+		}
+	}
 	stopResult, err := stopDaemons(ctx, daemonCfg)
 	if err != nil {
 		if stopResult.Stopped {

@@ -122,7 +122,7 @@ func TestIdleDirectReadSkipsSyncWhileDaemonOwnsArchive(t *testing.T) {
 				_, err := WriteDaemonRuntime(cfg.DataDir, cfg.Host, cfg.Port, "test", false)
 				require.NoError(t, err)
 			case "starting":
-				MarkDaemonStarting(cfg.DataDir)
+				MarkDaemonStarting(t.Context(), cfg.DataDir)
 				t.Cleanup(func() { UnmarkDaemonStarting(cfg.DataDir) })
 			case "incompatible":
 				writeLiveRuntime(t, cfg.DataDir, false, withRuntimeAPIVersion(0))

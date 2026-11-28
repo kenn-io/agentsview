@@ -36,7 +36,7 @@ func TestServeLifetimesApplyProtectedPathSetting(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
 		t.Cleanup(cancel)
-		require.Eventually(t, func() bool { return FindDaemonRuntime(dir) != nil }, 30*time.Second, 100*time.Millisecond)
+		require.Eventually(t, func() bool { return FindDaemonRuntime(t.Context(), dir) != nil }, 30*time.Second, 100*time.Millisecond)
 		path := filepath.Join(skillDir, "SKILL.md")
 		_, _, _, _, _, calls, _ := parser.ExtractTextContent(t.Context(), gjson.Parse(`[{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}]`))
 		cancel()

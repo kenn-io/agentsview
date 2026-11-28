@@ -1311,10 +1311,10 @@ func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
 		withRuntimeVersion("old"),
 		withRuntimeAPIVersion(daemonAPIVersion-1),
 	)
-	require.True(t, IsLocalDaemonActive(dataDir))
-	require.Nil(t, FindDaemonRuntime(dataDir))
+	require.True(t, IsLocalDaemonActive(t.Context(), dataDir))
+	require.Nil(t, FindDaemonRuntime(t.Context(), dataDir))
 
-	_, err := resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	_, err := resolveEmbeddingsDaemonClient(t.Context(), config.Config{DataDir: dataDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon API version")
 	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
@@ -1337,12 +1337,12 @@ func TestResolveEmbeddingsDaemonClientPrefersIncompatibleWritableDaemonError(
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Remove(writablePath) })
 
-	compatible := FindDaemonRuntime(dataDir)
+	compatible := FindDaemonRuntime(t.Context(), dataDir)
 	require.NotNil(t, compatible)
 	require.True(t, compatible.ReadOnly)
 	assert.Equal(t, readOnlyEndpoint.Port, compatible.Port)
 
-	_, err = resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	_, err = resolveEmbeddingsDaemonClient(t.Context(), config.Config{DataDir: dataDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon API version")
 	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
@@ -1966,6 +1966,33 @@ func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
 	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, ""))
 	assert.Equal(t, []string{"messages", "recall"}, stores)
+}
+
+func TestEmbeddingsSwitchDoesNotStartStoppedManagedDaemon(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	writeTestConfig(t, dataDir, "no_daemon_autostart = true\n[vector]\nenabled = false\n")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	var restarted bool
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		restarted = true
+		return errors.New("unexpected background restart")
+	}
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
+	require.Error(t, err)
+	assert.False(t, restarted, "the service manager owns daemon startup")
+	assert.Contains(t, err.Error(), "service")
+	assert.Contains(t, err.Error(), "no_daemon_autostart")
+	assert.Contains(t, err.Error(), "agentsview index embeddings build")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	assert.NotContains(t, err.Error(), "agentsview daemon start")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
 }
 
 func TestEmbeddingsSwitchRelativeKey(t *testing.T) {

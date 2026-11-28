@@ -119,7 +119,7 @@ func waitForBackgroundLaunchLock(t *testing.T, dataDir string) {
 func waitForRestartRuntime(t *testing.T, dataDir string, token ...string) *DaemonRuntime {
 	t.Helper()
 	var rt *DaemonRuntime
-	require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir, token...); return rt != nil }, 30*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool { rt = FindDaemonRuntime(t.Context(), dataDir, token...); return rt != nil }, 30*time.Second, 100*time.Millisecond)
 	return rt
 }
 
@@ -176,7 +176,7 @@ func restartAndWait(t *testing.T, dataDir, base, token string) *DaemonRuntime {
 	var runtime *DaemonRuntime
 	require.Eventually(t, func() bool {
 		replacement := restartTestInstance(t, base, token)
-		runtime = FindDaemonRuntime(dataDir, token)
+		runtime = FindDaemonRuntime(t.Context(), dataDir, token)
 		return replacement != "" && replacement != previous && runtime != nil && runtime.Record.StartedAt.After(oldRuntime.Record.StartedAt)
 	}, 30*time.Second, 100*time.Millisecond)
 	return runtime
@@ -375,7 +375,7 @@ func TestServeRestartRefusesInvalidConfig(t *testing.T) {
 	require.True(t, acquired, "refused restart must release launch ownership")
 	require.NoError(t, lock.Unlock())
 	require.NoError(t, os.WriteFile(path, saved, 0o600))
-	current := FindDaemonRuntime(dataDir)
+	current := FindDaemonRuntime(t.Context(), dataDir)
 	require.NotNil(t, current)
 	assert.Equal(t, rt.Record.PID, current.Record.PID)
 }
@@ -416,7 +416,7 @@ func TestServeRestartRefusesBusyExplicitPortOnNewHost(t *testing.T) {
 	lock, acquired := acquireBackgroundLaunchLock(dataDir)
 	require.True(t, acquired, "refused restart must release launch ownership")
 	require.NoError(t, lock.Unlock())
-	current := FindDaemonRuntime(dataDir)
+	current := FindDaemonRuntime(t.Context(), dataDir)
 	require.NotNil(t, current)
 	assert.Equal(t, rt.Record.PID, current.Record.PID)
 
@@ -462,7 +462,7 @@ func TestRestartKeepsAdoptedNoSync(t *testing.T) {
 			return true
 		default:
 		}
-		current = FindDaemonRuntime(dataDir)
+		current = FindDaemonRuntime(t.Context(), dataDir)
 		return current != nil && current.Record.PID != old.Record.PID
 	}, 30*time.Second, 100*time.Millisecond)
 	if processExited {
@@ -562,7 +562,7 @@ func TestRestartReplacementReadsSettingsSavedDuringDrain(t *testing.T) {
 	// Cleanup needs that new record to find and stop the replacement.
 	require.Eventually(t, func() bool {
 		current := restartTestInstance(t, base, "")
-		replacement := FindDaemonRuntime(dataDir)
+		replacement := FindDaemonRuntime(t.Context(), dataDir)
 		return current != "" && current != previous && replacement != nil && replacement.Record.StartedAt.After(rt.Record.StartedAt)
 	}, 30*time.Second, 100*time.Millisecond)
 	resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/settings", "", "")
@@ -703,7 +703,7 @@ func checkServeRestartUsesEditedAuthConfig(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cfg, dataDir, token := startRestartAuthFixture(t, mode)
 			var rt *DaemonRuntime
-			require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool { rt = FindDaemonRuntime(t.Context(), dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
 			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
 			require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
@@ -722,7 +722,7 @@ func checkServeRestartUsesEditedAuthConfig(t *testing.T) {
 				defer resp.Body.Close()
 				return resp.StatusCode == http.StatusUnauthorized
 			}, 30*time.Second, 100*time.Millisecond)
-			require.Eventually(t, func() bool { return FindDaemonRuntime(dataDir, token) != nil }, 30*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool { return FindDaemonRuntime(t.Context(), dataDir, token) != nil }, 30*time.Second, 100*time.Millisecond)
 			req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/ping", nil)
 			require.NoError(t, err)
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -751,7 +751,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cfg, dataDir, token := startRestartAuthFixture(t, mode, "--require-auth=true")
 			var rt *DaemonRuntime
-			require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir, token); return rt != nil }, 30*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool { rt = FindDaemonRuntime(t.Context(), dataDir, token); return rt != nil }, 30*time.Second, 100*time.Millisecond)
 			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
 			client := &http.Client{Timeout: time.Second}
 			save, err := http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":false}`))
@@ -871,7 +871,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 				return resp.StatusCode == http.StatusUnauthorized
 			}, 30*time.Second, 100*time.Millisecond)
 			require.Eventually(t, func() bool {
-				rt := FindDaemonRuntime(dataDir, token)
+				rt := FindDaemonRuntime(t.Context(), dataDir, token)
 				return rt != nil && rt.RequireAuth
 			}, 30*time.Second, 100*time.Millisecond)
 		})

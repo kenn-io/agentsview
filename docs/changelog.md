@@ -36,6 +36,9 @@ The latest release is
   the output contains `complete=true`; see [Reparse and
   rollback](/docs/hosted-raw-sync/#reparse-and-rollback).
 
+- Set `no_daemon_autostart = true` in `config.toml` to keep commands and agent
+  hooks from starting a competing server during a managed service restart.
+
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
   Integrations must reconcile event keys and poll times across reports.

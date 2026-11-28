@@ -224,7 +224,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// Acquire the daemon start lock immediately after config setup,
 	// before opening the DB, so token-use never sees a window
 	// with no lock and no runtime record during startup.
-	MarkDaemonStarting(cfg.DataDir)
+	MarkDaemonStarting(ctx, cfg.DataDir)
 	defer UnmarkDaemonStarting(cfg.DataDir)
 	startupProgress := newStartupStateWriter(cfg.DataDir, time.Now)
 	startupProgress.state.Persistent = cfg.PersistentDaemon
@@ -2024,7 +2024,7 @@ func openWriteDBWith(
 	ctx context.Context, cfg config.Config,
 	openArchive func(context.Context, config.Config) (*db.DB, error),
 ) (*db.DB, *writeOwnerLock, error) {
-	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(ctx, cfg); err != nil {
 		return nil, nil, err
 	}
 	lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
@@ -2054,7 +2054,7 @@ func openWriteDBWith(
 	return database, lock, nil
 }
 
-func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
+func rejectLiveWritableDaemonBeforeDirectWrite(ctx context.Context, cfg config.Config) error {
 	if runningAsSyncWorker() {
 		// The daemon spawned this worker after closing its writer and
 		// releasing the write lock for the pass, so its still-live runtime
@@ -2064,7 +2064,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 		return nil
 	}
 	dataDir := writeLockDataDir(cfg)
-	if isExternalDaemonStarting(dataDir) || isLegacyDaemonStarting(dataDir) {
+	if isExternalDaemonStarting(ctx, dataDir) || isLegacyDaemonStarting(dataDir) {
 		return errors.New("local daemon is starting and owns the SQLite archive; " +
 			"refusing to write directly. Retry once it is ready",
 		)
@@ -2076,7 +2076,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 			"refusing to write directly. Retry once it is ready",
 		)
 	}
-	if !hasLiveWritableDaemonRuntime(dataDir, cfg.AuthToken) {
+	if !hasLiveWritableDaemonRuntime(ctx, dataDir, cfg.AuthToken) {
 		return nil
 	}
 	// hasLiveWritableDaemonRuntime intentionally ignores API/data
@@ -2084,7 +2084,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 	// writable daemon owns the archive. FindDaemonRuntime returns only
 	// compatible daemons; incompatible ones fall through to the detailed
 	// error below.
-	if rt := FindDaemonRuntime(dataDir, cfg.AuthToken); rt != nil && !rt.ReadOnly {
+	if rt := FindDaemonRuntime(ctx, dataDir, cfg.AuthToken); rt != nil && !rt.ReadOnly {
 		return fmt.Errorf(
 			"local daemon at %s owns the SQLite archive; refusing "+
 				"to write directly. Retry through the daemon or run "+
@@ -2093,7 +2093,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 		)
 	}
 	reason := errLocalDaemonUnreachable.Error()
-	if _, err := FindIncompatibleDaemonRuntime(dataDir, cfg.AuthToken); err != nil {
+	if _, err := FindIncompatibleDaemonRuntime(ctx, dataDir, cfg.AuthToken); err != nil {
 		reason = err.Error()
 	}
 	return fmt.Errorf(

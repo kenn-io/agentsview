@@ -900,7 +900,7 @@ func stubExportDaemon(t *testing.T, dir string) func() {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			if rt := FindWritableDaemonRuntime(t.Context(), cfg.DataDir, cfg.AuthToken); rt != nil {
 				return rt, nil
 			}
 			select {
@@ -1051,6 +1051,16 @@ func testExportFailureRecovery(t *testing.T, mode string, verify func(*testing.T
 }
 
 func TestExportDaemonStartupCases(t *testing.T) {
+	t.Run("saved policy without daemon", func(t *testing.T) {
+		dir := testDataDir(t)
+		t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+		writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+		forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+		cfg := config.Config{DataDir: dir}
+		_, err := startExportDaemon(t.Context(), &cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "if no service manager is in use")
+	})
 	t.Run("startup error", func(t *testing.T) {
 		dir := testDataDir(t)
 		failure := errors.New("launch failed")
@@ -1147,7 +1157,7 @@ func TestExportWaitCursorResetSuppressesStubStartupProgress(t *testing.T) {
 		fmt.Fprintln(daemonProgressWriter(ctx), "starting test daemon")
 		writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 		close(polled)
-		return FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken), nil
+		return FindWritableDaemonRuntime(t.Context(), cfg.DataDir, cfg.AuthToken), nil
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

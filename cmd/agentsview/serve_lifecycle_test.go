@@ -35,7 +35,7 @@ func TestLiveDaemonRecordsFiltersDeadProcesses(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	records := liveDaemonRecords(dir)
+	records := liveDaemonRecords(t.Context(), dir)
 	require.Len(t, records, 1)
 	assert.NotEqual(t, dead, records[0].PID)
 	assert.NotEmpty(t, records[0].SourcePath,
@@ -136,7 +136,7 @@ func TestRunServeStatusPrefersStartingOverReadOnly(t *testing.T) {
 		dir, readOnlyHost, readOnlyPort, "1.0.0", true,
 	)
 	require.NoError(t, err)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	out := captureStdout(t, func() {
@@ -149,7 +149,7 @@ func TestRunServeStatusPrefersStartingOverReadOnly(t *testing.T) {
 
 func TestRunServeStatusReportsStartupProgress(t *testing.T) {
 	dir := runtimeTestDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	// Backdated started_at keeps the elapsed assertion stable.
@@ -182,7 +182,7 @@ func TestRunServeStatusReportsStartupProgress(t *testing.T) {
 
 func TestRunServeStatusStartingWithoutStateFallsBack(t *testing.T) {
 	dir := runtimeTestDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	require.NoError(t, os.WriteFile(
 		startupStatePath(dir), []byte("{corrupt"), 0o600,
@@ -233,7 +233,7 @@ func TestRunServeStop_StartupStateFallbackWithoutRuntimeRecord(t *testing.T) {
 	require.True(t, ok)
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
 
-	rt := FindWritableDaemonRuntime(dir)
+	rt := FindWritableDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, rt)
 	assert.True(t, stopTargetConfirmed(rt.Record, ""))
 }
@@ -243,12 +243,12 @@ func TestRunServeStop_StartupStateFallbackRequiresIdentity(t *testing.T) {
 	host, port := testPingServer(t)
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), "1")
 
-	assert.Nil(t, FindWritableDaemonRuntime(dir), "stale fallback must not authorize stop")
+	assert.Nil(t, FindWritableDaemonRuntime(t.Context(), dir), "stale fallback must not authorize stop")
 }
 
 func TestUnmarkDaemonStartingRemovesStartupState(t *testing.T) {
 	dir := runtimeTestDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	newStartupStateWriter(dir, time.Now).SetPhase("opening database")
 	require.NotNil(t, readStartupState(dir), "state written during startup")
 
@@ -397,7 +397,7 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 	require.NoError(t, stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 5*time.Second))
 	<-reaped
 	assert.False(t, daemon.ProcessAlive(pid))
-	assert.Empty(t, liveDaemonRecords(dir),
+	assert.Empty(t, liveDaemonRecords(t.Context(), dir),
 		"runtime record must be removed after stop")
 }
 
@@ -430,7 +430,7 @@ func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
 			require.True(t, ok)
 			rec.ProcessIdentityV2 = identity
 			writeRuntimeRecordFixture(t, dir, rec)
-			rt := FindDaemonRuntime(dir)
+			rt := FindDaemonRuntime(t.Context(), dir)
 			require.NotNil(t, rt)
 			if tt.wildcard {
 				rt.Host = "0.0.0.0"
@@ -559,7 +559,7 @@ func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
 	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
 	require.NoError(t, err,
 		"a reused PID means the daemon exited; stop should succeed")
-	assert.Empty(t, liveDaemonRecords(dir),
+	assert.Empty(t, liveDaemonRecords(t.Context(), dir),
 		"the stale record for a reused PID must be removed")
 	assert.True(t, daemon.ProcessAlive(pid), "the unrelated process must not receive SIGTERM")
 }
@@ -596,7 +596,7 @@ func TestStopDaemonProcessSparesReusedPIDBeforeForceKill(t *testing.T) {
 	require.NoError(t, err,
 		"a reused PID means the daemon exited; stop should succeed")
 	assert.Equal(t, 2, identityCalls)
-	assert.Empty(t, liveDaemonRecords(dir),
+	assert.Empty(t, liveDaemonRecords(t.Context(), dir),
 		"the stale record for a reused PID must be removed")
 	assert.True(t, daemon.ProcessAlive(pid),
 		"the reused PID must not be force-killed")

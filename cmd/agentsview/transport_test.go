@@ -17,6 +17,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -366,7 +367,7 @@ func TestDetectTransport_LocalDaemonUnreachableDoesNotSetDirectIncompatible(t *t
 // The startup-wait hook reports no daemon, then discovery falls back to direct.
 func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	waited := false
 	stubWaitForDaemonStartupForTransport(t, func(
@@ -399,7 +400,7 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 	}
 	t.Run("detect", func(t *testing.T) {
 		dir, ctx, progress := setup(t)
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
 		_, err := detectTransportContext(ctx, dir, "", time.Second)
@@ -416,7 +417,7 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 	})
 	t.Run("startup wait", func(t *testing.T) {
 		dir, ctx, progress := setup(t)
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		newStartupStateWriter(dir, time.Now).SetPhase("Opening archive")
 		WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
@@ -481,6 +482,203 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "direct SQLite reads are not supported")
 	assert.Contains(t, err.Error(), "agentsview daemon start")
+}
+
+func TestEnsureTransport_SavedNoDaemonAutostart(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		intent transportIntent
+	}{
+		{"read", transportIntentRead},
+		{"archive write", transportIntentArchiveWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+			forbidStartBackgroundServeForTransport(t, "saved setting must suppress daemon start")
+			cfg, err := config.LoadReadOnlyAt(dir)
+			require.NoError(t, err)
+			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the missing service must exhaust the read wait.
+			if tc.intent == transportIntentRead {
+				require.ErrorContains(t, err, "daemon autostart is disabled")
+				assert.Contains(t, err.Error(), "no_daemon_autostart")
+				assert.Contains(t, err.Error(), "if no service manager is in use")
+				var diagnostic *cliDiagnosticError
+				require.ErrorAs(t, err, &diagnostic)
+				assert.Contains(t, diagnostic.hint, "if no service manager is in use")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, transportDirect, tr.Mode)
+			}
+		})
+	}
+	t.Run("reload after removal", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+		writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+		cfg, err := config.LoadReadOnlyAt(dir)
+		require.NoError(t, err)
+		writeTestConfig(t, dir, "no_daemon_autostart = false\n")
+		var starts int
+		stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+			starts++
+			return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+		})
+		_, err = ensureTransportContext(t.Context(), &cfg, transportIntentLongLived, time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, 1, starts)
+	})
+}
+
+func TestEnsureTransportStalledDaemonRespectsCallerDeadline(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+	cfg := config.Config{DataDir: dir}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, version, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a stalled daemon must obey the caller's deadline.
+	defer cancel()
+	started := time.Now()
+	_, err := ensureTransportContext(ctx, &cfg, transportIntentRead, time.Second)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
+func TestManagedDaemonWaitFindsReturningService(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		intent transportIntent
+		auth   bool
+	}{
+		{"read", transportIntentRead, false},
+		{"writable daemon", transportIntentWritableDaemon, false},
+		{"read with new token", transportIntentRead, true},
+		{"writable daemon with new token", transportIntentWritableDaemon, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			writeTestConfig(t, dir, "no_daemon_autostart = true\n")
+			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+			setTestVersion(t, "test")
+			setStartProbeTickForTest(t, 10*time.Millisecond)
+			var host string
+			var port int
+			if tc.auth {
+				host, port = testAuthenticatedPingServer(t, "generated-token")
+			} else {
+				host, port = testPingServer(t)
+			}
+			writable := tc.intent == transportIntentWritableDaemon
+			if writable {
+				_, err := WriteDaemonRuntimeWithAuth(dir, host, port, "test", "", true, tc.auth)
+				require.NoError(t, err)
+			}
+			original := listDaemonRuntimeRecords
+			var probes int
+			listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+				records, err := original(store)
+				probes++
+				if tc.auth && probes == 1 {
+					writeTestConfig(t, dir, "no_daemon_autostart = true\nrequire_auth = true\nauth_token = 'generated-token'\n")
+				}
+				if (!writable && probes == 1) || (writable && probes == 2) {
+					_, writeErr := WriteDaemonRuntimeWithAuth(dir, host, port, "test", "", false, tc.auth)
+					require.NoError(t, writeErr)
+				}
+				return records, err
+			}
+			t.Cleanup(func() { listDaemonRuntimeRecords = original; RemoveDaemonRuntime(dir) })
+			cfg := config.Config{DataDir: dir}
+			tr, err := ensureTransportContext(t.Context(), &cfg, tc.intent, 2*time.Second)
+			require.NoError(t, err)
+			assert.Equal(t, transportHTTP, tr.Mode)
+			if writable {
+				assert.False(t, tr.ReadOnly)
+				assert.GreaterOrEqual(t, probes, 2)
+			}
+			if tc.auth {
+				assert.Equal(t, "generated-token", cfg.AuthToken)
+			}
+		})
+	}
+}
+
+func TestManagedDaemonWaitWithLockedConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{
+		{"deadline", false},
+		{"authenticated daemon", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "")
+			contents := "no_daemon_autostart = true\n"
+			if tc.ready {
+				t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+				contents += "require_auth = true\nauth_token = 'generated-token'\n"
+				host, port := testAuthenticatedPingServer(t, "generated-token")
+				writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+				setTestVersion(t, "test")
+			}
+			writeTestConfig(t, dir, contents)
+			forbidStartBackgroundServeForTransport(t, "managed service owns startup")
+			lock := flock.New(filepath.Join(dir, "config.toml.lock"))
+			require.NoError(t, lock.Lock())
+			t.Cleanup(func() { require.NoError(t, lock.Close()) })
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: a held config lock must not extend the deadline.
+			if tc.ready {
+				cancel()
+				ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
+			}
+			defer cancel()
+			type result struct {
+				tr    transport
+				err   error
+				token string
+			}
+			results := make(chan result, 1)
+			go func() {
+				cfg := config.Config{DataDir: dir}
+				tr, err := ensureTransportContext(ctx, &cfg, transportIntentRead, 2*time.Second)
+				results <- result{tr, err, cfg.AuthToken}
+			}()
+			var got result
+			timedOut := false
+			guard := time.Second
+			if tc.ready {
+				guard = 5 * time.Second
+			}
+			select {
+			case got = <-results:
+			case <-time.After(guard):
+				timedOut = true
+			}
+			require.NoError(t, lock.Unlock())
+			if timedOut {
+				select {
+				case <-results:
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "transport did not stop after releasing the config lock")
+				}
+				require.FailNow(t, "transport waited on the config lock")
+			}
+			if tc.ready {
+				require.NoError(t, got.err)
+				assert.Equal(t, transportHTTP, got.tr.Mode)
+				assert.Equal(t, "generated-token", got.token)
+			} else {
+				require.ErrorIs(t, got.err, context.DeadlineExceeded)
+			}
+		})
+	}
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
@@ -572,24 +770,33 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
 	t *testing.T,
 ) {
-	dir := daemonRuntimeDir(t)
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
-
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	setTestVersion(t, "1.1.0")
-	forbidStartBackgroundServeForTransport(t,
-		"AGENTSVIEW_NO_DAEMON must suppress daemon replacement")
-
-	cfg := config.Config{DataDir: dir}
-	tr, err := ensureTransportContext(t.Context(),
-		&cfg, transportIntentRead, time.Second,
-	)
-
-	require.Error(t, err)
-	assert.Equal(t, transport{}, tr)
-	assert.Contains(t, err.Error(), "daemon restart required")
-	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	for _, tc := range []struct {
+		name, env, config string
+	}{
+		{"environment", "1", ""},
+		{"saved setting", "", "no_daemon_autostart = true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := daemonRuntimeDir(t)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", tc.env)
+			if tc.config != "" {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				writeTestConfig(t, dir, tc.config)
+			}
+			host, port := testPingServer(t)
+			writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
+			setTestVersion(t, "1.1.0")
+			forbidStartBackgroundServeForTransport(t, "automatic replacement is disabled")
+			cfg := config.Config{DataDir: dir}
+			tr, err := ensureTransportContext(t.Context(), &cfg, transportIntentRead, time.Second)
+			require.Error(t, err)
+			assert.Equal(t, transport{}, tr)
+			assert.Contains(t, err.Error(), "daemon restart required")
+			assert.Contains(t, err.Error(), "agentsview daemon restart")
+			assert.Contains(t, err.Error(), "restart the service")
+			assert.Contains(t, err.Error(), "if no service manager is in use")
+		})
+	}
 }
 
 func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDaemon(
@@ -960,7 +1167,7 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	t *testing.T,
 ) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	var gotWait time.Duration
@@ -1059,7 +1266,7 @@ func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T)
 		launchLock, ok := acquireBackgroundLaunchLock(dir)
 		require.True(t, ok)
 		t.Cleanup(func() { _ = launchLock.Unlock() })
-		MarkDaemonStarting(dir)
+		MarkDaemonStarting(t.Context(), dir)
 		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 		state := newStartupStateWriter(dir, time.Now)
 		state.SetPhase("Opening archive")
@@ -1194,7 +1401,7 @@ func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
 
 func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
+	MarkDaemonStarting(t.Context(), dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	ctx, cancel := context.WithCancel(t.Context())

@@ -40,10 +40,10 @@ type daemonLaunchObservation struct {
 type daemonLaunchWaitDeps struct {
 	acquireLaunchLock  func(string) (*flock.Flock, bool, error)
 	loadReadOnlyConfig func() (config.Config, error)
-	writableRecords    func(string, string) ([]daemon.RuntimeRecord, error)
+	writableRecords    func(context.Context, string, string) ([]daemon.RuntimeRecord, error)
 	confirmed          func(daemon.RuntimeRecord, string) bool
 	probe              func(daemon.RuntimeRecord, string) bool
-	isStarting         func(string) bool
+	isStarting         func(context.Context, string) bool
 	readStartupState   func(string) *startupState
 	now                func() time.Time
 	sleep              func(time.Duration)
@@ -79,10 +79,10 @@ type daemonCommandDeps struct {
 	loadConfig                 func() (config.Config, error)
 	loadReadOnlyConfig         func() (config.Config, error)
 	acquireLaunchLockWithError func(string) (daemonLaunchLock, bool, error)
-	waitContendedLaunch        func(string) daemonLaunchObservation
-	writableRecords            func(string, string) ([]daemon.RuntimeRecord, error)
-	statusRecords              func(string, string) ([]daemon.RuntimeRecord, error)
-	isStarting                 func(string) bool
+	waitContendedLaunch        func(context.Context, string) daemonLaunchObservation
+	writableRecords            func(context.Context, string, string) ([]daemon.RuntimeRecord, error)
+	statusRecords              func(context.Context, string, string) ([]daemon.RuntimeRecord, error)
+	isStarting                 func(context.Context, string) bool
 	readStartupState           func(string) *startupState
 	startBackground            func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
 	stopTargetConfirmed        func(daemon.RuntimeRecord, string) bool
@@ -91,7 +91,7 @@ type daemonCommandDeps struct {
 	validateConfig             func(config.Config) error
 	checkDataVersion           func(context.Context, string) error
 	probeRecord                func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool)
-	writableRuntime            func(string, string) *DaemonRuntime
+	writableRuntime            func(context.Context, string, string) *DaemonRuntime
 	now                        func() time.Time
 }
 
@@ -117,8 +117,8 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
 		probeRecord:         probeDaemonRecord,
-		writableRuntime: func(dataDir, authToken string) *DaemonRuntime {
-			return FindWritableDaemonRuntime(dataDir, authToken)
+		writableRuntime: func(ctx context.Context, dataDir, authToken string) *DaemonRuntime {
+			return FindWritableDaemonRuntime(ctx, dataDir, authToken)
 		},
 		now: time.Now,
 	}
@@ -190,7 +190,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			Example:      "  agentsview daemon status",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return runDaemonStatus(cmd.OutOrStdout(), clientDeps)
+				return runDaemonStatus(cmd.Context(), cmd.OutOrStdout(), clientDeps)
 			},
 		},
 		&cobra.Command{
@@ -200,7 +200,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			Example:      "  agentsview daemon stop",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return runDaemonStop(cmd.OutOrStdout(), clientDeps)
+				return runDaemonStop(cmd.Context(), cmd.OutOrStdout(), clientDeps)
 			},
 		},
 		&cobra.Command{
@@ -232,11 +232,11 @@ func prepareDaemonMutation(deps daemonCommandDeps) (string, error) {
 	return dataDir, nil
 }
 
-func writableRuntimeFallbackForCommand(cfg config.Config, deps daemonCommandDeps) *DaemonRuntime {
+func writableRuntimeFallbackForCommand(ctx context.Context, cfg config.Config, deps daemonCommandDeps) *DaemonRuntime {
 	if deps.writableRuntime == nil {
 		return nil
 	}
-	rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	rt := deps.writableRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if rt == nil || !rt.RuntimeFallback {
 		return nil
 	}
@@ -253,7 +253,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		return fmt.Errorf("daemon start: acquiring launch lock: %w", err)
 	}
 	if !ok {
-		observation := deps.waitContendedLaunch(dataDir)
+		observation := deps.waitContendedLaunch(ctx, dataDir)
 		if observation.Err != nil || observation.LockHeld || len(observation.UnconfirmedRecords) > 0 || len(observation.Records) != 1 {
 			return reportDaemonLaunchContention(w, dataDir, observation, deps.now())
 		}
@@ -275,10 +275,10 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon start: %w", err)
 	}
-	incumbent := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	incumbent := deps.writableRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if incumbent != nil && (incumbent.RuntimeFallback || !shouldReplaceDaemonRuntime(incumbent, version)) {
 		if !incumbent.RuntimeFallback {
-			if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
+			if err := validateUniqueWritableDaemonSet(ctx, cfg.DataDir, cfg.AuthToken); err != nil {
 				return fmt.Errorf("daemon start: %w", err)
 			}
 		}
@@ -290,7 +290,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: incumbent}, false)
 		return nil
 	}
-	if deps.isStarting(cfg.DataDir) {
+	if deps.isStarting(ctx, cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 
@@ -314,7 +314,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		return daemonSlowStartupError("daemon start", result)
 	}
 	if !result.Started && result.Runtime == nil {
-		if deps.isStarting(cfg.DataDir) {
+		if deps.isStarting(ctx, cfg.DataDir) {
 			return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 		}
 		return errors.New("daemon start: startup did not publish a writable runtime; inspect serve.log before retrying")
@@ -363,14 +363,14 @@ func reportDaemonLaunchContention(
 	return errors.New("daemon start: concurrent startup failed without publishing a writable runtime; inspect serve.log before retrying")
 }
 
-func waitForDaemonLaunchContention(dataDir string) daemonLaunchObservation {
-	return waitForDaemonLaunchContentionWithDeps(
+func waitForDaemonLaunchContention(ctx context.Context, dataDir string) daemonLaunchObservation {
+	return waitForDaemonLaunchContentionWithDeps(ctx,
 		dataDir, defaultDaemonLaunchWaitDeps(),
 	)
 }
 
 func waitForDaemonLaunchContentionWithDeps(
-	dataDir string, deps daemonLaunchWaitDeps,
+	ctx context.Context, dataDir string, deps daemonLaunchWaitDeps,
 ) daemonLaunchObservation {
 	deadline := deps.now().Add(deps.timeout)
 	for {
@@ -393,7 +393,7 @@ func waitForDaemonLaunchContentionWithDeps(
 				_ = lock.Unlock()
 				return daemonLaunchObservation{Err: dataDirErr}
 			}
-			records, recordsErr := deps.writableRecords(dataDir, cfg.AuthToken)
+			records, recordsErr := deps.writableRecords(ctx, dataDir, cfg.AuthToken)
 			if recordsErr != nil {
 				_ = lock.Unlock()
 				return daemonLaunchObservation{Err: recordsErr}
@@ -421,7 +421,7 @@ func waitForDaemonLaunchContentionWithDeps(
 					}
 				}
 			}
-			starting := deps.isStarting(dataDir)
+			starting := deps.isStarting(ctx, dataDir)
 			var snapshot *startupState
 			if starting {
 				snapshot = deps.readStartupState(dataDir)
@@ -435,7 +435,7 @@ func waitForDaemonLaunchContentionWithDeps(
 			}
 		}
 		if deps.now().After(deadline) {
-			starting := deps.isStarting(dataDir)
+			starting := deps.isStarting(ctx, dataDir)
 			var snapshot *startupState
 			if starting {
 				snapshot = deps.readStartupState(dataDir)
@@ -607,14 +607,14 @@ func validateLockedDataDir(locked, loaded string) error {
 	)
 }
 
-func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
+func runDaemonStatus(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
 	cfg, err := deps.loadReadOnlyConfig()
 	if err != nil {
 		return fmt.Errorf("daemon status: loading config: %w", err)
 	}
-	records, err := deps.statusRecords(cfg.DataDir, cfg.AuthToken)
+	records, err := deps.statusRecords(ctx, cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
+		if rt := writableRuntimeFallbackForCommand(ctx, cfg, deps); rt != nil {
 			for _, line := range serveStatusLines(rt) {
 				fmt.Fprintln(w, line)
 			}
@@ -641,14 +641,14 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 		return nil
 	}
 	if deps.writableRuntime != nil {
-		if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+		if rt := deps.writableRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil {
 			for _, line := range serveStatusLines(rt) {
 				fmt.Fprintln(w, line)
 			}
 			return nil
 		}
 	}
-	if deps.isStarting(cfg.DataDir) {
+	if deps.isStarting(ctx, cfg.DataDir) {
 		fmt.Fprintln(w, "agentsview daemon is starting up.")
 		for _, line := range serveStartingStatusLines(deps.readStartupState(cfg.DataDir), deps.now()) {
 			fmt.Fprintln(w, line)
@@ -697,7 +697,7 @@ func writeDaemonRecordStatus(
 	}
 }
 
-func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
+func runDaemonStop(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
 	dataDir, err := prepareDaemonMutation(deps)
 	if err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
@@ -718,11 +718,11 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
 	}
-	starting := deps.isStarting(cfg.DataDir)
+	starting := deps.isStarting(ctx, cfg.DataDir)
 	startupSnapshot := deps.readStartupState(cfg.DataDir)
-	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
+	records, err := deps.writableRecords(ctx, cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		fallback := writableRuntimeFallbackForCommand(cfg, deps)
+		fallback := writableRuntimeFallbackForCommand(ctx, cfg, deps)
 		if fallback == nil {
 			if startupRecord, ok := startupStateStopRecord(startupSnapshot); starting && ok {
 				records = []daemon.RuntimeRecord{startupRecord}
@@ -735,7 +735,7 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	} else {
 		var fallback bool
 		records, fallback = writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
-			return writableRuntimeFallbackForCommand(cfg, deps)
+			return writableRuntimeFallbackForCommand(ctx, cfg, deps)
 		})
 		if !fallback && starting {
 			if startupRecord, ok := startupStateStopRecord(startupSnapshot); ok && len(records) == 0 {
@@ -789,9 +789,9 @@ func runDaemonRestartWithPolicy(
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon restart: %w", err)
 	}
-	starting := deps.isStarting(cfg.DataDir)
+	starting := deps.isStarting(ctx, cfg.DataDir)
 	startupSnapshot := deps.readStartupState(cfg.DataDir)
-	fallback := writableRuntimeFallbackForCommand(cfg, deps)
+	fallback := writableRuntimeFallbackForCommand(ctx, cfg, deps)
 	var startupRecord *daemon.RuntimeRecord
 	if fallback == nil && starting {
 		rec, ok := startupStateStopRecord(startupSnapshot)
@@ -806,7 +806,7 @@ func runDaemonRestartWithPolicy(
 	if err := deps.checkDataVersion(ctx, cfg.DBPath); err != nil {
 		return fmt.Errorf("daemon restart: checking data version: %w", err)
 	}
-	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
+	records, err := deps.writableRecords(ctx, cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		if fallback == nil && startupRecord == nil {
 			return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
@@ -860,7 +860,7 @@ func runDaemonRestartWithPolicy(
 		return daemonSlowStartupError("daemon restart", result)
 	}
 	if !result.Started && result.Runtime == nil {
-		if deps.isStarting(cfg.DataDir) {
+		if deps.isStarting(ctx, cfg.DataDir) {
 			return daemonPersistentStartupError("daemon restart", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 		}
 		return errors.New("daemon restart: startup did not publish a writable runtime; inspect serve.log before retrying")
@@ -896,9 +896,9 @@ func daemonWaitCanceledError(operation string, result backgroundLaunchResult) er
 }
 
 func daemonStatusRecords(
-	dataDir string, authToken string,
+	ctx context.Context, dataDir string, authToken string,
 ) ([]daemon.RuntimeRecord, error) {
-	migrateLegacyDaemonRuntimes(dataDir, authToken)
+	migrateLegacyDaemonRuntimes(ctx, dataDir, authToken)
 	store := runtimeStore(dataDir)
 	if _, err := store.CleanupDead(); err != nil {
 		return nil, fmt.Errorf("clean dead daemon runtime records: %w", err)

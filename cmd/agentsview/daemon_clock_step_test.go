@@ -46,12 +46,12 @@ func TestDaemonStatusKeepsClockShiftedLiveDaemon(t *testing.T) {
 	}
 	deps.statusRecords = daemonStatusRecords
 	var out bytes.Buffer
-	require.NoError(t, runDaemonStatus(&out, deps))
+	require.NoError(t, runDaemonStatus(t.Context(), &out, deps))
 	assert.Contains(t, out.String(), "agentsview running at")
 	assert.Contains(t, out.String(), strconv.Itoa(rec.PID))
 	assert.FileExists(t, path)
 
-	rt := FindDaemonRuntime(dir)
+	rt := FindDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, rt)
 	assert.Equal(t, rec.PID, rt.Record.PID)
 }
@@ -65,7 +65,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 			name: "find daemon",
 			check: func(t *testing.T, dir string, rec daemon.RuntimeRecord) {
 				t.Helper()
-				rt := FindDaemonRuntime(dir)
+				rt := FindDaemonRuntime(t.Context(), dir)
 				require.NotNil(t, rt)
 				assert.Equal(t, rec.PID, rt.Record.PID)
 			},
@@ -77,7 +77,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 				rec.Metadata[runtimeAPIVersion] = "0"
 				_, err := runtimeStore(dir).Write(rec)
 				require.NoError(t, err)
-				rt, err := FindIncompatibleDaemonRuntime(dir)
+				rt, err := FindIncompatibleDaemonRuntime(t.Context(), dir)
 				require.Error(t, err)
 				require.NotNil(t, rt)
 				assert.Equal(t, rec.PID, rt.Record.PID)
@@ -114,14 +114,14 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 			name: "live daemon",
 			check: func(t *testing.T, dir string, _ daemon.RuntimeRecord) {
 				t.Helper()
-				assert.True(t, hasLiveDaemonRuntime(dir))
+				assert.True(t, hasLiveDaemonRuntime(t.Context(), dir))
 			},
 		},
 		{
 			name: "live writable daemon",
 			check: func(t *testing.T, dir string, _ daemon.RuntimeRecord) {
 				t.Helper()
-				assert.True(t, hasLiveWritableDaemonRuntime(dir))
+				assert.True(t, hasLiveWritableDaemonRuntime(t.Context(), dir))
 			},
 		},
 	}
@@ -144,13 +144,13 @@ func TestPresentInvalidV2PreservesRuntimeRecord(t *testing.T) {
 	_, err := runtimeStore(dir).Write(rec)
 	require.NoError(t, err)
 
-	records, err := daemonStatusRecords(dir, "")
+	records, err := daemonStatusRecords(t.Context(), dir, "")
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, rec.PID, records[0].PID)
 	assert.FileExists(t, path)
 
-	rt := FindDaemonRuntime(dir)
+	rt := FindDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, rt)
 	assert.Equal(t, rec.PID, rt.Record.PID)
 }
@@ -307,7 +307,7 @@ func TestStartupFallbackStopUsesDaemonIdentity(t *testing.T) {
 		t, dir, endpoint.Host, endpoint.Port, pid, strconv.FormatInt(createTime, 10),
 	)
 
-	rt := FindWritableDaemonRuntime(dir)
+	rt := FindWritableDaemonRuntime(t.Context(), dir)
 	require.NotNil(t, rt)
 	assert.Equal(t, pid, rt.Record.PID)
 	assert.Empty(t, rt.Record.ProcessIdentity)

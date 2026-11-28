@@ -261,8 +261,8 @@ func newExportSessionsCommand() *cobra.Command {
 	return cmd
 }
 
-func exportDaemonCompatibilityError(cfg *config.Config, cause error) error {
-	rt, _ := findIncompatibleWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+func exportDaemonCompatibilityError(ctx context.Context, cfg *config.Config, cause error) error {
+	rt, _ := findIncompatibleWritableDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 	if rt == nil || daemonRuntimeAhead(rt) {
 		return errors.New(staleClientUpgradeHint())
 	}
@@ -273,7 +273,7 @@ func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime,
 	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
 	if err != nil {
 		if incompatible, ok := errors.AsType[*longLivedCompatibilityError](err); ok {
-			return nil, exportDaemonCompatibilityError(cfg, incompatible.cause)
+			return nil, exportDaemonCompatibilityError(ctx, cfg, incompatible.cause)
 		}
 		return nil, err
 	}
@@ -286,7 +286,7 @@ func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime,
 		}
 		return startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
 	}
-	return nil, errors.New("start a writable daemon with `agentsview daemon start`, then retry")
+	return nil, errors.New("export requires a writable daemon; restart the service managing agentsview, or run `agentsview daemon start` if no service manager is in use, then retry")
 }
 
 func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
@@ -406,7 +406,7 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 
 func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status db.BackgroundMigrationStatus) db.BackgroundMigrationStatus {
 	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
-		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+		if rt := FindWritableDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); rt != nil {
 			status = exportStatusWithDaemon(status, rt)
 		}
 	}
@@ -476,7 +476,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		rt := FindWritableDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken)
 		if rt == nil {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()

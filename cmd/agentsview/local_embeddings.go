@@ -72,10 +72,10 @@ func prepareLocalEmbeddings(ctx context.Context, cfg config.Config, name string,
 // daemonSetupClient returns the local daemon's client and whether it asks to
 // turn search on. An unavailable daemon or status counts as no pending setup.
 func daemonSetupClient(ctx context.Context, cfg config.Config) (embeddingsDaemonClient, bool) {
-	if !IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	if !IsLocalDaemonActive(ctx, cfg.DataDir, cfg.AuthToken) {
 		return embeddingsDaemonClient{}, false
 	}
-	client, err := resolveEmbeddingsDaemonClient(cfg)
+	client, err := resolveEmbeddingsDaemonClient(ctx, cfg)
 	if err != nil {
 		return client, false
 	}

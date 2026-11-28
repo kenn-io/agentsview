@@ -24,7 +24,7 @@ func newArchiveCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		if err := rejectLiveWritableDaemonBeforeDirectWrite(cmd.Context(), cfg); err != nil {
 			return err
 		}
 		lock, err := acquireWriteOwnerLock(cmd.Context(), writeLockDataDir(cfg))

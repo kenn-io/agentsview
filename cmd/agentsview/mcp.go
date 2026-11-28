@@ -134,7 +134,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
 				opts.BackendURL, _ = cmd.Flags().GetString("server")
 				if opts.BackendURL == "" && !pgReadRequested(cmd) {
-					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
+					if runtime := FindDaemonRuntime(ctx, cfg.DataDir, cfg.AuthToken); runtime != nil {
 						opts.BackendURL = urlFromDaemonRuntime(runtime)
 					}
 				}
@@ -290,7 +290,7 @@ func (s *mcpDaemonService) SupportsFileReferences() bool {
 // servingDocbankEnabled answers from the daemon that serves MCP calls. Without
 // one, the daemon MCP will start reads the same config.
 func servingDocbankEnabled(cfg config.Config) bool {
-	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	runtime := FindDaemonRuntime(context.Background(), cfg.DataDir, cfg.AuthToken)
 	if runtime == nil {
 		return cfg.Integrations.Docbank.Enabled()
 	}
@@ -303,7 +303,7 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
+	runtime := FindDaemonRuntime(context.Background(), s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
 }
 
@@ -314,7 +314,7 @@ func (s *mcpDaemonService) SupportsFriction() bool {
 	s.mu.Lock()
 	cfg := s.cfg
 	s.mu.Unlock()
-	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	runtime := FindDaemonRuntime(context.Background(), cfg.DataDir, cfg.AuthToken)
 	if runtime == nil || !runtime.ReadOnly {
 		return true
 	}

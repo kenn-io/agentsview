@@ -397,7 +397,7 @@ func requestLocalMemoryRefresh(ctx context.Context) error {
 		return fmt.Errorf("memory session-start: loading config: %w", err)
 	}
 	tr, err := ensureTransportContext(
-		ctx, &cfg, transportIntentArchiveWrite, memorySessionStartTimeout,
+		ctx, &cfg, transportIntentWritableDaemon, memorySessionStartTimeout,
 	)
 	if err != nil {
 		return fmt.Errorf("memory session-start: local daemon: %w", err)
